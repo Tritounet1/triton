@@ -1,6 +1,9 @@
 import os
-from openai import OpenAI
+from dataclasses import dataclass
+
 from dotenv import load_dotenv
+from openai import OpenAI
+from openai.types.chat import ChatCompletionMessageParam
 
 # Load values from .env into environment variables
 _ = load_dotenv()
@@ -15,15 +18,32 @@ client = OpenAI(
 
 MODEL = "meta-llama/llama-3.1-8b-instruct"
 
-def call_chat(message: str):
+
+@dataclass
+class ChatResult:
+    content: str
+    model: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+
+def call_chat(messages: list[ChatCompletionMessageParam]) -> ChatResult:
     resp = client.chat.completions.create(
         model=MODEL,
-        messages=[
-            {"role": "system", "content": "You are a concise and clear assistant."},
-            {"role": "user", "content": message},
-        ],
+        messages=messages,
         max_tokens=1024,
     )
 
-    print("resp : ", resp)
-    return resp.choices[0].message.content
+    content = resp.choices[0].message.content
+    if content is None:
+        raise RuntimeError("Le modèle n'a pas renvoyé de texte (appel d'outil non géré pour l'instant).")
+
+    usage = resp.usage
+    return ChatResult(
+        content=content,
+        model=resp.model,
+        prompt_tokens=usage.prompt_tokens if usage else 0,
+        completion_tokens=usage.completion_tokens if usage else 0,
+        total_tokens=usage.total_tokens if usage else 0,
+    )
