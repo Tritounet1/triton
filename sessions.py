@@ -74,17 +74,41 @@ def allow_always(session_id: str, tool_name: str) -> None:
     permissions_path(session_id).write_text(json.dumps(sorted(names), ensure_ascii=False, indent=2))
 
 
+def project_path(session_id: str) -> Path:
+    return SESSIONS_DIR / f"{session_id}.project.txt"
+
+
+def load_session_project(session_id: str) -> str | None:
+    """Id of the project this conversation belongs to, if any. Stored
+    separately from the history, like the title and permissions: a
+    conversation started outside a project has no such file."""
+    path = project_path(session_id)
+    if not path.exists():
+        return None
+    return path.read_text().strip() or None
+
+
+def save_session_project(session_id: str, project_id: str) -> None:
+    SESSIONS_DIR.mkdir(exist_ok=True)
+    project_path(session_id).write_text(project_id.strip())
+
+
+def clear_session_project(session_id: str) -> None:
+    project_path(session_id).unlink(missing_ok=True)
+
+
 def session_path(session_id: str) -> Path:
     return SESSIONS_DIR / f"{session_id}.json"
 
 
 def delete_session(session_id: str) -> bool:
-    """Deletes a conversation (history + title + permissions). Returns
-    False if it didn't exist."""
+    """Deletes a conversation (history + title + permissions + project
+    link). Returns False if it didn't exist."""
     path = session_path(session_id)
     if not path.exists():
         return False
     path.unlink()
     title_path(session_id).unlink(missing_ok=True)
     permissions_path(session_id).unlink(missing_ok=True)
+    clear_session_project(session_id)
     return True

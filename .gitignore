@@ -6,6 +6,9 @@ dist/
 wheels/
 *.egg-info
 
+# Node (racine : script "start"/"dev" avec concurrently)
+node_modules/
+
 # Virtual environments
 .venv
 
@@ -27,3 +30,6 @@ memory.md
 # Config des serveurs MCP (contient souvent des cles API en clair, comme
 # claude_desktop_config.json : jamais versionne)
 mcp_servers.json
+
+# Projets (dossiers locaux de la machine, pas versionnes)
+projects.json

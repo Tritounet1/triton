@@ -22,18 +22,22 @@ from main import (
     timed_stream_chat,
     to_tool_call_params,
 )
+from projects import Project, create_project, delete_project, get_project, load_projects
 from sessions import (
     SESSIONS_DIR,
     allow_always,
+    clear_session_project,
     delete_session,
     load_always_allowed,
     load_session,
+    load_session_project,
     load_title,
     new_session_path,
     save_session,
+    save_session_project,
     save_title,
 )
-from tools import TOOLS, TOOLS_REGISTRY
+from tools import TOOLS, TOOLS_REGISTRY, is_skipped
 
 
 @asynccontextmanager
@@ -56,6 +60,7 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     session_id: str | None = None
     message: str
+    project_id: str | None = None
 
 
 class ConfirmRequest(BaseModel):
@@ -80,6 +85,11 @@ class MCPServerToggle(BaseModel):
     enabled: bool
 
 
+class ProjectCreate(BaseModel):
+    name: str
+    folder_path: str
+
+
 @dataclass
 class PendingConfirmation:
     event: threading.Event = field(default_factory=threading.Event)
@@ -92,19 +102,24 @@ PENDING_CONFIRMATIONS: dict[str, PendingConfirmation] = {}
 
 def resolve_session(
     session_id: str | None,
+    project_id: str | None = None,
 ) -> tuple[Path, list[ChatCompletionMessageParam], bool]:
     """Loads the requested session if it exists, otherwise creates a new
     one. Unlike the CLI, the API never silently resumes "the last session":
     it's up to the client to remember its session_id. The boolean indicates
     whether the session was just created (useful to know whether a title
-    needs generating)."""
+    needs generating). `project_id`, when given, only applies to a newly
+    created session: it binds the conversation to that project's folder."""
     if session_id:
         path = SESSIONS_DIR / f"{session_id}.json"
         if path.exists():
             return path, load_session(path), False
 
     path = new_session_path()
-    return path, [build_system_message()], True
+    project = get_project(project_id) if project_id else None
+    if project is not None:
+        save_session_project(path.stem, project.id)
+    return path, [build_system_message(project)], True
 
 
 def sse(event: str, data: dict[str, object]) -> str:
@@ -271,7 +286,7 @@ def health() -> dict[str, bool | str]:
 
 @app.post("/chat")
 def chat(body: ChatRequest) -> StreamingResponse:
-    session_path, messages, is_new = resolve_session(body.session_id)
+    session_path, messages, is_new = resolve_session(body.session_id, body.project_id)
     messages.append({"role": "user", "content": body.message})
 
     return StreamingResponse(
@@ -297,7 +312,14 @@ def list_sessions() -> list[dict[str, str | None]]:
     if not SESSIONS_DIR.exists():
         return []
     ids = sorted(p.stem for p in SESSIONS_DIR.glob("*.json"))
-    return [{"id": session_id, "title": load_title(session_id)} for session_id in ids]
+    return [
+        {
+            "id": session_id,
+            "title": load_title(session_id),
+            "project_id": load_session_project(session_id),
+        }
+        for session_id in ids
+    ]
 
 
 @app.get("/sessions/{session_id}")
@@ -354,6 +376,80 @@ def toggle_mcp_server(name: str, body: MCPServerToggle) -> list[mcp_client.Serve
 def remove_mcp_server(name: str) -> list[mcp_client.ServerStatus]:
     mcp_client.manager.remove_server(name)
     return mcp_client.manager.status()
+
+
+@app.get("/projects")
+def list_projects() -> list[Project]:
+    return load_projects()
+
+
+@app.post("/projects")
+def add_project(body: ProjectCreate) -> list[Project]:
+    folder = Path(body.folder_path)
+    if not folder.is_dir():
+        raise HTTPException(400, "folder not found")
+    create_project(body.name, str(folder))
+    return load_projects()
+
+
+@app.delete("/projects/{project_id}")
+def remove_project(project_id: str) -> list[Project]:
+    if not delete_project(project_id):
+        raise HTTPException(404, "project not found")
+    for session_id in (p.stem for p in SESSIONS_DIR.glob("*.json")):
+        if load_session_project(session_id) == project_id:
+            clear_session_project(session_id)
+    return load_projects()
+
+
+MAX_TREE_ENTRIES = 2000
+
+
+def _build_tree(directory: Path, budget: list[int]) -> list[dict[str, object]]:
+    """Recursively lists a directory's contents (skipping noisy directories
+    like .git/node_modules/.venv, see tools.is_skipped), decrementing the
+    shared `budget` counter so the whole walk stops once MAX_TREE_ENTRIES is
+    reached rather than per-directory."""
+    entries: list[dict[str, object]] = []
+    try:
+        children = sorted(directory.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
+    except OSError:
+        return entries
+
+    for child in children:
+        if budget[0] <= 0:
+            break
+        if is_skipped(child):
+            continue
+        budget[0] -= 1
+        if child.is_dir():
+            entries.append(
+                {
+                    "name": child.name,
+                    "path": str(child),
+                    "is_dir": True,
+                    "children": _build_tree(child, budget),
+                }
+            )
+        else:
+            entries.append({"name": child.name, "path": str(child), "is_dir": False})
+
+    return entries
+
+
+@app.get("/projects/{project_id}/tree")
+def get_project_tree(project_id: str) -> dict[str, object]:
+    project = get_project(project_id)
+    if project is None:
+        raise HTTPException(404, "project not found")
+
+    root = Path(project.folder_path)
+    if not root.is_dir():
+        raise HTTPException(404, "project folder no longer exists")
+
+    budget = [MAX_TREE_ENTRIES]
+    tree = _build_tree(root, budget)
+    return {"tree": tree, "truncated": budget[0] <= 0}
 
 
 @app.get("/logs")

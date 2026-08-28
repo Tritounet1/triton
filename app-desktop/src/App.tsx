@@ -1,4 +1,5 @@
 import { useEffect, useState, type CSSProperties } from "react";
+import { open as openFolderDialog } from "@tauri-apps/plugin-dialog";
 import { Theme } from "@astryxdesign/core/theme";
 import { neutralTheme } from "@astryxdesign/theme-neutral/built";
 import { AppShell } from "@astryxdesign/core/AppShell";
@@ -27,9 +28,12 @@ import { formatArgs } from "./format";
 import { SettingsPage } from "./SettingsPage";
 import { LogsPage } from "./LogsPage";
 import { McpServersPage } from "./McpServersPage";
+import { ProjectFilePanel } from "./ProjectFilePanel";
 import {
   CheckIcon,
+  ChevronRightIcon,
   CopyIcon,
+  FolderIcon,
   GearIcon,
   MoonIcon,
   PencilIcon,
@@ -62,6 +66,13 @@ interface PendingConfirmation {
 interface Session {
   id: string;
   title: string | null;
+  project_id: string | null;
+}
+
+interface Project {
+  id: string;
+  name: string;
+  folder_path: string;
 }
 
 interface RawSessionMessage {
@@ -179,6 +190,16 @@ function App() {
   const [editingValue, setEditingValue] = useState("");
   const [deletingSession, setDeletingSession] = useState<Session | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [showProjectForm, setShowProjectForm] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [newProjectFolder, setNewProjectFolder] = useState("");
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [projectFormError, setProjectFormError] = useState<string | null>(null);
+  const [deletingProject, setDeletingProject] = useState<Project | null>(null);
+  const [collapsedProjectIds, setCollapsedProjectIds] = useState<Set<string>>(() => new Set());
+  const [fileRefreshTick, setFileRefreshTick] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
@@ -205,6 +226,73 @@ function App() {
       .catch(() => {
         // API hors ligne ou requete echouee : la sidebar reste vide, sans casser l'app
       });
+  }
+
+  function loadProjects() {
+    fetch(`${API_BASE}/projects`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list: Project[]) => { setProjects(list); })
+      .catch(() => {
+        // API hors ligne ou requete echouee : la liste de projets reste vide
+      });
+  }
+
+  async function pickProjectFolder() {
+    const folder = await openFolderDialog({ directory: true, multiple: false });
+    if (typeof folder === "string") setNewProjectFolder(folder);
+  }
+
+  function resetProjectForm() {
+    setNewProjectName("");
+    setNewProjectFolder("");
+    setProjectFormError(null);
+    setShowProjectForm(false);
+  }
+
+  async function submitNewProject() {
+    if (!newProjectName.trim() || !newProjectFolder.trim()) {
+      setProjectFormError("le nom et le dossier sont obligatoires.");
+      return;
+    }
+    setCreatingProject(true);
+    setProjectFormError(null);
+
+    try {
+      const res = await fetch(`${API_BASE}/projects`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newProjectName.trim(),
+          folder_path: newProjectFolder.trim(),
+        }),
+      });
+
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { detail?: string } | null;
+        setProjectFormError(body?.detail ?? `erreur ${res.status}`);
+        return;
+      }
+
+      setProjects((await res.json()) as Project[]);
+      resetProjectForm();
+    } catch {
+      setProjectFormError("impossible de contacter l'API Triton (127.0.0.1:8000).");
+    } finally {
+      setCreatingProject(false);
+    }
+  }
+
+  async function confirmDeleteProject() {
+    if (!deletingProject) return;
+    const id = deletingProject.id;
+    setDeletingProject(null);
+
+    const res = await fetch(`${API_BASE}/projects/${id}`, { method: "DELETE" });
+    if (res.ok) {
+      setProjects((await res.json()) as Project[]);
+      if (activeProjectId === id) setActiveProjectId(null);
+      loadSessions();
+    }
   }
 
   function startRename(session: Session) {
@@ -259,13 +347,14 @@ function App() {
       .catch(() => { setApiModel(null); });
 
     loadSessions();
+    loadProjects();
 
     // uniquement au demarrage, pour une session deja connue (localStorage) ;
     // ne doit pas se redeclencher quand sendMessage() fixe sessionId lui-meme,
     // sinon ca part en course avec le streaming en cours.
     const stored = localStorage.getItem("triton_session_id");
     if (stored) loadHistory(stored);
-     
+
   }, []);
 
   function switchSession(id: string) {
@@ -274,6 +363,7 @@ function App() {
     setSessionId(id);
     localStorage.setItem("triton_session_id", id);
     setMessages([]);
+    setActiveProjectId(sessions.find((s) => s.id === id)?.project_id ?? null);
     loadHistory(id);
   }
 
@@ -283,6 +373,28 @@ function App() {
     setSessionId(null);
     localStorage.removeItem("triton_session_id");
     setMessages([]);
+    setActiveProjectId(null);
+  }
+
+  function startProjectSession(projectId: string) {
+    setView("chat");
+    if (sending) return;
+    setSessionId(null);
+    localStorage.removeItem("triton_session_id");
+    setMessages([]);
+    setActiveProjectId(projectId);
+  }
+
+  function toggleProjectCollapsed(projectId: string) {
+    setCollapsedProjectIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(projectId)) {
+        next.delete(projectId);
+      } else {
+        next.add(projectId);
+      }
+      return next;
+    });
   }
 
   async function copyToClipboard(text: string, index: number) {
@@ -333,7 +445,7 @@ function App() {
       const res = await fetch(`${API_BASE}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: sessionId, message: text }),
+        body: JSON.stringify({ session_id: sessionId, message: text, project_id: activeProjectId }),
       });
 
       for await (const { event, data } of parseSSE(res)) {
@@ -356,7 +468,7 @@ function App() {
             setSessions((prev) =>
               prev.some((s) => s.id === id)
                 ? prev.map((s) => (s.id === id ? { ...s, title } : s))
-                : [{ id, title }, ...prev],
+                : [{ id, title, project_id: activeProjectId }, ...prev],
             );
             break;
           }
@@ -377,6 +489,12 @@ function App() {
               },
             ]);
             assistantText = "";
+            // un outil a pu modifier le systeme de fichiers (write_file,
+            // edit_file, run_shell...) : rafraichit le panneau de fichiers
+            // du projet actif, si affiche. Sans filtrer par nom d'outil
+            // (couvre aussi les outils MCP) : une requete GET en trop est
+            // negligeable.
+            setFileRefreshTick((t) => t + 1);
             break;
           }
           case "confirmation_required": {
@@ -433,9 +551,13 @@ function App() {
     });
   }
 
-  const filteredSessions = sessions.filter((s) =>
-    (s.title ?? formatSessionLabel(s.id)).toLowerCase().includes(search.toLowerCase()),
+  const filteredSessions = sessions.filter(
+    (s) =>
+      s.project_id === null &&
+      (s.title ?? formatSessionLabel(s.id)).toLowerCase().includes(search.toLowerCase()),
   );
+
+  const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
 
   return (
     <Theme theme={neutralTheme} mode={themeMode}>
@@ -496,6 +618,114 @@ function App() {
               </div>
             }
           >
+            <SideNavSection
+              title="Projets"
+              endContent={
+                <IconButton
+                  label="Nouveau projet"
+                  icon={<PlusIcon />}
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => { setShowProjectForm((v) => !v); }}
+                />
+              }
+            >
+              {showProjectForm && (
+                <div className="flex flex-col gap-2 px-2 py-1">
+                  <TextInput
+                    value={newProjectName}
+                    onChange={setNewProjectName}
+                    placeholder="Nom du projet"
+                    isLabelHidden
+                    label="Nom du projet"
+                    size="sm"
+                    hasAutoFocus
+                  />
+                  <Button
+                    label={newProjectFolder || "Choisir un dossier..."}
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => { void pickProjectFolder(); }}
+                    className="justify-start truncate"
+                  />
+                  {projectFormError && (
+                    <Text size="2xs" className="text-error">
+                      {projectFormError}
+                    </Text>
+                  )}
+                  <div className="flex gap-1">
+                    <Button
+                      label="Créer"
+                      variant="primary"
+                      size="sm"
+                      isLoading={creatingProject}
+                      onClick={() => { void submitNewProject(); }}
+                      className="flex-1"
+                    />
+                    <Button label="Annuler" variant="ghost" size="sm" onClick={resetProjectForm} />
+                  </div>
+                </div>
+              )}
+              {projects.length === 0 && !showProjectForm && (
+                <Text size="2xs" color="secondary" className="block px-2 py-1">
+                  Aucun projet.
+                </Text>
+              )}
+              {projects.map((p) => {
+                const isCollapsed = collapsedProjectIds.has(p.id);
+                return (
+                  <div key={p.id}>
+                    <SideNavItem
+                      label={p.name}
+                      icon={<FolderIcon className="h-4 w-4" />}
+                      isSelected={p.id === activeProjectId && sessionId === null}
+                      onClick={() => { toggleProjectCollapsed(p.id); }}
+                      endContent={
+                        <div className="flex items-center gap-0.5">
+                          <IconButton
+                            label="Nouvelle conversation dans ce projet"
+                            icon={<PlusIcon />}
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              startProjectSession(p.id);
+                            }}
+                          />
+                          <IconButton
+                            label="Supprimer le projet"
+                            icon={<TrashIcon />}
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeletingProject(p);
+                            }}
+                          />
+                          <ChevronRightIcon
+                            className={`h-4 w-4 shrink-0 text-secondary transition-transform ${isCollapsed ? "" : "rotate-90"}`}
+                          />
+                        </div>
+                      }
+                    />
+                    {!isCollapsed &&
+                      sessions
+                        .filter((s) => s.project_id === p.id)
+                        .map((s) => (
+                          <SideNavItem
+                            key={s.id}
+                            label={s.title ?? formatSessionLabel(s.id)}
+                            icon={<Avatar name="Claude" src={CLAUDE_AVATAR_SRC} size="xsm" />}
+                            isSelected={s.id === sessionId}
+                            onClick={() => { switchSession(s.id); }}
+                            className="pl-4"
+                          />
+                        ))}
+                  </div>
+                );
+              })}
+            </SideNavSection>
+
             <SideNavSection title="Conversations">
               {filteredSessions.length === 0 && (
                 <Text size="2xs" color="secondary" className="block px-2 py-1">
@@ -567,9 +797,10 @@ function App() {
         {view === "logs" && <LogsPage onBack={() => { setView("settings"); }} />}
         {view === "mcp" && <McpServersPage onBack={() => { setView("settings"); }} />}
         {view === "chat" && (
+        <div className="flex h-full">
         <ChatLayout
           density="balanced"
-          className="h-full"
+          className="h-full min-w-0 flex-1"
           emptyState={
             <EmptyState
               title="Nouvelle conversation"
@@ -729,6 +960,15 @@ function App() {
             )}
           </ChatMessageList>
         </ChatLayout>
+        {activeProject && (
+          <ProjectFilePanel
+            projectId={activeProject.id}
+            projectName={activeProject.name}
+            folderPath={activeProject.folder_path}
+            refreshSignal={fileRefreshTick}
+          />
+        )}
+        </div>
         )}
       </AppShell>
 
@@ -742,6 +982,17 @@ function App() {
         actionLabel="Supprimer"
         isActionLoading={isDeleting}
         onAction={confirmDeleteSession}
+      />
+
+      <AlertDialog
+        isOpen={deletingProject !== null}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) setDeletingProject(null);
+        }}
+        title="Supprimer le projet ?"
+        description={`« ${deletingProject?.name ?? ""} » sera supprimé. Ses conversations ne seront pas effacées, mais ne seront plus rattachées au dossier.`}
+        actionLabel="Supprimer"
+        onAction={confirmDeleteProject}
       />
     </Theme>
   );

@@ -74,7 +74,7 @@ def edit_file(path: str, old_string: str, new_string: str, replace_all: bool = F
     return f"file {path} edited ({count if replace_all else 1} replacement(s))"
 
 
-_SKIP_DIR_NAMES = {
+SKIP_DIR_NAMES = {
     ".git",
     "node_modules",
     ".venv",
@@ -88,8 +88,8 @@ _SKIP_DIR_NAMES = {
 }
 
 
-def _is_skipped(path: Path) -> bool:
-    return any(part in _SKIP_DIR_NAMES for part in path.parts)
+def is_skipped(path: Path) -> bool:
+    return any(part in SKIP_DIR_NAMES for part in path.parts)
 
 
 def grep(pattern: str, directory: str = ".", file_glob: str = "**/*") -> str:
@@ -104,7 +104,7 @@ def grep(pattern: str, directory: str = ".", file_glob: str = "**/*") -> str:
 
     matches: list[str] = []
     for path in sorted(root.glob(file_glob)):
-        if not path.is_file() or _is_skipped(path):
+        if not path.is_file() or is_skipped(path):
             continue
         try:
             text = path.read_text()
@@ -124,7 +124,7 @@ def find_files(pattern: str, directory: str = ".") -> str:
     if not root.exists():
         return f"error: directory not found: {directory}"
 
-    results = sorted(str(p) for p in root.glob(pattern) if not _is_skipped(p))
+    results = sorted(str(p) for p in root.glob(pattern) if not is_skipped(p))
     if not results:
         return "(no matches)"
     if len(results) > 500:

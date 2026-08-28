@@ -20,6 +20,7 @@ from rich.text import Text
 import mcp_client
 from api import ChatResult, call_chat, stream_chat
 from logs import log_event
+from projects import Project
 from sessions import (
     allow_always,
     latest_session_path,
@@ -34,10 +35,19 @@ SYSTEM_PROMPT = "You are a concise and clear assistant."
 MAX_ITERATIONS = 10
 
 
-def build_system_message() -> ChatCompletionMessageParam:
+def build_system_message(project: Project | None = None) -> ChatCompletionMessageParam:
     """Builds the initial system message for a new conversation, appending
-    any facts saved via the remember tool so they don't need repeating."""
+    any facts saved via the remember tool so they don't need repeating, and
+    scoping the conversation to a project's folder when it belongs to one."""
     content = SYSTEM_PROMPT
+    if project is not None:
+        content += (
+            f"\n\nYou are working inside the project folder: {project.folder_path}\n"
+            "Always use absolute paths starting with this folder for file operations "
+            "(read_file, write_file, edit_file, grep, glob, delete_file, move_file, "
+            "git_status, git_diff, git_commit, run_tests), unless the user clearly "
+            "asks about something elsewhere on the machine."
+        )
     memory = load_memory()
     if memory:
         content += f"\n\nFacts remembered from previous conversations:\n{memory}"

@@ -1,0 +1,17 @@
+{
+  "name": "triton",
+  "version": "1.0.0",
+  "description": "",
+  "main": "main.py",
+  "scripts": {
+    "start": "concurrently \"uv run server.py\" \"cd app-desktop/ && pnpm tauri dev\"",
+    "dev": "concurrently \"uv run uvicorn server:app --reload\" \"cd app-desktop/ && pnpm tauri dev\""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.11.0",
+  "dependencies": {
+    "concurrently": "^10.0.5"
+  }
+}
