@@ -8,7 +8,7 @@ import { TextInput } from "@astryxdesign/core/TextInput";
 import { TextArea } from "@astryxdesign/core/TextArea";
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
-import { ArrowLeftIcon, PlusIcon, TrashIcon } from "./icons";
+import { ArrowLeftIcon, PlugIcon, PlusIcon, TrashIcon } from "./icons";
 
 const API_BASE = "http://127.0.0.1:8000";
 
@@ -140,9 +140,12 @@ export function McpServersPage({ onBack }: McpServersPageProps) {
             size="sm"
             onClick={onBack}
           />
-          <Text size="lg" weight="semibold">
-            Serveurs MCP
-          </Text>
+          <div className="flex items-center gap-2">
+            <PlugIcon className="h-5 w-5 text-secondary" />
+            <Text size="lg" weight="semibold">
+              Serveurs MCP
+            </Text>
+          </div>
         </div>
         <Button
           label="Ajouter un serveur"
@@ -161,7 +164,7 @@ export function McpServersPage({ onBack }: McpServersPageProps) {
       </Text>
 
       {showForm && (
-        <div className="mb-6 rounded-xl border border-default bg-surface p-4">
+        <div className="mb-6 rounded-xl border border-border bg-surface p-4">
           <div className="mb-3 grid grid-cols-2 gap-3">
             <TextInput
               label="Nom"
@@ -224,7 +227,7 @@ export function McpServersPage({ onBack }: McpServersPageProps) {
       ) : (
         <div className="space-y-2">
           {servers.map((s) => (
-            <div key={s.name} className="rounded-xl border border-default bg-surface p-4">
+            <div key={s.name} className="rounded-xl border border-border bg-surface p-4">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">

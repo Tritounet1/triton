@@ -77,8 +77,8 @@ export function ProjectFilePanel({
   useEffect(loadTree, [projectId, refreshSignal]);
 
   return (
-    <div className="flex h-full w-72 shrink-0 flex-col border-l border-default">
-      <div className="flex items-center justify-between gap-2 border-b border-default px-4 py-3">
+    <div className="flex h-full w-72 shrink-0 flex-col border-l border-border">
+      <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
         <div className="min-w-0">
           <Text weight="semibold" className="block truncate">
             {projectName}
