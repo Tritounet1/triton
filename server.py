@@ -175,6 +175,7 @@ def generate_conversation_title(first_message: str) -> str:
 # are deliberately not covered here.
 SANDBOXED_PATH_ARGS: dict[str, list[str]] = {
     "read_file": ["path"],
+    "list_files": ["directory"],
     "write_file": ["path"],
     "edit_file": ["path"],
     "delete_file": ["path"],
@@ -182,8 +183,8 @@ SANDBOXED_PATH_ARGS: dict[str, list[str]] = {
     "grep": ["directory"],
     "glob": ["directory"],
     "git_status": ["directory"],
-    "git_diff": ["directory"],
-    "git_commit": ["directory"],
+    "git_diff": ["directory", "path"],
+    "git_commit": ["directory", "paths"],
     "run_tests": ["path"],
 }
 
@@ -192,7 +193,7 @@ SANDBOXED_PATH_ARGS: dict[str, list[str]] = {
 # project, default it to the project folder instead, so a call that omits
 # the argument stays inside the project rather than leaking the harness's
 # own source tree
-DEFAULTABLE_PATH_ARGS = {"grep", "glob", "git_status", "git_diff", "git_commit"}
+DEFAULTABLE_PATH_ARGS = {"list_files", "grep", "glob", "git_status", "git_diff", "git_commit"}
 
 
 def enforce_project_sandbox(
