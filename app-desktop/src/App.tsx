@@ -179,6 +179,8 @@ function App() {
     localStorage.getItem("triton_session_id"),
   );
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [editingValue, setEditingValue] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
@@ -204,18 +206,22 @@ function App() {
       .catch(() => {});
   }
 
-  async function renameSession(session: Session) {
-    const currentLabel = session.title ?? formatSessionLabel(session.id);
-    const next = window.prompt("Renommer la conversation :", currentLabel);
-    if (!next || !next.trim() || next.trim() === currentLabel) return;
+  function startRename(session: Session) {
+    setEditingSessionId(session.id);
+    setEditingValue(session.title ?? formatSessionLabel(session.id));
+  }
 
-    const title = next.trim();
-    await fetch(`${API_BASE}/sessions/${session.id}/title`, {
+  async function commitRename(id: string) {
+    const title = editingValue.trim();
+    setEditingSessionId(null);
+    if (!title) return;
+
+    await fetch(`${API_BASE}/sessions/${id}/title`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title }),
     });
-    setSessions((prev) => prev.map((s) => (s.id === session.id ? { ...s, title } : s)));
+    setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, title } : s)));
   }
 
   function loadHistory(id: string) {
@@ -464,27 +470,45 @@ function App() {
                   Aucune conversation.
                 </Text>
               )}
-              {filteredSessions.map((s) => (
-                <SideNavItem
-                  key={s.id}
-                  label={s.title ?? formatSessionLabel(s.id)}
-                  icon={<Avatar name="Claude" src={CLAUDE_AVATAR_SRC} size="xsm" />}
-                  isSelected={s.id === sessionId}
-                  onClick={() => switchSession(s.id)}
-                  endContent={
-                    <IconButton
-                      label="Renommer"
-                      icon={<PencilIcon />}
-                      variant="ghost"
+              {filteredSessions.map((s) =>
+                editingSessionId === s.id ? (
+                  <div key={s.id} className="px-2 py-1">
+                    <TextInput
+                      value={editingValue}
+                      onChange={setEditingValue}
+                      isLabelHidden
+                      label="Titre de la conversation"
                       size="sm"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void renameSession(s);
+                      hasAutoFocus
+                      onEnter={() => commitRename(s.id)}
+                      onBlur={() => commitRename(s.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") setEditingSessionId(null);
                       }}
                     />
-                  }
-                />
-              ))}
+                  </div>
+                ) : (
+                  <SideNavItem
+                    key={s.id}
+                    label={s.title ?? formatSessionLabel(s.id)}
+                    icon={<Avatar name="Claude" src={CLAUDE_AVATAR_SRC} size="xsm" />}
+                    isSelected={s.id === sessionId}
+                    onClick={() => switchSession(s.id)}
+                    endContent={
+                      <IconButton
+                        label="Renommer"
+                        icon={<PencilIcon />}
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          startRename(s);
+                        }}
+                      />
+                    }
+                  />
+                ),
+              )}
             </SideNavSection>
           </SideNav>
         }
