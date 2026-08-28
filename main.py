@@ -46,8 +46,8 @@ def build_system_message(project: Project | None = None) -> ChatCompletionMessag
             f"\n\nYou are working inside the project folder: {project.folder_path}\n"
             "Always use absolute paths starting with this folder for file operations "
             "(read_file, write_file, edit_file, grep, glob, delete_file, move_file, "
-            "git_status, git_diff, git_commit, run_tests), unless the user clearly "
-            "asks about something elsewhere on the machine."
+            "git_status, git_diff, git_commit, run_tests). This is enforced: a path "
+            "outside this folder will be rejected, not just discouraged."
         )
     memory = load_memory()
     if memory:
