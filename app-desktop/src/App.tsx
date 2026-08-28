@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Theme } from "@astryxdesign/core/theme";
 import { neutralTheme } from "@astryxdesign/theme-neutral/built";
 import { AppShell } from "@astryxdesign/core/AppShell";
@@ -16,7 +16,6 @@ import {
 } from "@astryxdesign/core/Chat";
 import { IconButton } from "@astryxdesign/core/IconButton";
 import { Button } from "@astryxdesign/core/Button";
-import { StatusDot } from "@astryxdesign/core/StatusDot";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Timestamp } from "@astryxdesign/core/Timestamp";
 import { Text } from "@astryxdesign/core/Text";
@@ -158,10 +157,15 @@ function toolCallStatus(result: string): "complete" | "error" {
 }
 
 function App() {
+  // scroll de toute la fenetre plutot que du seul conteneur de messages :
+  // ChatLayout documente que ca fait passer le composer en position fixed,
+  // colle au bas de la fenetre en toute circonstance (peu de messages,
+  // fenetre redimensionnee, etc.), plutot que sticky-dans-le-flux.
+  const scrollRef = useRef<HTMLElement>(document.documentElement);
+
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
-  const [apiOnline, setApiOnline] = useState<boolean | null>(null);
   const [apiModel, setApiModel] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(() =>
     localStorage.getItem("triton_session_id"),
@@ -204,11 +208,8 @@ function App() {
   useEffect(() => {
     fetch(`${API_BASE}/health`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((data: { ok: boolean; model: string } | null) => {
-        setApiOnline(!!data?.ok);
-        setApiModel(data?.model ?? null);
-      })
-      .catch(() => setApiOnline(false));
+      .then((data: { ok: boolean; model: string } | null) => setApiModel(data?.model ?? null))
+      .catch(() => setApiModel(null));
 
     loadSessions();
 
@@ -373,20 +374,6 @@ function App() {
       <AppShell
         variant="elevated"
         height="fill"
-        topNav={
-          <div className="flex h-14 items-center gap-3 border-b border-default px-6">
-            <Avatar name="Claude" src={CLAUDE_AVATAR_SRC} size="xsm" />
-            <div className="min-w-0">
-              <Text weight="semibold" className="block truncate">
-                Triton
-              </Text>
-              <Text size="2xs" color="secondary">
-                {sessionId ? formatSessionLabel(sessionId) : "Nouvelle conversation"}
-                {apiModel ? ` · ${apiModel}` : ""}
-              </Text>
-            </div>
-          </div>
-        }
         sideNav={
           <SideNav
             header={<SideNavHeading heading="Triton" />}
@@ -395,14 +382,12 @@ function App() {
                 <div className="flex items-center gap-1">
                   <Button
                     label="Nouvelle conversation"
+                    icon={<PlusIcon />}
                     variant="secondary"
                     size="sm"
                     onClick={startNewSession}
                     className="flex-1 justify-start"
-                  >
-                    <PlusIcon className="h-4 w-4" />
-                    Nouvelle conversation
-                  </Button>
+                  />
                   <IconButton
                     label="Rechercher"
                     icon={<SearchIcon />}
@@ -425,16 +410,7 @@ function App() {
               </div>
             }
             footer={
-              <div className="flex items-center justify-between gap-2 px-1 py-1">
-                <div className="flex items-center gap-2">
-                  <Text size="2xs" color="secondary">
-                    Triton · local
-                  </Text>
-                  <StatusDot
-                    variant={apiOnline ? "success" : "error"}
-                    label={apiOnline ? "API en ligne" : "API hors ligne"}
-                  />
-                </div>
+              <div className="flex items-center justify-end px-1 py-1">
                 <IconButton
                   label={themeMode === "dark" ? "Passer en thème clair" : "Passer en thème sombre"}
                   icon={themeMode === "dark" ? <MoonIcon /> : <SunIcon />}
@@ -466,6 +442,7 @@ function App() {
       >
         <ChatLayout
           density="balanced"
+          scrollRef={scrollRef}
           emptyState={
             <EmptyState
               title="Nouvelle conversation"
@@ -479,15 +456,7 @@ function App() {
               onSubmit={sendMessage}
               placeholder="Écrire un message..."
               isDisabled={sending || !!pendingConfirmation}
-              headerActions={
-                <IconButton
-                  label="Joindre (pas encore disponible)"
-                  icon={<PlusIcon />}
-                  variant="ghost"
-                  size="sm"
-                  isDisabled
-                />
-              }
+              density="compact"
               sendActions={
                 apiModel ? (
                   <Text size="2xs" color="secondary">
