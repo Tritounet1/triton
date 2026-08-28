@@ -444,31 +444,33 @@ function App() {
             />
           }
           composer={
-            <ChatComposer
-              value={input}
-              onChange={setInput}
-              onSubmit={sendMessage}
-              placeholder="Écrire un message..."
-              isDisabled={sending || !!pendingConfirmation}
-              density="compact"
-              elevation="none"
-              footerActions={
-                <IconButton
-                  label="Joindre (pas encore disponible)"
-                  icon={<PlusIcon />}
-                  variant="ghost"
-                  size="sm"
-                  isDisabled
-                />
-              }
-              sendActions={
-                apiModel ? (
-                  <Text size="2xs" color="secondary">
-                    {apiModel}
-                  </Text>
-                ) : undefined
-              }
-            />
+            <div className="px-6 pb-4">
+              <ChatComposer
+                value={input}
+                onChange={setInput}
+                onSubmit={sendMessage}
+                placeholder="Écrire un message..."
+                isDisabled={sending || !!pendingConfirmation}
+                density="compact"
+                elevation="none"
+                footerActions={
+                  <IconButton
+                    label="Joindre (pas encore disponible)"
+                    icon={<PlusIcon />}
+                    variant="ghost"
+                    size="sm"
+                    isDisabled
+                  />
+                }
+                sendActions={
+                  apiModel ? (
+                    <Text size="2xs" color="secondary">
+                      {apiModel}
+                    </Text>
+                  ) : undefined
+                }
+              />
+            </div>
           }
         >
           <ChatMessageList isStreaming={sending}>
