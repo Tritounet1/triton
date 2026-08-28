@@ -17,16 +17,16 @@ def read_file(path: str) -> str:
     try:
         return Path(path).read_text()
     except OSError as e:
-        return f"erreur : impossible de lire {path} ({e})"
+        return f"error: could not read {path} ({e})"
 
 
 def list_files(directory: str = ".") -> str:
     try:
         entries = sorted(Path(directory).iterdir())
     except OSError as e:
-        return f"erreur : impossible de lister {directory} ({e})"
+        return f"error: could not list {directory} ({e})"
     if not entries:
-        return "(dossier vide)"
+        return "(empty directory)"
     return "\n".join(f"{'d' if p.is_dir() else 'f'} {p.name}" for p in entries)
 
 
@@ -34,18 +34,18 @@ def write_file(path: str, content: str) -> str:
     try:
         Path(path).write_text(content)
     except OSError as e:
-        return f"erreur : impossible d'écrire {path} ({e})"
-    return f"fichier {path} écrit ({len(content)} caractères)"
+        return f"error: could not write {path} ({e})"
+    return f"file {path} written ({len(content)} characters)"
 
 
 def run_shell(command: str) -> str:
-    # pas de confirmation avant execution pour l'instant, ca vient a l'etape 7
+    # no confirmation before execution here, that comes at step 7
     try:
         result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=10)
     except subprocess.TimeoutExpired:
-        return "erreur : commande trop longue (timeout 10s)"
+        return "error: command took too long (10s timeout)"
     output = (result.stdout + result.stderr).strip()
-    return output or f"(pas de sortie, code {result.returncode})"
+    return output or f"(no output, exit code {result.returncode})"
 
 
 TOOLS_REGISTRY: dict[str, Tool] = {
@@ -54,13 +54,13 @@ TOOLS_REGISTRY: dict[str, Tool] = {
             "type": "function",
             "function": {
                 "name": "read_file",
-                "description": "Lit et retourne le contenu d'un fichier texte.",
+                "description": "Reads and returns the contents of a text file.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "Chemin du fichier à lire.",
+                            "description": "Path of the file to read.",
                         },
                     },
                     "required": ["path"],
@@ -75,13 +75,14 @@ TOOLS_REGISTRY: dict[str, Tool] = {
             "type": "function",
             "function": {
                 "name": "list_files",
-                "description": "Liste les fichiers et dossiers d'un répertoire.",
+                "description": "Lists the files and directories in a directory.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "directory": {
                             "type": "string",
-                            "description": "Chemin du dossier à lister (défaut : dossier courant).",
+                            "description": "Path of the directory to list "
+                            "(default: current directory).",
                         },
                     },
                     "required": [],
@@ -96,17 +97,18 @@ TOOLS_REGISTRY: dict[str, Tool] = {
             "type": "function",
             "function": {
                 "name": "write_file",
-                "description": "Écrit du contenu dans un fichier texte (écrase s'il existe déjà).",
+                "description": "Writes content to a text file "
+                "(overwrites it if it already exists).",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "Chemin du fichier à écrire.",
+                            "description": "Path of the file to write.",
                         },
                         "content": {
                             "type": "string",
-                            "description": "Contenu à écrire dans le fichier.",
+                            "description": "Content to write to the file.",
                         },
                     },
                     "required": ["path", "content"],
@@ -121,13 +123,13 @@ TOOLS_REGISTRY: dict[str, Tool] = {
             "type": "function",
             "function": {
                 "name": "run_shell",
-                "description": "Exécute une commande shell et retourne sa sortie.",
+                "description": "Runs a shell command and returns its output.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "command": {
                             "type": "string",
-                            "description": "Commande shell à exécuter.",
+                            "description": "Shell command to run.",
                         },
                     },
                     "required": ["command"],
@@ -143,11 +145,11 @@ TOOLS: list[ChatCompletionToolParam] = [tool.schema for tool in TOOLS_REGISTRY.v
 
 
 def rebuild_tools_list() -> None:
-    """Recalcule TOOLS a partir de TOOLS_REGISTRY, en mutant la liste en place
-    (jamais de reassignation) : main.py et server.py ont fait `from tools
-    import TOOLS` et gardent donc une reference vers ce meme objet liste, une
-    reassignation ne serait pas vue par ces modules. Appele par mcp_client.py
-    a chaque connexion/deconnexion d'un serveur MCP, pour que les outils
-    distants apparaissent/disparaissent sans changement cote main.py/server.py."""
+    """Recomputes TOOLS from TOOLS_REGISTRY, mutating the list in place
+    (never reassigning): main.py and server.py did `from tools import
+    TOOLS` and therefore hold a reference to this same list object, a
+    reassignment wouldn't be seen by those modules. Called by mcp_client.py
+    on every MCP server connect/disconnect, so remote tools appear/disappear
+    without any change on the main.py/server.py side."""
     TOOLS.clear()
     TOOLS.extend(tool.schema for tool in TOOLS_REGISTRY.values())

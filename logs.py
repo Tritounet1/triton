@@ -7,7 +7,7 @@ LOGS_FILE = LOGS_DIR / "events.jsonl"
 
 
 def log_event(**fields: object) -> None:
-    """Ajoute une ligne JSON au fichier de logs (timestamp + champs libres)."""
+    """Appends a JSON line to the log file (timestamp + free-form fields)."""
     LOGS_DIR.mkdir(exist_ok=True)
     event = {
         "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),

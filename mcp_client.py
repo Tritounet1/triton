@@ -1,3 +1,16 @@
+"""MCP (Model Context Protocol) integration: connects the harness to
+external tool servers instead of hand-coding each tool as in tools.py. A
+configured MCP server (same format as Claude Desktop: command/args/env)
+shows up as extra tools in tools.TOOLS_REGISTRY, available to the agentic
+loop in main.py and server.py without any change on their side.
+
+The MCP SDK is async; the rest of the harness (Tool.fn) is synchronous.
+Rather than rewriting the whole agentic loop as async, a dedicated asyncio
+loop runs in a background thread and hosts all open MCP sessions; each
+synchronous Tool.fn submits its coroutine to that loop via
+asyncio.run_coroutine_threadsafe() and waits for the result.
+"""
+
 import asyncio
 import json
 import threading
@@ -54,12 +67,12 @@ class ServerConnection:
     connected: bool = False
     error: str | None = None
     tool_names: list[str] = field(default_factory=list)
-    # la tache asyncio qui garde stdio_client()/ClientSession() ouverts, et
-    # l'evenement qui lui signale de les refermer. anyio (utilise en interne
-    # par stdio_client) attache ses task groups a la tache qui les a ouverts :
-    # ouvrir et fermer doivent se faire dans la MEME tache, d'ou l'usage d'une
-    # tache longue duree plutot que deux coroutines connect/disconnect
-    # separees soumises independamment a la boucle.
+    # the asyncio task keeping stdio_client()/ClientSession() open, and the
+    # event that signals it to close them. anyio (used internally by
+    # stdio_client) attaches its task groups to the task that opened them:
+    # opening and closing must happen in the SAME task, hence using a
+    # long-running task instead of two separate connect/disconnect
+    # coroutines submitted independently to the loop.
     task: "asyncio.Task[None] | None" = field(default=None, repr=False)
     stop_event: asyncio.Event | None = field(default=None, repr=False)
 
@@ -69,8 +82,8 @@ def tool_key(server_name: str, tool_name: str) -> str:
 
 
 class MCPManager:
-    """Boucle asyncio d'arrière-plan hébergeant toutes les sessions MCP
-    connectées, avec une API entièrement synchrone pour le reste du harness."""
+    """Background asyncio loop hosting all connected MCP sessions, with a
+    fully synchronous API for the rest of the harness."""
 
     def __init__(self) -> None:
         self._loop = asyncio.new_event_loop()
@@ -93,9 +106,9 @@ class MCPManager:
             async def call() -> str:
                 result = await session.call_tool(mcp_tool_name, kwargs)
                 texts = [b.text for b in result.content if isinstance(b, TextContent)]
-                text = "\n".join(texts) if texts else "(pas de contenu texte retourné)"
+                text = "\n".join(texts) if texts else "(no text content returned)"
                 if result.is_error:
-                    return f"erreur (serveur MCP « {server_name} », outil {mcp_tool_name}) : {text}"
+                    return f"error (MCP server '{server_name}', tool {mcp_tool_name}): {text}"
                 return text
 
             return self._run_coro(call())
@@ -117,7 +130,7 @@ class MCPManager:
                     "type": "function",
                     "function": {
                         "name": key,
-                        "description": f"{description} (via serveur MCP « {server_name} »)",
+                        "description": f"{description} (via MCP server '{server_name}')",
                         "parameters": t.input_schema or {"type": "object", "properties": {}},
                     },
                 },
@@ -133,9 +146,9 @@ class MCPManager:
         ready: "asyncio.Future[ServerConnection]",
         stop: asyncio.Event,
     ) -> None:
-        """Tâche de fond longue durée : ouvre la connexion, la garde ouverte
-        jusqu'au signal d'arrêt, puis la referme, le tout dans la même tâche
-        (contrainte anyio, voir ServerConnection.task)."""
+        """Long-running background task: opens the connection, keeps it open
+        until the stop signal, then closes it, all within the same task
+        (anyio constraint, see ServerConnection.task)."""
         try:
             params = StdioServerParameters(
                 command=config.command, args=config.args, env=config.env or None
@@ -180,7 +193,7 @@ class MCPManager:
             del TOOLS_REGISTRY[key]
         rebuild_tools_list()
 
-    # ---- API synchrone appelée par server.py / main.py --------------------
+    # ---- Synchronous API called by server.py / main.py --------------------
 
     def connect(self, name: str) -> ServerConnection:
         configs = {c.name: c for c in load_configs()}
@@ -238,7 +251,7 @@ class MCPManager:
     def add_server(self, config: MCPServerConfig) -> ServerConnection | None:
         configs = load_configs()
         if any(c.name == config.name for c in configs):
-            raise ValueError(f"un serveur nommé « {config.name} » existe déjà")
+            raise ValueError(f"a server named '{config.name}' already exists")
         configs.append(config)
         save_configs(configs)
         return self.connect(config.name) if config.enabled else None

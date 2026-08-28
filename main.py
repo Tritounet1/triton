@@ -33,20 +33,20 @@ from tools import TOOLS, TOOLS_REGISTRY
 SYSTEM_PROMPT = "You are a concise and clear assistant."
 MAX_ITERATIONS = 10
 
-# approximation grossiere : pas de vrai tokenizer, on estime a partir de la
-# taille du json de l'historique (1 token ~= 4 caracteres, tres approximatif)
+# rough approximation: no real tokenizer, estimated from the size of the
+# history's json (1 token ~= 4 characters, very approximate)
 MAX_CONTEXT_CHARS = 8000
 KEEP_RECENT_TURNS = 3
 
 
 def format_args(args: dict[str, object]) -> str:
-    """Représente les arguments d'un appel d'outil pour l'affichage, sans
-    jamais dumper un contenu potentiellement long (ex. le "content" de
-    write_file), juste sa taille."""
+    """Renders a tool call's arguments for display, without ever dumping
+    potentially long content (e.g. write_file's "content"), just its
+    size."""
     parts: list[str] = []
     for k, v in args.items():
         if k == "content" and isinstance(v, str):
-            parts.append(f"{k}=<{len(v)} caractères>")
+            parts.append(f"{k}=<{len(v)} characters>")
         else:
             parts.append(f"{k}={v!r}")
     return ", ".join(parts)
@@ -55,12 +55,11 @@ def format_args(args: dict[str, object]) -> str:
 def run_tool_calls(
     console: Console, session_id: str, tool_calls: list[ChatCompletionMessageToolCallUnion]
 ) -> list[ChatCompletionMessageParam]:
-    """Exécute chaque appel d'outil demandé par le modèle (en demandant une
-    confirmation avant les outils qui modifient quelque chose), affiche le
-    résultat, et renvoie les messages "tool" correspondants à ajouter à
-    l'historique. Le choix "toujours autoriser" (a) n'est mémorisé que pour
-    cette conversation (session_id) : une nouvelle conversation repart avec
-    des confirmations vierges."""
+    """Runs each tool call requested by the model (asking for confirmation
+    before tools that modify something), displays the result, and returns
+    the corresponding "tool" messages to append to the history. The "always
+    allow" choice (a) is only remembered for this conversation (session_id):
+    a new conversation starts with a clean confirmation state."""
     tool_messages: list[ChatCompletionMessageParam] = []
 
     for tool_call in tool_calls:
@@ -74,21 +73,21 @@ def run_tool_calls(
         try:
             args = json.loads(raw_args)
         except json.JSONDecodeError:
-            result = f"erreur : arguments invalides ({raw_args})"
+            result = f"error: invalid arguments ({raw_args})"
             args = {}
         else:
             tool = TOOLS_REGISTRY.get(name)
 
             if tool is None:
-                result = f"outil inconnu : {name}"
+                result = f"unknown tool: {name}"
             elif tool.read_only or name in load_always_allowed(session_id):
                 start = time.perf_counter()
                 result = tool.fn(**args)
                 duration = time.perf_counter() - start
             else:
                 choice = Prompt.ask(
-                    f"[yellow]autoriser[/yellow] {name}({format_args(args)}) ? "
-                    "(y : une fois, a : toujours pour cette conversation, n : refuser)",
+                    f"[yellow]allow[/yellow] {name}({format_args(args)})? "
+                    "(y: once, a: always for this conversation, n: deny)",
                     console=console,
                     choices=["y", "n", "a"],
                     default="n",
@@ -100,13 +99,13 @@ def run_tool_calls(
                     result = tool.fn(**args)
                     duration = time.perf_counter() - start
                 else:
-                    result = "action refusée par l'utilisateur"
+                    result = "action denied by the user"
 
         args_repr = format_args(args)
         console.print(
             Panel(
                 result,
-                title=f"outil : {name}({args_repr})",
+                title=f"tool: {name}({args_repr})",
                 title_align="left",
                 border_style="yellow",
             )
@@ -135,8 +134,8 @@ def run_tool_calls(
 def to_tool_call_params(
     tool_calls: list[ChatCompletionMessageToolCallUnion],
 ) -> list[ChatCompletionMessageToolCallUnionParam]:
-    """Convertit les appels d'outils reçus de l'API vers le format attendu en entrée,
-    pour pouvoir les remettre dans l'historique de messages."""
+    """Converts tool calls received from the API to the format expected as
+    input, so they can be put back into the message history."""
     params: list[ChatCompletionMessageToolCallUnionParam] = []
     for tool_call in tool_calls:
         if tool_call.type != "function":
@@ -158,7 +157,7 @@ def timed_call_chat(
     messages: list[ChatCompletionMessageParam],
     tools: list[ChatCompletionToolParam] | None = None,
 ) -> ChatResult:
-    """Appelle le modèle en chronométrant l'appel et en le loguant."""
+    """Calls the model, timing the call and logging it."""
     start = time.perf_counter()
     reply = call_chat(messages, tools=tools)
     duration = time.perf_counter() - start
@@ -179,8 +178,8 @@ def timed_stream_chat(
     messages: list[ChatCompletionMessageParam],
     tools: list[ChatCompletionToolParam] | None = None,
 ) -> Iterator[str | ChatResult]:
-    """Version streaming de timed_call_chat : relaie les morceaux de texte au
-    fur et à mesure, et logue l'appel une fois le ChatResult final reçu."""
+    """Streaming version of timed_call_chat: relays text chunks as they
+    arrive, and logs the call once the final ChatResult is received."""
     start = time.perf_counter()
     for event in stream_chat(messages, tools=tools):
         if isinstance(event, str):
@@ -205,7 +204,7 @@ def estimate_size(messages: list[ChatCompletionMessageParam]) -> int:
 
 
 def turn_start_indices(messages: list[ChatCompletionMessageParam]) -> list[int]:
-    """indices des messages "user" dans l'historique : chacun marque le début d'un tour."""
+    """Indices of "user" messages in the history: each one marks the start of a turn."""
     return [i for i, m in enumerate(messages) if m["role"] == "user"]
 
 
@@ -214,24 +213,24 @@ def summarize(old_messages: list[ChatCompletionMessageParam]) -> str:
     summary_request: list[ChatCompletionMessageParam] = [
         {
             "role": "system",
-            "content": "tu résumes une conversation de façon concise, en gardant les faits, "
-            "décisions et résultats d'outils importants.",
+            "content": "you summarize a conversation concisely, keeping the important facts, "
+            "decisions, and tool results.",
         },
-        {"role": "user", "content": f"résume cette conversation :\n\n{transcript}"},
+        {"role": "user", "content": f"summarize this conversation:\n\n{transcript}"},
     ]
     result = timed_call_chat(summary_request)
-    return result.content or "(résumé vide)"
+    return result.content or "(empty summary)"
 
 
 def compress_history_if_needed(
     messages: list[ChatCompletionMessageParam],
 ) -> tuple[list[ChatCompletionMessageParam], str | None]:
-    """Cœur de la compression, sans dépendance à Rich (réutilisé par l'API).
-    Résume les tours les plus anciens si l'historique dépasse un seuil, en
-    gardant intacts le system prompt et les derniers tours (pour ne jamais
-    couper un couple assistant/tool_calls en plein milieu). Renvoie
-    l'historique (inchangé ou compressé) et un message à loguer, s'il y a eu
-    compression."""
+    """Core compression logic, with no dependency on Rich (reused by the
+    API). Summarizes the oldest turns if the history exceeds a threshold,
+    keeping the system prompt and the most recent turns intact (so an
+    assistant/tool_calls pair is never cut in the middle). Returns the
+    history (unchanged or compressed) and a message to log, if compression
+    happened."""
     if estimate_size(messages) <= MAX_CONTEXT_CHARS:
         return messages, None
 
@@ -248,17 +247,17 @@ def compress_history_if_needed(
 
     compressed = [
         system_message,
-        {"role": "system", "content": f"résumé des échanges précédents : {summary}"},
+        {"role": "system", "content": f"summary of the previous exchanges: {summary}"},
         *recent_messages,
     ]
-    return compressed, f"historique compressé : {len(old_messages)} messages résumés en 1"
+    return compressed, f"history compressed: {len(old_messages)} messages summarized into 1"
 
 
 def compress_history(
     console: Console, messages: list[ChatCompletionMessageParam]
 ) -> list[ChatCompletionMessageParam]:
-    """Wrapper CLI : ajoute le spinner et le log Rich autour de compress_history_if_needed."""
-    with console.status("[dim]compression de l'historique...[/dim]", spinner="dots"):
+    """CLI wrapper: adds the spinner and Rich log around compress_history_if_needed."""
+    with console.status("[dim]compressing history...[/dim]", spinner="dots"):
         compressed, log_message = compress_history_if_needed(messages)
 
     if log_message:
@@ -275,9 +274,7 @@ def main():
     messages: list[ChatCompletionMessageParam]
     if session_path:
         messages = load_session(session_path)
-        console.print(
-            f"[dim]session reprise : {session_path.name} ({len(messages)} messages)[/dim]"
-        )
+        console.print(f"[dim]session resumed: {session_path.name} ({len(messages)} messages)[/dim]")
     else:
         session_path = new_session_path()
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -286,24 +283,23 @@ def main():
 
     mcp_configs = mcp_client.load_configs()
     if any(c.enabled for c in mcp_configs):
-        with console.status("[dim]connexion aux serveurs MCP...[/dim]", spinner="dots"):
+        with console.status("[dim]connecting to MCP servers...[/dim]", spinner="dots"):
             mcp_client.manager.connect_all_enabled()
         for status in mcp_client.manager.status():
             if not status["enabled"]:
                 continue
             if status["connected"]:
                 console.print(
-                    f"[dim]MCP « {status['name']} » connecté "
-                    f"({len(status['tools'])} outil(s))[/dim]"
+                    f"[dim]MCP '{status['name']}' connected ({len(status['tools'])} tool(s))[/dim]"
                 )
             else:
-                console.print(f"[red]MCP « {status['name']} » : {status['error']}[/red]")
+                console.print(f"[red]MCP '{status['name']}': {status['error']}[/red]")
 
-    console.print("tape 'exit' ou 'quit' pour quitter\n", style="dim")
+    console.print("type 'exit' or 'quit' to quit\n", style="dim")
 
     while True:
         try:
-            user_input = session.prompt(HTML("<ansigreen><b>Toi</b></ansigreen> › ")).strip()
+            user_input = session.prompt(HTML("<ansigreen><b>You</b></ansigreen> › ")).strip()
         except (EOFError, KeyboardInterrupt):
             break
 
@@ -325,7 +321,7 @@ def main():
             reply: ChatResult | None = None
 
             with Live(
-                Text("réflexion...", style="dim"), console=console, refresh_per_second=12
+                Text("thinking...", style="dim"), console=console, refresh_per_second=12
             ) as live:
                 for event in timed_stream_chat(messages, tools=TOOLS):
                     if isinstance(event, str):
@@ -360,7 +356,7 @@ def main():
 
             if reply.tool_calls:
                 console.print(
-                    f"[dim]itération {iteration} : {len(reply.tool_calls)} appel(s) d'outil[/dim]"
+                    f"[dim]iteration {iteration}: {len(reply.tool_calls)} tool call(s)[/dim]"
                 )
                 messages.append(
                     {
@@ -373,7 +369,7 @@ def main():
                 continue
 
             if reply.content is None:
-                raise RuntimeError("le modèle n'a renvoyé ni texte ni appel d'outil.")
+                raise RuntimeError("the model returned neither text nor a tool call.")
 
             messages.append({"role": "assistant", "content": reply.content})
             console.print()
@@ -381,14 +377,14 @@ def main():
 
         if not done:
             console.print(
-                f"[red]limite de {MAX_ITERATIONS} itérations atteinte, "
-                "le modèle n'a pas conclu.[/red]\n"
+                f"[red]limit of {MAX_ITERATIONS} iterations reached, "
+                "the model did not conclude.[/red]\n"
             )
 
         save_session(session_path, messages)
 
     save_session(session_path, messages)
-    console.print("[dim]à bientôt[/dim]")
+    console.print("[dim]see you soon[/dim]")
 
 
 if __name__ == "__main__":

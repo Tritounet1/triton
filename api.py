@@ -68,11 +68,10 @@ def stream_chat(
     messages: list[ChatCompletionMessageParam],
     tools: list[ChatCompletionToolParam] | None = None,
 ) -> Iterator[str | ChatResult]:
-    """Appelle le modèle en streaming : yield chaque morceau de texte au fur
-    et à mesure qu'il arrive, puis le ChatResult complet une fois la réponse
-    terminée (les appels d'outils ne sont jamais streamés morceau par morceau,
-    juste reconstitués silencieusement, ça n'a pas de sens de les afficher
-    partiellement)."""
+    """Calls the model with streaming: yields each chunk of text as it
+    arrives, then the full ChatResult once the response is complete (tool
+    calls are never streamed chunk by chunk, just reconstructed silently,
+    there's no point displaying them partially)."""
     if tools:
         stream = client.chat.completions.create(
             model=MODEL,

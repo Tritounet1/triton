@@ -93,11 +93,11 @@ PENDING_CONFIRMATIONS: dict[str, PendingConfirmation] = {}
 def resolve_session(
     session_id: str | None,
 ) -> tuple[Path, list[ChatCompletionMessageParam], bool]:
-    """Charge la session demandée si elle existe, sinon en crée une nouvelle.
-    Contrairement au CLI, l'API ne reprend jamais silencieusement "la
-    dernière session" : c'est au client de se souvenir de son session_id.
-    Le booléen indique si la session vient d'être créée (utile pour savoir
-    s'il faut générer un titre)."""
+    """Loads the requested session if it exists, otherwise creates a new
+    one. Unlike the CLI, the API never silently resumes "the last session":
+    it's up to the client to remember its session_id. The boolean indicates
+    whether the session was just created (useful to know whether a title
+    needs generating)."""
     if session_id:
         path = SESSIONS_DIR / f"{session_id}.json"
         if path.exists():
@@ -115,29 +115,28 @@ MAX_TITLE_CHARS = 60
 
 
 def generate_conversation_title(first_message: str) -> str:
-    """Titre très court généré à partir du tout premier message d'une
-    conversation, pour l'affichage cote client uniquement (jamais renvoyé
-    au modèle par la suite).
+    """Very short title generated from a conversation's very first message,
+    for client-side display only (never sent back to the model afterwards).
 
-    Le message est présenté comme une citation à résumer, pas envoyé tel
-    quel en tour "user" : sinon le modèle a tendance à y répondre
-    directement (ex. une question type "explique moi X" se fait traiter
-    comme une vraie question) au lieu de produire un titre."""
+    The message is presented as a quote to summarize, not sent as-is in a
+    "user" turn: otherwise the model tends to answer it directly (e.g. a
+    question like "explain X to me" gets treated as an actual question)
+    instead of producing a title."""
     request: list[ChatCompletionMessageParam] = [
         {
             "role": "system",
-            "content": "tu résumes des messages en un titre très court (4 mots maximum), en "
-            "français, sans guillemets, sans point final, sans emoji. tu ne réponds jamais "
-            "à la question posée dans le message, tu donnes uniquement un titre qui la résume.",
+            "content": "you summarize messages into a very short title (4 words maximum), in "
+            "english, no quotes, no trailing period, no emoji. you never answer the question "
+            "asked in the message, you only give a title that summarizes it.",
         },
         {
             "role": "user",
-            "content": f"donne un titre très court pour la conversation qui commence par ce "
-            f'message :\n\n"{first_message}"',
+            "content": f"give a very short title for the conversation that starts with this "
+            f'message:\n\n"{first_message}"',
         },
     ]
     result = call_chat(request)
-    title = (result.content or "nouvelle conversation").strip().strip('"')
+    title = (result.content or "new conversation").strip().strip('"')
     if len(title) > MAX_TITLE_CHARS:
         title = title[: MAX_TITLE_CHARS - 1].rstrip() + "…"
     return title
@@ -197,13 +196,13 @@ def run_chat_stream(
                 try:
                     args = json.loads(tool_call.function.arguments)
                 except json.JSONDecodeError:
-                    result = f"erreur : arguments invalides ({tool_call.function.arguments})"
+                    result = f"error: invalid arguments ({tool_call.function.arguments})"
                     args = {}
                 else:
                     tool = TOOLS_REGISTRY.get(name)
 
                     if tool is None:
-                        result = f"outil inconnu : {name}"
+                        result = f"unknown tool: {name}"
                     elif tool.read_only or name in load_always_allowed(session_id):
                         result = tool.fn(**args)
                     else:
@@ -224,7 +223,7 @@ def run_chat_stream(
                                 allow_always(session_id, name)
                             result = tool.fn(**args)
                         else:
-                            result = "action refusée par l'utilisateur"
+                            result = "action denied by the user"
 
                 yield sse("tool_call", {"tool": name, "args": args, "result": result})
 
@@ -242,7 +241,7 @@ def run_chat_stream(
             continue
 
         if reply.content is None:
-            yield sse("error", {"message": "le modèle n'a renvoyé ni texte ni appel d'outil."})
+            yield sse("error", {"message": "the model returned neither text nor a tool call."})
             done = True
             continue
 
@@ -260,7 +259,7 @@ def run_chat_stream(
         done = True
 
     if not done:
-        yield sse("error", {"message": f"limite de {MAX_ITERATIONS} itérations atteinte."})
+        yield sse("error", {"message": f"limit of {MAX_ITERATIONS} iterations reached."})
 
     save_session(session_path, messages)
 
@@ -285,7 +284,7 @@ def chat(body: ChatRequest) -> StreamingResponse:
 def confirm(body: ConfirmRequest) -> dict[str, bool]:
     pending = PENDING_CONFIRMATIONS.get(body.confirmation_id)
     if pending is None:
-        raise HTTPException(404, "confirmation inconnue ou déjà traitée")
+        raise HTTPException(404, "unknown or already-processed confirmation")
 
     pending.approved = body.approved
     pending.remember = body.remember
@@ -305,7 +304,7 @@ def list_sessions() -> list[dict[str, str | None]]:
 def get_session(session_id: str) -> list[ChatCompletionMessageParam]:
     path = SESSIONS_DIR / f"{session_id}.json"
     if not path.exists():
-        raise HTTPException(404, "session introuvable")
+        raise HTTPException(404, "session not found")
     return load_session(path)
 
 
@@ -313,7 +312,7 @@ def get_session(session_id: str) -> list[ChatCompletionMessageParam]:
 def rename_session(session_id: str, body: RenameRequest) -> dict[str, bool]:
     path = SESSIONS_DIR / f"{session_id}.json"
     if not path.exists():
-        raise HTTPException(404, "session introuvable")
+        raise HTTPException(404, "session not found")
     save_title(session_id, body.title)
     return {"ok": True}
 
@@ -321,7 +320,7 @@ def rename_session(session_id: str, body: RenameRequest) -> dict[str, bool]:
 @app.delete("/sessions/{session_id}")
 def remove_session(session_id: str) -> dict[str, bool]:
     if not delete_session(session_id):
-        raise HTTPException(404, "session introuvable")
+        raise HTTPException(404, "session not found")
     return {"ok": True}
 
 
@@ -347,7 +346,7 @@ def toggle_mcp_server(name: str, body: MCPServerToggle) -> list[mcp_client.Serve
     try:
         mcp_client.manager.set_enabled(name, body.enabled)
     except KeyError as e:
-        raise HTTPException(404, "serveur MCP introuvable") from e
+        raise HTTPException(404, "MCP server not found") from e
     return mcp_client.manager.status()
 
 
@@ -359,9 +358,9 @@ def remove_mcp_server(name: str) -> list[mcp_client.ServerStatus]:
 
 @app.get("/logs")
 def get_logs(limit: int = 500) -> list[dict[str, object]]:
-    """Evenements bruts de logs/events.jsonl (model_call / tool_call), les
-    plus recents en premier. `limit` borne la reponse pour ne jamais renvoyer
-    un fichier devenu enorme d'un coup."""
+    """Raw events from logs/events.jsonl (model_call / tool_call), most
+    recent first. `limit` bounds the response so a file that grew huge is
+    never returned all at once."""
     if not LOGS_FILE.exists():
         return []
     lines = [line for line in LOGS_FILE.read_text().splitlines() if line.strip()]

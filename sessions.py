@@ -9,7 +9,7 @@ SESSIONS_DIR = Path(__file__).parent / "sessions"
 
 
 def latest_session_path() -> Path | None:
-    """Renvoie le fichier de session le plus récent, s'il en existe un."""
+    """Returns the most recent session file, if one exists."""
     if not SESSIONS_DIR.exists():
         return None
     files = sorted(SESSIONS_DIR.glob("*.json"))
@@ -17,8 +17,8 @@ def latest_session_path() -> Path | None:
 
 
 def new_session_path() -> Path:
-    """Crée un identifiant de session basé sur la date, pour permettre un jour
-    de gérer plusieurs conversations séparées plutôt qu'une seule mémoire globale."""
+    """Creates a session id based on the date, to allow one day handling
+    multiple separate conversations rather than a single global memory."""
     SESSIONS_DIR.mkdir(exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
     return SESSIONS_DIR / f"{timestamp}.json"
@@ -37,10 +37,10 @@ def title_path(session_id: str) -> Path:
 
 
 def load_title(session_id: str) -> str | None:
-    """Titre choisi par l'utilisateur ou généré au premier message. Stocké à
-    part de l'historique (fichier séparé) : ça reste une info d'affichage
-    côté client, jamais renvoyée au modèle, et ça ne touche pas au format
-    de session.json que le CLI lit/écrit aussi."""
+    """Title chosen by the user or generated on the first message. Stored
+    separately from the history (its own file): it stays a client-side
+    display detail, never sent back to the model, and doesn't touch the
+    session.json format that the CLI also reads/writes."""
     path = title_path(session_id)
     if not path.exists():
         return None
@@ -57,10 +57,10 @@ def permissions_path(session_id: str) -> Path:
 
 
 def load_always_allowed(session_id: str) -> set[str]:
-    """Outils que l'utilisateur a choisi d'autoriser sans reconfirmation, pour
-    CETTE conversation uniquement (bouton "toujours autoriser" sur le prompt
-    de confirmation). Stocké à part de l'historique, comme le titre : une
-    nouvelle conversation repart avec des confirmations vierges."""
+    """Tools the user chose to allow without reconfirmation, for THIS
+    conversation only (the "always allow" button on the confirmation
+    prompt). Stored separately from the history, like the title: a new
+    conversation starts with a clean confirmation state."""
     path = permissions_path(session_id)
     if not path.exists():
         return set()
@@ -79,8 +79,8 @@ def session_path(session_id: str) -> Path:
 
 
 def delete_session(session_id: str) -> bool:
-    """Supprime une conversation (historique + titre + permissions). Renvoie
-    False si elle n'existait pas."""
+    """Deletes a conversation (history + title + permissions). Returns
+    False if it didn't exist."""
     path = session_path(session_id)
     if not path.exists():
         return False
