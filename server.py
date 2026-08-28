@@ -22,7 +22,7 @@ from fastapi.responses import StreamingResponse
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
-from api import ChatResult
+from api import MODEL, ChatResult
 from logs import log_event
 from main import (
     MAX_ITERATIONS,
@@ -198,8 +198,8 @@ def run_chat_stream(
 
 
 @app.get("/health")
-def health() -> dict[str, bool]:
-    return {"ok": True}
+def health() -> dict[str, bool | str]:
+    return {"ok": True, "model": MODEL}
 
 
 @app.post("/chat")
