@@ -20,7 +20,7 @@ client = OpenAI(
     api_key=open_router_api_key,
 )
 
-MODEL = "meta-llama/llama-3.1-8b-instruct"
+MODEL = "anthropic/claude-haiku-4.5"
 
 
 @dataclass
