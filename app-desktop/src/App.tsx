@@ -84,6 +84,10 @@ function App() {
   }, []);
 
   useEffect(() => {
+    // uniquement au démarrage, pour une session déjà connue (localStorage).
+    // ne doit pas se redéclencher quand sendMessage() fixe sessionId lui-même
+    // via l'événement "session", sinon ça part en course avec le streaming
+    // en cours (fetch concurrent + setMessages qui écrase l'état en cours).
     if (!sessionId) return;
     fetch(`${API_BASE}/sessions/${sessionId}`)
       .then((r) => (r.ok ? r.json() : null))
@@ -93,7 +97,8 @@ function App() {
       .catch(() => {
         /* session locale introuvable côté serveur, on repart d'une conversation vide */
       });
-  }, [sessionId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -107,7 +112,31 @@ function App() {
     setMessages((prev) => [...prev, { kind: "user", text }]);
     setSending(true);
 
-    let assistantIndex = -1;
+    let assistantText = "";
+    let flushScheduled = false;
+
+    // les tokens peuvent arriver bien plus vite que le rythme d'affichage
+    // utile (le webview a du mal à suivre un setMessages() par token) : on
+    // regroupe les mises à jour par frame plutôt que d'en déclencher une à
+    // chaque morceau de texte reçu. L'updater ne doit dépendre que de `prev`
+    // (pas d'un index externe muté à l'intérieur), sinon React (StrictMode
+    // rejoue les updaters pour vérifier qu'ils sont purs) plante au second
+    // passage avec un index déjà décalé.
+    function scheduleFlush() {
+      if (flushScheduled) return;
+      flushScheduled = true;
+      requestAnimationFrame(() => {
+        flushScheduled = false;
+        const textSoFar = assistantText;
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last && last.kind === "assistant") {
+            return [...prev.slice(0, -1), { ...last, text: textSoFar }];
+          }
+          return [...prev, { kind: "assistant", text: textSoFar }];
+        });
+      });
+    }
 
     try {
       const res = await fetch(`${API_BASE}/chat`, {
@@ -127,20 +156,8 @@ function App() {
             break;
           }
           case "token": {
-            const chunk = data.text as string;
-            setMessages((prev) => {
-              const next = [...prev];
-              if (assistantIndex === -1) {
-                assistantIndex = next.length;
-                next.push({ kind: "assistant", text: chunk });
-              } else {
-                const current = next[assistantIndex];
-                if (current.kind === "assistant") {
-                  next[assistantIndex] = { ...current, text: current.text + chunk };
-                }
-              }
-              return next;
-            });
+            assistantText += data.text as string;
+            scheduleFlush();
             break;
           }
           case "tool_call": {
@@ -153,7 +170,7 @@ function App() {
                 result: data.result as string,
               },
             ]);
-            assistantIndex = -1;
+            assistantText = "";
             break;
           }
           case "confirmation_required": {
@@ -176,7 +193,8 @@ function App() {
             break;
         }
       }
-    } catch {
+    } catch (err) {
+      console.error("erreur pendant l'échange avec l'API Triton :", err);
       setMessages((prev) => [
         ...prev,
         { kind: "error", text: "impossible de contacter l'API Triton (127.0.0.1:8000)." },
