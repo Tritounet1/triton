@@ -700,7 +700,7 @@ function App() {
         height="fill"
         sideNav={
           <SideNav
-            header={<SideNavHeading heading="Triton" />}
+            header={<SideNavHeading heading="Triton" icon={<Avatar name="Triton" size="xsm" />} />}
             topContent={
               <div className="flex flex-col gap-2">
                 <div className="flex items-center gap-1">
