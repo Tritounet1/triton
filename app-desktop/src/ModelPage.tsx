@@ -9,6 +9,7 @@ import { Avatar } from "@astryxdesign/core/Avatar";
 import { Table, proportional, pixel, type TableColumn } from "@astryxdesign/core/Table";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CpuIcon, SearchIcon } from "./icons";
+import { familyKey, familyInfo } from "./modelFamilies";
 
 const API_BASE = "http://127.0.0.1:8000";
 
@@ -26,50 +27,9 @@ interface ModelPageProps {
   onBack: () => void;
 }
 
-// prefixe avant le "/" de l'id OpenRouter (ex. "anthropic/claude-...") : la
-// famille est deja donnee par l'API, pas besoin de la deviner autrement.
-// Logos reels pour les plus connus (public/*.svg), le reste retombe sur les
-// initiales via Avatar.
-const FAMILIES: Record<string, { label: string; logo?: string }> = {
-  anthropic: { label: "Anthropic (Claude)", logo: "/claude-logo.svg" },
-  openai: { label: "OpenAI (ChatGPT)", logo: "/openai-logo.svg" },
-  google: { label: "Google (Gemini)", logo: "/gemini-logo.svg" },
-  qwen: { label: "Qwen (Alibaba)", logo: "/qwen-logo.svg" },
-  "meta-llama": { label: "Meta (Llama)", logo: "/meta-logo.svg" },
-  mistralai: { label: "Mistral AI", logo: "/mistral-logo.svg" },
-  "x-ai": { label: "xAI (Grok)" },
-  deepseek: { label: "DeepSeek" },
-  "z-ai": { label: "Z.ai (GLM)" },
-  cohere: { label: "Cohere" },
-  amazon: { label: "Amazon (Nova)" },
-  nvidia: { label: "NVIDIA (Nemotron)" },
-  perplexity: { label: "Perplexity" },
-  minimax: { label: "MiniMax" },
-  moonshotai: { label: "Moonshot AI (Kimi)" },
-  microsoft: { label: "Microsoft" },
-};
-
-// prefixes OpenRouter differents pour une meme famille (ex. "meta" et
-// "meta-llama" designent tous les deux Meta) : normalises vers une seule
-// cle canonique avant regroupement, sinon ils apparaissent comme deux
-// groupes separes avec le meme nom
-const FAMILY_ALIASES: Record<string, string> = {
-  meta: "meta-llama",
-};
-
 // grandes familles en premier (dans cet ordre), puis le reste des familles
 // nommees par ordre alphabetique, "Autres" toujours en dernier
 const FAMILY_PRIORITY = ["anthropic", "openai", "google", "qwen"];
-
-function familyKey(id: string): string {
-  const prefix = id.replace(/^~/, "").split("/")[0] ?? "";
-  const canonical = FAMILY_ALIASES[prefix] ?? prefix;
-  return canonical in FAMILIES ? canonical : "other";
-}
-
-function familyInfo(key: string): { label: string; logo?: string } {
-  return FAMILIES[key] ?? { label: "Autres" };
-}
 
 function formatContextLength(n: number): string {
   if (n <= 0) return "-";

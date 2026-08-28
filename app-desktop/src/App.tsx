@@ -31,6 +31,7 @@ import { LogsPage } from "./LogsPage";
 import { McpServersPage } from "./McpServersPage";
 import { ProjectFilePanel } from "./ProjectFilePanel";
 import { SubagentsPanel } from "./SubagentsPanel";
+import { modelAvatar } from "./modelFamilies";
 import {
   CheckIcon,
   ChevronRightIcon,
@@ -47,10 +48,6 @@ import {
 import "./App.css";
 
 const API_BASE = "http://127.0.0.1:8000";
-
-// depose le vrai logo Claude a cet emplacement (app-desktop/public/claude-logo.svg) ;
-// tant qu'il n'existe pas, Avatar retombe proprement sur les initiales "C".
-const CLAUDE_AVATAR_SRC = "/claude-logo.svg";
 
 type ChatMsg =
   | { kind: "user"; text: string; time: number }
@@ -679,6 +676,11 @@ function App() {
 
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
 
+  // logo du fournisseur du modele actuellement selectionne (Paramètres >
+  // Modèle), avec repli sur les initiales quand la famille n'a pas de
+  // logo connu (voir modelFamilies.ts, partage avec ModelPage.tsx)
+  const assistantAvatar = modelAvatar(apiModel);
+
   return (
     <Theme theme={neutralTheme} mode={themeMode}>
       <AppShell
@@ -835,7 +837,7 @@ function App() {
                           <SideNavItem
                             key={s.id}
                             label={s.title ?? formatSessionLabel(s.id)}
-                            icon={<Avatar name="Claude" src={CLAUDE_AVATAR_SRC} size="xsm" />}
+                            icon={<Avatar name={assistantAvatar.name} src={assistantAvatar.logo} size="xsm" />}
                             isSelected={s.id === sessionId}
                             onClick={() => { switchSession(s.id); }}
                             className="pl-4"
@@ -875,7 +877,7 @@ function App() {
                   <SideNavItem
                     key={s.id}
                     label={s.title ?? formatSessionLabel(s.id)}
-                    icon={<Avatar name="Claude" src={CLAUDE_AVATAR_SRC} size="xsm" />}
+                    icon={<Avatar name={assistantAvatar.name} src={assistantAvatar.logo} size="xsm" />}
                     isSelected={s.id === sessionId}
                     onClick={() => { switchSession(s.id); }}
                     endContent={
@@ -1005,7 +1007,7 @@ function App() {
                 <ChatMessage
                   key={gi}
                   sender="assistant"
-                  avatar={<Avatar name="Claude" src={CLAUDE_AVATAR_SRC} size="sm" />}
+                  avatar={<Avatar name={assistantAvatar.name} src={assistantAvatar.logo} size="sm" />}
                   name="Triton"
                 >
                   {blocks.map((block, bi) =>
