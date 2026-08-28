@@ -69,6 +69,10 @@ class ConfirmRequest(BaseModel):
     remember: bool = False
 
 
+class CancelRequest(BaseModel):
+    session_id: str
+
+
 class RenameRequest(BaseModel):
     title: str
 
@@ -98,6 +102,10 @@ class PendingConfirmation:
 
 
 PENDING_CONFIRMATIONS: dict[str, PendingConfirmation] = {}
+
+# session ids for which the client asked to stop the agentic loop; checked
+# between iterations in run_chat_stream (see chat/cancel below)
+CANCELLED_SESSIONS: set[str] = set()
 
 
 def resolve_session(
@@ -177,8 +185,12 @@ def run_chat_stream(
 
     iteration = 0
     done = False
+    cancelled = False
 
     while iteration < MAX_ITERATIONS and not done:
+        if session_id in CANCELLED_SESSIONS:
+            cancelled = True
+            break
         iteration += 1
         content_parts: list[str] = []
         reply: ChatResult | None = None
@@ -273,7 +285,9 @@ def run_chat_stream(
         )
         done = True
 
-    if not done:
+    CANCELLED_SESSIONS.discard(session_id)
+
+    if not done and not cancelled:
         yield sse("error", {"message": f"limit of {MAX_ITERATIONS} iterations reached."})
 
     save_session(session_path, messages)
@@ -304,6 +318,16 @@ def confirm(body: ConfirmRequest) -> dict[str, bool]:
     pending.approved = body.approved
     pending.remember = body.remember
     pending.event.set()
+    return {"ok": True}
+
+
+@app.post("/chat/cancel")
+def cancel_chat(body: CancelRequest) -> dict[str, bool]:
+    """Marks a session as cancelled: run_chat_stream checks this between
+    agentic-loop iterations and stops before starting another one. Doesn't
+    interrupt a model call already in flight (see the client-side abort,
+    which closes the connection those tokens are streamed to)."""
+    CANCELLED_SESSIONS.add(body.session_id)
     return {"ok": True}
 
 

@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { open as openFolderDialog } from "@tauri-apps/plugin-dialog";
 import { Theme } from "@astryxdesign/core/theme";
 import { neutralTheme } from "@astryxdesign/theme-neutral/built";
@@ -206,6 +206,7 @@ function App() {
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(
     null,
   );
+  const abortControllerRef = useRef<AbortController | null>(null);
   const [themeMode, setThemeMode] = useState<"light" | "dark">(() =>
     localStorage.getItem("triton_theme") === "light" ? "light" : "dark",
   );
@@ -441,11 +442,15 @@ function App() {
       });
     }
 
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
       const res = await fetch(`${API_BASE}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session_id: sessionId, message: text, project_id: activeProjectId }),
+        signal: controller.signal,
       });
 
       for await (const { event, data } of parseSSE(res)) {
@@ -524,32 +529,87 @@ function App() {
         }
       }
     } catch (err) {
-      console.error("erreur pendant l'échange avec l'API Triton :", err);
-      setMessages((prev) => [
-        ...prev,
-        {
-          kind: "error",
-          text: "impossible de contacter l'API Triton (127.0.0.1:8000).",
-          time: Date.now(),
-        },
-      ]);
+      if (err instanceof DOMException && err.name === "AbortError") {
+        const finalText = assistantText
+          ? `${assistantText}\n\n*(interrompu)*`
+          : "*(interrompu)*";
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.kind === "assistant") {
+            return [...prev.slice(0, -1), { ...last, text: finalText }];
+          }
+          return [...prev, { kind: "assistant", text: finalText, time: Date.now() }];
+        });
+      } else {
+        console.error("erreur pendant l'échange avec l'API Triton :", err);
+        setMessages((prev) => [
+          ...prev,
+          {
+            kind: "error",
+            text: "impossible de contacter l'API Triton (127.0.0.1:8000).",
+            time: Date.now(),
+          },
+        ]);
+      }
     } finally {
+      abortControllerRef.current = null;
+      setPendingConfirmation(null);
       setSending(false);
       loadSessions();
     }
   }
 
-  async function respondToConfirmation(approved: boolean, remember = false) {
-    if (!pendingConfirmation) return;
-    const { id } = pendingConfirmation;
-    setPendingConfirmation(null);
+  // memoisee (useCallback) : referencee par cancelMessage ci-dessous, elle
+  // meme dans les dependances de l'effet echap.
+  const respondToConfirmation = useCallback(
+    async (approved: boolean, remember = false) => {
+      if (!pendingConfirmation) return;
+      const { id } = pendingConfirmation;
+      setPendingConfirmation(null);
 
-    await fetch(`${API_BASE}/chat/confirm`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ confirmation_id: id, approved, remember }),
-    });
-  }
+      await fetch(`${API_BASE}/chat/confirm`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmation_id: id, approved, remember }),
+      });
+    },
+    [pendingConfirmation],
+  );
+
+  /** Interrompt la conversation en cours : ferme le flux SSE cote client,
+   * signale au serveur d'arreter la boucle agentique avant sa prochaine
+   * iteration, et refuse une confirmation d'outil eventuellement en attente
+   * pour ne pas laisser le serveur bloque dessus jusqu'au timeout. Memoisee
+   * (useCallback) car referencee dans les dependances de l'effet echap
+   * ci-dessous. */
+  const cancelMessage = useCallback(() => {
+    if (!sending) return;
+    if (pendingConfirmation) {
+      void respondToConfirmation(false);
+    }
+    if (sessionId) {
+      void fetch(`${API_BASE}/chat/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId }),
+      });
+    }
+    abortControllerRef.current?.abort();
+  }, [sending, pendingConfirmation, sessionId, respondToConfirmation]);
+
+  // touche echap pour interrompre la reponse en cours, tant qu'une reponse
+  // est effectivement en cours (sending) ; reattache a chaque changement de
+  // sessionId pour que cancelMessage() cible toujours la bonne conversation
+  // (utile pour une toute nouvelle conversation : sessionId passe de null a
+  // son id reel des le premier evenement SSE, pendant que sending est deja true).
+  useEffect(() => {
+    if (!sending) return;
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") cancelMessage();
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => { document.removeEventListener("keydown", handleKeyDown); };
+  }, [sending, cancelMessage]);
 
   const filteredSessions = sessions.filter(
     (s) =>
@@ -812,6 +872,8 @@ function App() {
               value={input}
               onChange={setInput}
               onSubmit={(value) => { void sendMessage(value); }}
+              onStop={cancelMessage}
+              isStopShown={sending}
               placeholder="Écrire un message..."
               isDisabled={sending || !!pendingConfirmation}
               density="compact"
