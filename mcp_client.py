@@ -1,33 +1,31 @@
-"""Intégration MCP (Model Context Protocol) : connecte le harness à des
-serveurs d'outils externes plutôt que de coder chaque outil à la main comme
-dans tools.py. Un serveur MCP configuré (même format que Claude Desktop :
-command/args/env) apparaît comme des outils supplémentaires dans
-tools.TOOLS_REGISTRY, disponibles pour la boucle agentique de main.py et
-server.py sans aucun changement de leur côté.
-
-Le SDK MCP est async ; le reste du harness (Tool.fn) est synchrone. Plutôt
-que de réécrire toute la boucle agentique en async, une boucle asyncio
-dédiée tourne dans un thread d'arrière-plan et héberge toutes les sessions
-MCP ouvertes ; chaque Tool.fn synchrone soumet sa coroutine à cette boucle
-via asyncio.run_coroutine_threadsafe() et attend le résultat.
-"""
-
 import asyncio
 import json
 import threading
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import TypedDict
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-from mcp.types import TextContent, Tool as MCPTool
+from mcp.types import TextContent
+from mcp.types import Tool as MCPTool
 
 from tools import TOOLS_REGISTRY, Tool, rebuild_tools_list
 
 CONFIG_PATH = Path(__file__).parent / "mcp_servers.json"
 MCP_PREFIX = "mcp__"
 CALL_TIMEOUT = 60
+
+
+class ServerStatus(TypedDict):
+    name: str
+    command: str
+    args: list[str]
+    enabled: bool
+    connected: bool
+    error: str | None
+    tools: list[str]
 
 
 @dataclass
@@ -47,9 +45,7 @@ def load_configs() -> list[MCPServerConfig]:
 
 
 def save_configs(configs: list[MCPServerConfig]) -> None:
-    CONFIG_PATH.write_text(
-        json.dumps([asdict(c) for c in configs], ensure_ascii=False, indent=2)
-    )
+    CONFIG_PATH.write_text(json.dumps([asdict(c) for c in configs], ensure_ascii=False, indent=2))
 
 
 @dataclass
@@ -144,25 +140,25 @@ class MCPManager:
             params = StdioServerParameters(
                 command=config.command, args=config.args, env=config.env or None
             )
-            async with stdio_client(params) as (read, write):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    result = await session.list_tools()
-                    self._register_tools(config.name, session, result.tools)
-                    if not ready.done():
-                        ready.set_result(
-                            ServerConnection(
-                                config=config,
-                                connected=True,
-                                tool_names=[t.name for t in result.tools],
-                            )
+            async with (
+                stdio_client(params) as (read, write),
+                ClientSession(read, write) as session,
+            ):
+                await session.initialize()
+                result = await session.list_tools()
+                self._register_tools(config.name, session, result.tools)
+                if not ready.done():
+                    ready.set_result(
+                        ServerConnection(
+                            config=config,
+                            connected=True,
+                            tool_names=[t.name for t in result.tools],
                         )
-                    await stop.wait()
+                    )
+                await stop.wait()
         except Exception as e:
             if not ready.done():
-                ready.set_result(
-                    ServerConnection(config=config, error=f"{type(e).__name__}: {e}")
-                )
+                ready.set_result(ServerConnection(config=config, error=f"{type(e).__name__}: {e}"))
 
     async def _start(self, config: MCPServerConfig) -> ServerConnection:
         ready: asyncio.Future[ServerConnection] = self._loop.create_future()
@@ -221,9 +217,9 @@ class MCPManager:
         for name in list(self.connections):
             self.disconnect(name)
 
-    def status(self) -> list[dict[str, object]]:
+    def status(self) -> list[ServerStatus]:
         configs = load_configs()
-        out: list[dict[str, object]] = []
+        out: list[ServerStatus] = []
         for config in configs:
             conn = self.connections.get(config.name)
             out.append(

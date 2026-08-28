@@ -73,9 +73,9 @@ interface RawSessionMessage {
 
 /** id de session au format 2026-08-28_101500 -> "28/08/2026 10:15" */
 function formatSessionLabel(id: string): string {
-  const m = id.match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})$/);
+  const m = /^(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})$/.exec(id);
   if (!m) return id;
-  const [, y, mo, d, h, mi] = m;
+  const [, y = "", mo = "", d = "", h = "", mi = ""] = m;
   return `${d}/${mo}/${y} ${h}:${mi}`;
 }
 
@@ -201,8 +201,10 @@ function App() {
   function loadSessions() {
     fetch(`${API_BASE}/sessions`)
       .then((r) => (r.ok ? r.json() : []))
-      .then((list: Session[]) => setSessions([...list].reverse()))
-      .catch(() => {});
+      .then((list: Session[]) => { setSessions([...list].reverse()); })
+      .catch(() => {
+        // API hors ligne ou requete echouee : la sidebar reste vide, sans casser l'app
+      });
   }
 
   function startRename(session: Session) {
@@ -245,14 +247,16 @@ function App() {
       .then((raw: RawSessionMessage[] | null) => {
         if (raw) setMessages(historyToMessages(raw));
       })
-      .catch(() => {});
+      .catch(() => {
+        // session introuvable cote serveur : on garde l'historique local tel quel
+      });
   }
 
   useEffect(() => {
     fetch(`${API_BASE}/health`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((data: { ok: boolean; model: string } | null) => setApiModel(data?.model ?? null))
-      .catch(() => setApiModel(null));
+      .then((data: { ok: boolean; model: string } | null) => { setApiModel(data?.model ?? null); })
+      .catch(() => { setApiModel(null); });
 
     loadSessions();
 
@@ -261,7 +265,7 @@ function App() {
     // sinon ca part en course avec le streaming en cours.
     const stored = localStorage.getItem("triton_session_id");
     if (stored) loadHistory(stored);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, []);
 
   function switchSession(id: string) {
@@ -284,7 +288,7 @@ function App() {
   async function copyToClipboard(text: string, index: number) {
     await navigator.clipboard.writeText(text);
     setCopiedIndex(index);
-    setTimeout(() => setCopiedIndex((current) => (current === index ? null : current)), 1500);
+    setTimeout(() => { setCopiedIndex((current) => (current === index ? null : current)); }, 1500);
   }
 
   async function sendMessage(rawText: string) {
@@ -317,7 +321,7 @@ function App() {
         const textSoFar = assistantText;
         setMessages((prev) => {
           const last = prev[prev.length - 1];
-          if (last && last.kind === "assistant") {
+          if (last?.kind === "assistant") {
             return [...prev.slice(0, -1), { ...last, text: textSoFar }];
           }
           return [...prev, { kind: "assistant", text: textSoFar, time: Date.now() }];
@@ -345,10 +349,14 @@ function App() {
           }
           case "title": {
             const title = data.title as string;
+            // le serveur envoie toujours l'evenement "session" avant "title"
+            // (voir run_chat_stream dans server.py) : currentSessionId est deja defini ici
+            if (!currentSessionId) break;
+            const id = currentSessionId;
             setSessions((prev) =>
-              prev.some((s) => s.id === currentSessionId)
-                ? prev.map((s) => (s.id === currentSessionId ? { ...s, title } : s))
-                : [{ id: currentSessionId!, title }, ...prev],
+              prev.some((s) => s.id === id)
+                ? prev.map((s) => (s.id === id ? { ...s, title } : s))
+                : [{ id, title }, ...prev],
             );
             break;
           }
@@ -453,7 +461,7 @@ function App() {
                     icon={<SearchIcon />}
                     variant="ghost"
                     size="sm"
-                    onClick={() => setSearchOpen((v) => !v)}
+                    onClick={() => { setSearchOpen((v) => !v); }}
                   />
                 </div>
                 {searchOpen && (
@@ -476,7 +484,7 @@ function App() {
                   icon={<GearIcon />}
                   variant="ghost"
                   size="sm"
-                  onClick={() => setView("settings")}
+                  onClick={() => { setView("settings"); }}
                 />
                 <IconButton
                   label={themeMode === "dark" ? "Passer en thème clair" : "Passer en thème sombre"}
@@ -504,8 +512,8 @@ function App() {
                       label="Titre de la conversation"
                       size="sm"
                       hasAutoFocus
-                      onEnter={() => commitRename(s.id)}
-                      onBlur={() => commitRename(s.id)}
+                      onEnter={() => { void commitRename(s.id); }}
+                      onBlur={() => { void commitRename(s.id); }}
                       onKeyDown={(e) => {
                         if (e.key === "Escape") setEditingSessionId(null);
                       }}
@@ -517,7 +525,7 @@ function App() {
                     label={s.title ?? formatSessionLabel(s.id)}
                     icon={<Avatar name="Claude" src={CLAUDE_AVATAR_SRC} size="xsm" />}
                     isSelected={s.id === sessionId}
-                    onClick={() => switchSession(s.id)}
+                    onClick={() => { switchSession(s.id); }}
                     endContent={
                       <div className="flex items-center gap-0.5">
                         <IconButton
@@ -551,13 +559,13 @@ function App() {
       >
         {view === "settings" && (
           <SettingsPage
-            onBack={() => setView("chat")}
-            onOpenLogs={() => setView("logs")}
-            onOpenMcp={() => setView("mcp")}
+            onBack={() => { setView("chat"); }}
+            onOpenLogs={() => { setView("logs"); }}
+            onOpenMcp={() => { setView("mcp"); }}
           />
         )}
-        {view === "logs" && <LogsPage onBack={() => setView("settings")} />}
-        {view === "mcp" && <McpServersPage onBack={() => setView("settings")} />}
+        {view === "logs" && <LogsPage onBack={() => { setView("settings"); }} />}
+        {view === "mcp" && <McpServersPage onBack={() => { setView("settings"); }} />}
         {view === "chat" && (
         <ChatLayout
           density="balanced"
@@ -572,7 +580,7 @@ function App() {
             <ChatComposer
               value={input}
               onChange={setInput}
-              onSubmit={sendMessage}
+              onSubmit={(value) => { void sendMessage(value); }}
               placeholder="Écrire un message..."
               isDisabled={sending || !!pendingConfirmation}
               density="compact"
@@ -630,6 +638,10 @@ function App() {
 
               const blocks = toBlocks(group.items);
               const lastItem = group.items[group.items.length - 1];
+              // groupMessages() ne cree jamais un groupe "assistant" avec un
+              // tableau items vide (toujours au moins un push initial) : ceci
+              // n'est qu'un garde-fou pour TypeScript (noUncheckedIndexedAccess).
+              if (!lastItem) throw new Error("groupe assistant sans element");
               const lastIsText = lastItem.kind === "assistant";
 
               return (
@@ -665,7 +677,7 @@ function App() {
                     footer={
                       lastIsText && lastItem.text ? (
                         <button
-                          onClick={() => copyToClipboard(lastItem.text, gi)}
+                          onClick={() => { void copyToClipboard(lastItem.text, gi); }}
                           className="inline-flex items-center gap-1 text-secondary hover:text-primary"
                           title="Copier"
                         >
@@ -692,7 +704,7 @@ function App() {
                     label="autoriser"
                     variant="primary"
                     size="sm"
-                    onClick={() => respondToConfirmation(true)}
+                    onClick={() => { void respondToConfirmation(true); }}
                   >
                     autoriser
                   </Button>
@@ -700,7 +712,7 @@ function App() {
                     label="toujours autoriser pour cette conversation"
                     variant="secondary"
                     size="sm"
-                    onClick={() => respondToConfirmation(true, true)}
+                    onClick={() => { void respondToConfirmation(true, true); }}
                   >
                     toujours autoriser (cette conversation)
                   </Button>
@@ -708,7 +720,7 @@ function App() {
                     label="refuser"
                     variant="ghost"
                     size="sm"
-                    onClick={() => respondToConfirmation(false)}
+                    onClick={() => { void respondToConfirmation(false); }}
                   >
                     refuser
                   </Button>

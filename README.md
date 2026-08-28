@@ -73,6 +73,26 @@ pnpm install
 pnpm tauri dev
 ```
 
+## Linting
+
+Both halves of the project are linted strictly, wired together with [pre-commit](https://pre-commit.com) so nothing gets committed with warnings:
+
+- Python: [ruff](https://docs.astral.sh/ruff/) (lint + format) and [basedpyright](https://docs.basedpyright.com/) (`standard` type-checking mode)
+- `app-desktop/`: [ESLint](https://eslint.org/) (`typescript-eslint`'s `strictTypeChecked` + `stylisticTypeChecked`, `eslint-plugin-react-hooks`) with `--max-warnings=0`, plus `tsc --noEmit`
+
+First-time setup after cloning:
+
+```
+uv sync
+uv run pre-commit install
+```
+
+From then on, `git commit` runs every check automatically and blocks the commit on any failure. Run everything by hand at any time with:
+
+```
+uv run pre-commit run --all-files
+```
+
 ## Harness architecture
 
 ```

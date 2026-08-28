@@ -77,16 +77,28 @@ export function LogsPage({ onBack }: LogsPageProps) {
   const [events, setEvents] = useState<LogEvent[]>([]);
   const [loading, setLoading] = useState(true);
 
-  function load() {
-    setLoading(true);
+  // n'appelle jamais setLoading() de facon synchrone (seulement dans les
+  // callbacks .then()/.catch()/.finally()), pour pouvoir etre utilisee
+  // telle quelle dans l'effet de montage ci-dessous : react-hooks
+  // (set-state-in-effect) interdit d'appeler setState de facon synchrone
+  // dans le corps d'un effet.
+  function fetchLogs() {
     fetch(`${API_BASE}/logs`)
       .then((r) => (r.ok ? r.json() : []))
-      .then((data: LogEvent[]) => setEvents(data))
-      .catch(() => setEvents([]))
-      .finally(() => setLoading(false));
+      .then((data: LogEvent[]) => { setEvents(data); })
+      .catch(() => { setEvents([]); })
+      .finally(() => { setLoading(false); });
   }
 
-  useEffect(load, []);
+  // pour le bouton "rafraichir" : la remise a `true` de loading doit rester
+  // synchrone (affichage immediat du spinner), ce qui est permis dans un
+  // gestionnaire d'evenement (juste pas dans un effet).
+  function refresh() {
+    setLoading(true);
+    fetchLogs();
+  }
+
+  useEffect(fetchLogs, []);
 
   const modelCalls = useMemo(() => events.filter(isModelCall), [events]);
   const toolCalls = useMemo(() => events.filter(isToolCall), [events]);
@@ -208,7 +220,7 @@ export function LogsPage({ onBack }: LogsPageProps) {
           icon={<RefreshIcon />}
           variant="ghost"
           size="sm"
-          onClick={load}
+          onClick={refresh}
         />
       </div>
 

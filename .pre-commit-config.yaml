@@ -1,0 +1,34 @@
+# Lint gate run before every commit. First-time setup (once per clone):
+#   uv run pre-commit install
+# Manual run against everything, without committing:
+#   uv run pre-commit run --all-files
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.5
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: basedpyright
+        name: basedpyright (type check)
+        entry: uv run basedpyright
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: eslint
+        name: eslint (app-desktop, strict, no warnings)
+        entry: bash -c 'cd app-desktop && pnpm exec eslint . --max-warnings=0'
+        language: system
+        files: ^app-desktop/.*\.(ts|tsx)$
+        pass_filenames: false
+
+      - id: tsc
+        name: tsc --noEmit (app-desktop)
+        entry: bash -c 'cd app-desktop && pnpm exec tsc --noEmit'
+        language: system
+        files: ^app-desktop/.*\.(ts|tsx)$
+        pass_filenames: false

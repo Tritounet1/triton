@@ -20,11 +20,11 @@ def read_file(path: str) -> str:
         return f"erreur : impossible de lire {path} ({e})"
 
 
-def list_files(dir: str = ".") -> str:
+def list_files(directory: str = ".") -> str:
     try:
-        entries = sorted(Path(dir).iterdir())
+        entries = sorted(Path(directory).iterdir())
     except OSError as e:
-        return f"erreur : impossible de lister {dir} ({e})"
+        return f"erreur : impossible de lister {directory} ({e})"
     if not entries:
         return "(dossier vide)"
     return "\n".join(f"{'d' if p.is_dir() else 'f'} {p.name}" for p in entries)
@@ -41,9 +41,7 @@ def write_file(path: str, content: str) -> str:
 def run_shell(command: str) -> str:
     # pas de confirmation avant execution pour l'instant, ca vient a l'etape 7
     try:
-        result = subprocess.run(
-            command, shell=True, capture_output=True, text=True, timeout=10
-        )
+        result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=10)
     except subprocess.TimeoutExpired:
         return "erreur : commande trop longue (timeout 10s)"
     output = (result.stdout + result.stderr).strip()
@@ -81,9 +79,9 @@ TOOLS_REGISTRY: dict[str, Tool] = {
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "dir": {
+                        "directory": {
                             "type": "string",
-                            "description": "Chemin du dossier à lister (par défaut le dossier courant).",
+                            "description": "Chemin du dossier à lister (défaut : dossier courant).",
                         },
                     },
                     "required": [],
@@ -98,7 +96,7 @@ TOOLS_REGISTRY: dict[str, Tool] = {
             "type": "function",
             "function": {
                 "name": "write_file",
-                "description": "Écrit du contenu dans un fichier texte (l'écrase s'il existe déjà).",
+                "description": "Écrit du contenu dans un fichier texte (écrase s'il existe déjà).",
                 "parameters": {
                     "type": "object",
                     "properties": {

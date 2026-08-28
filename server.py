@@ -1,14 +1,3 @@
-"""API HTTP pour Triton, pensée pour être consommée par l'app desktop Tauri
-(app-desktop/). Réutilise telle quelle la logique du harness CLI (main.py,
-api.py, tools.py, sessions.py, logs.py) ; seule la boucle de tool calling est
-réécrite ici, parce que la confirmation avant un outil risqué ne peut pas
-passer par un simple input() bloquant côté terminal : elle doit mettre le
-flux SSE en pause et attendre un appel séparé du client (/chat/confirm).
-
-Lancer en local : `uv run server.py` (ou `uv run uvicorn server:app --reload`).
-L'API n'écoute que sur 127.0.0.1, jamais exposée au réseau.
-"""
-
 import json
 import threading
 import uuid
@@ -56,9 +45,6 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Triton API", lifespan=lifespan)
 
-# tout tourne en local (127.0.0.1), donc pas de vrai enjeu de sécurité à
-# restreindre les origines : la webview Tauri change d'origine entre le dev
-# (http://localhost:1420) et le build (tauri://localhost, ou équivalent).
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -146,7 +132,7 @@ def generate_conversation_title(first_message: str) -> str:
         },
         {
             "role": "user",
-            "content": f'donne un titre très court pour la conversation qui commence par ce '
+            "content": f"donne un titre très court pour la conversation qui commence par ce "
             f'message :\n\n"{first_message}"',
         },
     ]
@@ -251,9 +237,7 @@ def run_chat_stream(
                     duration_seconds=round(duration, 3),
                 )
 
-                messages.append(
-                    {"role": "tool", "tool_call_id": tool_call.id, "content": result}
-                )
+                messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": result})
 
             continue
 
@@ -292,9 +276,7 @@ def chat(body: ChatRequest) -> StreamingResponse:
     messages.append({"role": "user", "content": body.message})
 
     return StreamingResponse(
-        run_chat_stream(
-            session_path, messages, first_message=body.message if is_new else None
-        ),
+        run_chat_stream(session_path, messages, first_message=body.message if is_new else None),
         media_type="text/event-stream",
     )
 
@@ -344,12 +326,12 @@ def remove_session(session_id: str) -> dict[str, bool]:
 
 
 @app.get("/mcp/servers")
-def list_mcp_servers() -> list[dict[str, object]]:
+def list_mcp_servers() -> list[mcp_client.ServerStatus]:
     return mcp_client.manager.status()
 
 
 @app.post("/mcp/servers")
-def add_mcp_server(body: MCPServerCreate) -> list[dict[str, object]]:
+def add_mcp_server(body: MCPServerCreate) -> list[mcp_client.ServerStatus]:
     config = mcp_client.MCPServerConfig(
         name=body.name, command=body.command, args=body.args, env=body.env, enabled=body.enabled
     )
@@ -361,7 +343,7 @@ def add_mcp_server(body: MCPServerCreate) -> list[dict[str, object]]:
 
 
 @app.put("/mcp/servers/{name}")
-def toggle_mcp_server(name: str, body: MCPServerToggle) -> list[dict[str, object]]:
+def toggle_mcp_server(name: str, body: MCPServerToggle) -> list[mcp_client.ServerStatus]:
     try:
         mcp_client.manager.set_enabled(name, body.enabled)
     except KeyError as e:
@@ -370,7 +352,7 @@ def toggle_mcp_server(name: str, body: MCPServerToggle) -> list[dict[str, object
 
 
 @app.delete("/mcp/servers/{name}")
-def remove_mcp_server(name: str) -> list[dict[str, object]]:
+def remove_mcp_server(name: str) -> list[mcp_client.ServerStatus]:
     mcp_client.manager.remove_server(name)
     return mcp_client.manager.status()
 

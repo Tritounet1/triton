@@ -1,4 +1,4 @@
-type IconProps = { className?: string };
+interface IconProps { className?: string }
 
 const base = "w-4 h-4";
 

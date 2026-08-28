@@ -71,9 +71,7 @@ def allow_always(session_id: str, tool_name: str) -> None:
     names = load_always_allowed(session_id)
     names.add(tool_name)
     SESSIONS_DIR.mkdir(exist_ok=True)
-    permissions_path(session_id).write_text(
-        json.dumps(sorted(names), ensure_ascii=False, indent=2)
-    )
+    permissions_path(session_id).write_text(json.dumps(sorted(names), ensure_ascii=False, indent=2))
 
 
 def session_path(session_id: str) -> Path:

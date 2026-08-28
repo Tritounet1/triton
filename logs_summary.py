@@ -1,14 +1,11 @@
 import json
 from collections import Counter
-from pathlib import Path
 
 from rich.console import Console
 from rich.table import Table
 
 from logs import LOGS_FILE
 
-# prix indicatif en $ par million de tokens (input, output) ; a ajuster selon
-# le tarif reel du modele utilise, laisser a None pour desactiver l'estimation
 PRICE_PER_MILLION_TOKENS: tuple[float, float] | None = None
 
 
@@ -51,9 +48,7 @@ def main():
 
     if PRICE_PER_MILLION_TOKENS is not None:
         price_in, price_out = PRICE_PER_MILLION_TOKENS
-        cost = (
-            total_prompt_tokens * price_in + total_completion_tokens * price_out
-        ) / 1_000_000
+        cost = (total_prompt_tokens * price_in + total_completion_tokens * price_out) / 1_000_000
         table.add_row("coût estimé", f"${cost:.4f}")
     else:
         table.add_row("coût estimé", "(définis PRICE_PER_MILLION_TOKENS pour l'activer)")

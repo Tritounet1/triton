@@ -12,10 +12,8 @@ from openai.types.chat import (
 )
 from openai.types.chat.chat_completion_message_function_tool_call import Function
 
-# Load values from .env into environment variables
 _ = load_dotenv()
 
-# Access your variables
 open_router_api_key = os.getenv("OPEN_ROUTER_API_KEY")
 
 client = OpenAI(

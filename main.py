@@ -17,9 +17,9 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.text import Text
 
+import mcp_client
 from api import ChatResult, call_chat, stream_chat
 from logs import log_event
-import mcp_client
 from sessions import (
     allow_always,
     latest_session_path,
@@ -381,7 +381,8 @@ def main():
 
         if not done:
             console.print(
-                f"[red]limite de {MAX_ITERATIONS} itérations atteinte, le modèle n'a pas conclu.[/red]\n"
+                f"[red]limite de {MAX_ITERATIONS} itérations atteinte, "
+                "le modèle n'a pas conclu.[/red]\n"
             )
 
         save_session(session_path, messages)

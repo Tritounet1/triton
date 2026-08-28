@@ -56,16 +56,16 @@ export function McpServersPage({ onBack }: McpServersPageProps) {
   const [argsText, setArgsText] = useState("");
   const [envText, setEnvText] = useState("");
 
-  function load() {
-    setLoading(true);
+  // pas d'appel synchrone a setLoading() ici (seulement dans les callbacks) :
+  // react-hooks (set-state-in-effect) interdit setState synchrone dans un
+  // effet, et loading demarre deja a true via son useState initial.
+  useEffect(() => {
     fetch(`${API_BASE}/mcp/servers`)
       .then((r) => (r.ok ? r.json() : []))
-      .then((data: McpServer[]) => setServers(data))
-      .catch(() => setServers([]))
-      .finally(() => setLoading(false));
-  }
-
-  useEffect(load, []);
+      .then((data: McpServer[]) => { setServers(data); })
+      .catch(() => { setServers([]); })
+      .finally(() => { setLoading(false); });
+  }, []);
 
   function resetForm() {
     setName("");
@@ -98,12 +98,12 @@ export function McpServersPage({ onBack }: McpServersPageProps) {
       });
 
       if (!res.ok) {
-        const body = await res.json().catch(() => null);
+        const body = (await res.json().catch(() => null)) as { detail?: string } | null;
         setFormError(body?.detail ?? `erreur ${res.status}`);
         return;
       }
 
-      const data: McpServer[] = await res.json();
+      const data = (await res.json()) as McpServer[];
       setServers(data);
       resetForm();
     } catch {
@@ -119,14 +119,14 @@ export function McpServersPage({ onBack }: McpServersPageProps) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled: !server.enabled }),
     });
-    if (res.ok) setServers(await res.json());
+    if (res.ok) setServers((await res.json()) as McpServer[]);
   }
 
   async function confirmDelete() {
     if (!deletingName) return;
     const res = await fetch(`${API_BASE}/mcp/servers/${deletingName}`, { method: "DELETE" });
     setDeletingName(null);
-    if (res.ok) setServers(await res.json());
+    if (res.ok) setServers((await res.json()) as McpServer[]);
   }
 
   return (
@@ -149,7 +149,7 @@ export function McpServersPage({ onBack }: McpServersPageProps) {
           icon={<PlusIcon />}
           variant="secondary"
           size="sm"
-          onClick={() => setShowForm((v) => !v)}
+          onClick={() => { setShowForm((v) => !v); }}
         />
       </div>
 
@@ -205,7 +205,7 @@ export function McpServersPage({ onBack }: McpServersPageProps) {
               variant="primary"
               size="sm"
               isLoading={submitting}
-              onClick={submitForm}
+              onClick={() => { void submitForm(); }}
             >
               Ajouter et connecter
             </Button>
@@ -258,7 +258,7 @@ export function McpServersPage({ onBack }: McpServersPageProps) {
                     label="Activé"
                     isLabelHidden
                     value={s.enabled}
-                    onChange={() => toggleServer(s)}
+                    onChange={() => { void toggleServer(s); }}
                     size="sm"
                   />
                   <IconButton
@@ -266,7 +266,7 @@ export function McpServersPage({ onBack }: McpServersPageProps) {
                     icon={<TrashIcon />}
                     variant="ghost"
                     size="sm"
-                    onClick={() => setDeletingName(s.name)}
+                    onClick={() => { setDeletingName(s.name); }}
                   />
                 </div>
               </div>
@@ -281,7 +281,7 @@ export function McpServersPage({ onBack }: McpServersPageProps) {
           if (!isOpen) setDeletingName(null);
         }}
         title="Supprimer ce serveur MCP ?"
-        description={`« ${deletingName} » sera déconnecté et ses outils ne seront plus disponibles.`}
+        description={`« ${deletingName ?? ""} » sera déconnecté et ses outils ne seront plus disponibles.`}
         actionLabel="Supprimer"
         onAction={confirmDelete}
       />
