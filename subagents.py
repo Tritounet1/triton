@@ -28,6 +28,7 @@ from openai.types.chat import (
 
 from api import call_chat
 from logs import log_event
+from pricing import estimate_cost
 
 if TYPE_CHECKING:
     from tools import Tool
@@ -125,7 +126,9 @@ def _run(task_entry: SubagentTask) -> None:
                 model=reply.model,
                 prompt_tokens=reply.prompt_tokens,
                 completion_tokens=reply.completion_tokens,
+                total_tokens=reply.total_tokens,
                 tool_calls=len(reply.tool_calls),
+                cost_usd=estimate_cost(reply.model, reply.prompt_tokens, reply.completion_tokens),
             )
 
             if not reply.tool_calls:
@@ -177,6 +180,16 @@ def _run(task_entry: SubagentTask) -> None:
             }
         )
         final = call_chat(messages)
+        log_event(
+            type="subagent_model_call",
+            subagent_id=task_entry.id,
+            model=final.model,
+            prompt_tokens=final.prompt_tokens,
+            completion_tokens=final.completion_tokens,
+            total_tokens=final.total_tokens,
+            tool_calls=0,
+            cost_usd=estimate_cost(final.model, final.prompt_tokens, final.completion_tokens),
+        )
         task_entry.result = final.content or (
             f"(sub-agent stopped after {SUBAGENT_MAX_ITERATIONS} iterations without concluding)"
         )

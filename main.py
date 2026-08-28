@@ -21,6 +21,7 @@ from rich.text import Text
 import mcp_client
 from api import ChatResult, call_chat, stream_chat
 from logs import log_event
+from pricing import estimate_cost
 from projects import Project
 from sessions import (
     allow_always,
@@ -197,6 +198,7 @@ def timed_call_chat(
         total_tokens=reply.total_tokens,
         tool_calls=len(reply.tool_calls),
         duration_seconds=round(duration, 3),
+        cost_usd=estimate_cost(reply.model, reply.prompt_tokens, reply.completion_tokens),
     )
     return reply
 
@@ -222,6 +224,7 @@ def timed_stream_chat(
             total_tokens=event.total_tokens,
             tool_calls=len(event.tool_calls),
             duration_seconds=round(duration, 3),
+            cost_usd=estimate_cost(event.model, event.prompt_tokens, event.completion_tokens),
         )
         yield event
 

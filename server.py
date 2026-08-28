@@ -40,7 +40,7 @@ from sessions import (
     save_session_project,
     save_title,
 )
-from settings import save_model
+from settings import load_monthly_budget, save_model, save_monthly_budget
 from tools import TOOLS, TOOLS_REGISTRY, is_skipped
 
 
@@ -385,6 +385,10 @@ class ModelUpdate(BaseModel):
     model: str
 
 
+class BudgetUpdate(BaseModel):
+    monthly_budget_usd: float | None = None
+
+
 class ModelInfo(TypedDict):
     id: str
     name: str
@@ -403,6 +407,17 @@ def get_current_model() -> dict[str, str]:
 def set_current_model(body: ModelUpdate) -> dict[str, str]:
     save_model(body.model)
     return {"model": body.model}
+
+
+@app.get("/settings/budget")
+def get_monthly_budget() -> dict[str, float | None]:
+    return {"monthly_budget_usd": load_monthly_budget()}
+
+
+@app.put("/settings/budget")
+def set_monthly_budget(body: BudgetUpdate) -> dict[str, float | None]:
+    save_monthly_budget(body.monthly_budget_usd)
+    return {"monthly_budget_usd": body.monthly_budget_usd}
 
 
 @app.get("/openrouter/models")
