@@ -12,7 +12,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 
 from api import call_chat
-from tools import TOOL_FUNCTIONS, TOOLS
+from tools import TOOLS, TOOLS_REGISTRY
 
 SYSTEM_PROMPT = "You are a concise and clear assistant."
 MAX_ITERATIONS = 10
@@ -38,8 +38,8 @@ def run_tool_calls(
             result = f"erreur : arguments invalides ({raw_args})"
             args = {}
         else:
-            fn = TOOL_FUNCTIONS.get(name)
-            result = fn(**args) if fn else f"outil inconnu : {name}"
+            tool = TOOLS_REGISTRY.get(name)
+            result = tool.fn(**args) if tool else f"outil inconnu : {name}"
 
         args_repr = ", ".join(f"{k}={v!r}" for k, v in args.items())
         console.print(
