@@ -18,6 +18,11 @@ from tools import TOOLS, TOOLS_REGISTRY
 SYSTEM_PROMPT = "You are a concise and clear assistant."
 MAX_ITERATIONS = 10
 
+# approximation grossiere : pas de vrai tokenizer, on estime a partir de la
+# taille du json de l'historique (1 token ~= 4 caracteres, tres approximatif)
+MAX_CONTEXT_CHARS = 8000
+KEEP_RECENT_TURNS = 3
+
 
 def run_tool_calls(
     console: Console, tool_calls: list[ChatCompletionMessageToolCallUnion]
@@ -97,6 +102,61 @@ def to_tool_call_params(
     return params
 
 
+def estimate_size(messages: list[ChatCompletionMessageParam]) -> int:
+    return len(json.dumps(messages))
+
+
+def turn_start_indices(messages: list[ChatCompletionMessageParam]) -> list[int]:
+    """indices des messages "user" dans l'historique : chacun marque le début d'un tour."""
+    return [i for i, m in enumerate(messages) if m["role"] == "user"]
+
+
+def summarize(old_messages: list[ChatCompletionMessageParam]) -> str:
+    transcript = json.dumps(old_messages, ensure_ascii=False, indent=2)
+    summary_request: list[ChatCompletionMessageParam] = [
+        {
+            "role": "system",
+            "content": "tu résumes une conversation de façon concise, en gardant les faits, "
+            "décisions et résultats d'outils importants.",
+        },
+        {"role": "user", "content": f"résume cette conversation :\n\n{transcript}"},
+    ]
+    result = call_chat(summary_request)
+    return result.content or "(résumé vide)"
+
+
+def compress_history(
+    console: Console, messages: list[ChatCompletionMessageParam]
+) -> list[ChatCompletionMessageParam]:
+    """Résume les tours les plus anciens si l'historique dépasse un seuil, en
+    gardant intacts le system prompt et les derniers tours (pour ne jamais
+    couper un couple assistant/tool_calls en plein milieu)."""
+    if estimate_size(messages) <= MAX_CONTEXT_CHARS:
+        return messages
+
+    turns = turn_start_indices(messages)
+    if len(turns) <= KEEP_RECENT_TURNS:
+        return messages
+
+    cutoff = turns[-KEEP_RECENT_TURNS]
+    system_message = messages[0]
+    old_messages = messages[1:cutoff]
+    recent_messages = messages[cutoff:]
+
+    with console.status("[dim]compression de l'historique...[/dim]", spinner="dots"):
+        summary = summarize(old_messages)
+
+    console.print(
+        f"[dim]historique compressé : {len(old_messages)} messages résumés en 1[/dim]\n"
+    )
+
+    return [
+        system_message,
+        {"role": "system", "content": f"résumé des échanges précédents : {summary}"},
+        *recent_messages,
+    ]
+
+
 def main():
     console = Console()
     session = PromptSession[str]()
@@ -119,6 +179,7 @@ def main():
             break
 
         messages.append({"role": "user", "content": user_input})
+        messages = compress_history(console, messages)
 
         iteration = 0
         done = False
