@@ -22,7 +22,15 @@ import { Timestamp } from "@astryxdesign/core/Timestamp";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { parseSSE } from "./sse";
-import { CheckIcon, CopyIcon, MoonIcon, PlusIcon, SearchIcon, SunIcon } from "./icons";
+import {
+  CheckIcon,
+  CopyIcon,
+  MoonIcon,
+  PencilIcon,
+  PlusIcon,
+  SearchIcon,
+  SunIcon,
+} from "./icons";
 import "./App.css";
 
 const API_BASE = "http://127.0.0.1:8000";
@@ -42,6 +50,11 @@ interface PendingConfirmation {
   id: string;
   tool: string;
   args: Record<string, unknown>;
+}
+
+interface Session {
+  id: string;
+  title: string | null;
 }
 
 interface RawSessionMessage {
@@ -165,7 +178,7 @@ function App() {
   const [sessionId, setSessionId] = useState<string | null>(() =>
     localStorage.getItem("triton_session_id"),
   );
-  const [sessions, setSessions] = useState<string[]>([]);
+  const [sessions, setSessions] = useState<Session[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
@@ -187,8 +200,22 @@ function App() {
   function loadSessions() {
     fetch(`${API_BASE}/sessions`)
       .then((r) => (r.ok ? r.json() : []))
-      .then((ids: string[]) => setSessions([...ids].reverse()))
+      .then((list: Session[]) => setSessions([...list].reverse()))
       .catch(() => {});
+  }
+
+  async function renameSession(session: Session) {
+    const currentLabel = session.title ?? formatSessionLabel(session.id);
+    const next = window.prompt("Renommer la conversation :", currentLabel);
+    if (!next || !next.trim() || next.trim() === currentLabel) return;
+
+    const title = next.trim();
+    await fetch(`${API_BASE}/sessions/${session.id}/title`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    setSessions((prev) => prev.map((s) => (s.id === session.id ? { ...s, title } : s)));
   }
 
   function loadHistory(id: string) {
@@ -245,6 +272,11 @@ function App() {
     setMessages((prev) => [...prev, { kind: "user", text, time: Date.now() }]);
     setSending(true);
 
+    // suivi local plutot que l'etat React sessionId : ce dernier reste sur sa
+    // valeur de depart (fermeture) le temps de tout le for-await, alors que
+    // l'evenement "session" peut arriver avec un nouvel id des la premiere
+    // ligne du flux, pour une toute nouvelle conversation.
+    let currentSessionId = sessionId;
     let assistantText = "";
     let flushScheduled = false;
 
@@ -281,10 +313,20 @@ function App() {
         switch (event) {
           case "session": {
             const id = data.session_id as string;
+            currentSessionId = id;
             if (id !== sessionId) {
               setSessionId(id);
               localStorage.setItem("triton_session_id", id);
             }
+            break;
+          }
+          case "title": {
+            const title = data.title as string;
+            setSessions((prev) =>
+              prev.some((s) => s.id === currentSessionId)
+                ? prev.map((s) => (s.id === currentSessionId ? { ...s, title } : s))
+                : [{ id: currentSessionId!, title }, ...prev],
+            );
             break;
           }
           case "token": {
@@ -360,8 +402,8 @@ function App() {
     });
   }
 
-  const filteredSessions = sessions.filter((id) =>
-    formatSessionLabel(id).toLowerCase().includes(search.toLowerCase()),
+  const filteredSessions = sessions.filter((s) =>
+    (s.title ?? formatSessionLabel(s.id)).toLowerCase().includes(search.toLowerCase()),
   );
 
   return (
@@ -422,13 +464,25 @@ function App() {
                   Aucune conversation.
                 </Text>
               )}
-              {filteredSessions.map((id) => (
+              {filteredSessions.map((s) => (
                 <SideNavItem
-                  key={id}
-                  label={formatSessionLabel(id)}
+                  key={s.id}
+                  label={s.title ?? formatSessionLabel(s.id)}
                   icon={<Avatar name="Claude" src={CLAUDE_AVATAR_SRC} size="xsm" />}
-                  isSelected={id === sessionId}
-                  onClick={() => switchSession(id)}
+                  isSelected={s.id === sessionId}
+                  onClick={() => switchSession(s.id)}
+                  endContent={
+                    <IconButton
+                      label="Renommer"
+                      icon={<PencilIcon />}
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void renameSession(s);
+                      }}
+                    />
+                  }
                 />
               ))}
             </SideNavSection>

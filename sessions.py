@@ -30,3 +30,23 @@ def load_session(path: Path) -> list[ChatCompletionMessageParam]:
 
 def save_session(path: Path, messages: list[ChatCompletionMessageParam]) -> None:
     path.write_text(json.dumps(messages, ensure_ascii=False, indent=2))
+
+
+def title_path(session_id: str) -> Path:
+    return SESSIONS_DIR / f"{session_id}.title.txt"
+
+
+def load_title(session_id: str) -> str | None:
+    """Titre choisi par l'utilisateur ou généré au premier message. Stocké à
+    part de l'historique (fichier séparé) : ça reste une info d'affichage
+    côté client, jamais renvoyée au modèle, et ça ne touche pas au format
+    de session.json que le CLI lit/écrit aussi."""
+    path = title_path(session_id)
+    if not path.exists():
+        return None
+    return path.read_text().strip() or None
+
+
+def save_title(session_id: str, title: str) -> None:
+    SESSIONS_DIR.mkdir(exist_ok=True)
+    title_path(session_id).write_text(title.strip())
