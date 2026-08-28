@@ -22,7 +22,7 @@ import { Timestamp } from "@astryxdesign/core/Timestamp";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { parseSSE } from "./sse";
-import { CheckIcon, CopyIcon, PlusIcon, SearchIcon } from "./icons";
+import { CheckIcon, CopyIcon, MoonIcon, PlusIcon, SearchIcon, SunIcon } from "./icons";
 import "./App.css";
 
 const API_BASE = "http://127.0.0.1:8000";
@@ -100,6 +100,63 @@ function historyToMessages(raw: RawSessionMessage[]): ChatMsg[] {
   return out;
 }
 
+type AssistantMsg = Extract<ChatMsg, { kind: "assistant" }>;
+type ToolMsg = Extract<ChatMsg, { kind: "tool" }>;
+
+type RenderGroup =
+  | { type: "user"; msg: Extract<ChatMsg, { kind: "user" }> }
+  | { type: "system"; msg: Extract<ChatMsg, { kind: "info" | "error" }> }
+  | { type: "assistant"; items: (AssistantMsg | ToolMsg)[] };
+
+/** Regroupe les messages consécutifs d'assistant/outil sous un seul avatar
+ * (comme un vrai fil de discussion), plutôt qu'un avatar répété à chaque
+ * morceau de la réponse. */
+function groupMessages(msgs: ChatMsg[]): RenderGroup[] {
+  const groups: RenderGroup[] = [];
+  for (const m of msgs) {
+    if (m.kind === "user") {
+      groups.push({ type: "user", msg: m });
+    } else if (m.kind === "info" || m.kind === "error") {
+      groups.push({ type: "system", msg: m });
+    } else {
+      const last = groups[groups.length - 1];
+      if (last?.type === "assistant") {
+        last.items.push(m);
+      } else {
+        groups.push({ type: "assistant", items: [m] });
+      }
+    }
+  }
+  return groups;
+}
+
+type Block = { kind: "tools"; items: ToolMsg[] } | { kind: "text"; msg: AssistantMsg };
+
+/** Dans un groupe assistant, fusionne les appels d'outils consécutifs en un
+ * seul ChatToolCalls (résumé repliable natif si plusieurs), sépare le texte. */
+function toBlocks(items: (AssistantMsg | ToolMsg)[]): Block[] {
+  const blocks: Block[] = [];
+  for (const item of items) {
+    if (item.kind === "tool") {
+      const last = blocks[blocks.length - 1];
+      if (last?.kind === "tools") {
+        last.items.push(item);
+      } else {
+        blocks.push({ kind: "tools", items: [item] });
+      }
+    } else {
+      blocks.push({ kind: "text", msg: item });
+    }
+  }
+  return blocks;
+}
+
+function toolCallStatus(result: string): "complete" | "error" {
+  return result.startsWith("erreur") || result.startsWith("action refusée")
+    ? "error"
+    : "complete";
+}
+
 function App() {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
@@ -116,6 +173,17 @@ function App() {
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(
     null,
   );
+  const [themeMode, setThemeMode] = useState<"light" | "dark">(() =>
+    localStorage.getItem("triton_theme") === "light" ? "light" : "dark",
+  );
+
+  function toggleTheme() {
+    setThemeMode((prev) => {
+      const next = prev === "dark" ? "light" : "dark";
+      localStorage.setItem("triton_theme", next);
+      return next;
+    });
+  }
 
   function loadSessions() {
     fetch(`${API_BASE}/sessions`)
@@ -301,19 +369,20 @@ function App() {
   );
 
   return (
-    <Theme theme={neutralTheme} mode="dark">
+    <Theme theme={neutralTheme} mode={themeMode}>
       <AppShell
         variant="elevated"
         height="fill"
         topNav={
           <div className="flex h-14 items-center gap-3 border-b border-default px-6">
-            <Avatar name="Claude" src={CLAUDE_AVATAR_SRC} size="sm" />
+            <Avatar name="Claude" src={CLAUDE_AVATAR_SRC} size="xsm" />
             <div className="min-w-0">
               <Text weight="semibold" className="block truncate">
-                {sessionId ? formatSessionLabel(sessionId) : "Nouvelle conversation"}
+                Triton
               </Text>
               <Text size="2xs" color="secondary">
-                {apiModel ?? "…"}
+                {sessionId ? formatSessionLabel(sessionId) : "Nouvelle conversation"}
+                {apiModel ? ` · ${apiModel}` : ""}
               </Text>
             </div>
           </div>
@@ -356,13 +425,22 @@ function App() {
               </div>
             }
             footer={
-              <div className="flex items-center justify-between px-1 py-1">
-                <Text size="2xs" color="secondary">
-                  Triton · local
-                </Text>
-                <StatusDot
-                  variant={apiOnline ? "success" : "error"}
-                  label={apiOnline ? "API en ligne" : "API hors ligne"}
+              <div className="flex items-center justify-between gap-2 px-1 py-1">
+                <div className="flex items-center gap-2">
+                  <Text size="2xs" color="secondary">
+                    Triton · local
+                  </Text>
+                  <StatusDot
+                    variant={apiOnline ? "success" : "error"}
+                    label={apiOnline ? "API en ligne" : "API hors ligne"}
+                  />
+                </div>
+                <IconButton
+                  label={themeMode === "dark" ? "Passer en thème clair" : "Passer en thème sombre"}
+                  icon={themeMode === "dark" ? <MoonIcon /> : <SunIcon />}
+                  variant="ghost"
+                  size="sm"
+                  onClick={toggleTheme}
                 />
               </div>
             }
@@ -421,86 +499,87 @@ function App() {
           }
         >
           <ChatMessageList isStreaming={sending}>
-            {messages.map((m, i) => {
-              if (m.kind === "user") {
+            {groupMessages(messages).map((group, gi) => {
+              if (group.type === "user") {
                 return (
-                  <ChatMessage key={i} sender="user">
+                  <ChatMessage key={gi} sender="user">
                     <ChatMessageBubble
                       metadata={
                         <ChatMessageMetadata
-                          timestamp={<Timestamp value={m.time / 1000} format="time" />}
+                          timestamp={<Timestamp value={group.msg.time / 1000} format="time" />}
                           status="sent"
                         />
                       }
                     >
-                      {m.text}
+                      {group.msg.text}
                     </ChatMessageBubble>
                   </ChatMessage>
                 );
               }
-              if (m.kind === "assistant") {
+
+              if (group.type === "system") {
                 return (
-                  <ChatMessage
-                    key={i}
-                    sender="assistant"
-                    avatar={<Avatar name="Claude" src={CLAUDE_AVATAR_SRC} size="md" />}
-                    name="Triton"
-                  >
-                    <ChatMessageBubble variant="ghost" width="100%">
-                      {m.text}
-                    </ChatMessageBubble>
-                    <ChatMessageMetadata
-                      timestamp={<Timestamp value={m.time / 1000} format="time" />}
-                      footer={
-                        m.text ? (
-                          <button
-                            onClick={() => copyToClipboard(m.text, i)}
-                            className="inline-flex items-center gap-1 text-secondary hover:text-primary"
-                            title="Copier"
-                          >
-                            {copiedIndex === i ? (
-                              <CheckIcon className="h-3.5 w-3.5" />
-                            ) : (
-                              <CopyIcon className="h-3.5 w-3.5" />
-                            )}
-                          </button>
-                        ) : undefined
-                      }
-                    />
-                  </ChatMessage>
+                  <ChatSystemMessage key={gi}>
+                    {group.msg.kind === "error" ? (
+                      <span className="text-error">{group.msg.text}</span>
+                    ) : (
+                      group.msg.text
+                    )}
+                  </ChatSystemMessage>
                 );
               }
-              if (m.kind === "tool") {
-                return (
-                  <ChatMessage
-                    key={i}
-                    sender="assistant"
-                    avatar={<Avatar name="Claude" src={CLAUDE_AVATAR_SRC} size="md" />}
-                  >
-                    <ChatToolCalls
-                      calls={[
-                        {
-                          name: m.tool,
-                          status: "complete",
-                          target: formatArgs(m.args),
+
+              const blocks = toBlocks(group.items);
+              const lastItem = group.items[group.items.length - 1];
+              const lastIsText = lastItem.kind === "assistant";
+
+              return (
+                <ChatMessage
+                  key={gi}
+                  sender="assistant"
+                  avatar={<Avatar name="Claude" src={CLAUDE_AVATAR_SRC} size="sm" />}
+                  name="Triton"
+                >
+                  {blocks.map((block, bi) =>
+                    block.kind === "tools" ? (
+                      <ChatToolCalls
+                        key={bi}
+                        calls={block.items.map((t) => ({
+                          name: t.tool,
+                          status: toolCallStatus(t.result),
+                          target: formatArgs(t.args),
                           resultDetail: (
                             <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap text-xs">
-                              {m.result}
+                              {t.result}
                             </pre>
                           ),
-                        },
-                      ]}
-                    />
-                  </ChatMessage>
-                );
-              }
-              if (m.kind === "info") {
-                return <ChatSystemMessage key={i}>{m.text}</ChatSystemMessage>;
-              }
-              return (
-                <ChatSystemMessage key={i}>
-                  <span className="text-error">{m.text}</span>
-                </ChatSystemMessage>
+                        }))}
+                      />
+                    ) : (
+                      <ChatMessageBubble key={bi} variant="ghost" width="100%">
+                        {block.msg.text}
+                      </ChatMessageBubble>
+                    ),
+                  )}
+                  <ChatMessageMetadata
+                    timestamp={<Timestamp value={lastItem.time / 1000} format="time" />}
+                    footer={
+                      lastIsText && lastItem.text ? (
+                        <button
+                          onClick={() => copyToClipboard(lastItem.text, gi)}
+                          className="inline-flex items-center gap-1 text-secondary hover:text-primary"
+                          title="Copier"
+                        >
+                          {copiedIndex === gi ? (
+                            <CheckIcon className="h-3.5 w-3.5" />
+                          ) : (
+                            <CopyIcon className="h-3.5 w-3.5" />
+                          )}
+                        </button>
+                      ) : undefined
+                    }
+                  />
+                </ChatMessage>
               );
             })}
 
