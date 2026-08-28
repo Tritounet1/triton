@@ -341,8 +341,9 @@ TOOLS_REGISTRY: dict[str, Tool] = {
             "type": "function",
             "function": {
                 "name": "write_file",
-                "description": "Writes content to a text file "
-                "(overwrites it if it already exists).",
+                "description": "Writes content to a text file (overwrites it if it already "
+                "exists). Always use this to create or fully rewrite a file, instead of "
+                "run_shell with echo/cat/heredoc redirection.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -367,7 +368,9 @@ TOOLS_REGISTRY: dict[str, Tool] = {
             "type": "function",
             "function": {
                 "name": "run_shell",
-                "description": "Runs a shell command and returns its output.",
+                "description": "Runs a shell command and returns its output. Do not use this "
+                "to create or edit files (no echo/cat/heredoc redirection) — use write_file "
+                "or edit_file instead, which don't require shell quoting.",
                 "parameters": {
                     "type": "object",
                     "properties": {

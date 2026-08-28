@@ -1,8 +1,11 @@
+const MAX_ARG_PREVIEW = 200;
+
 export function formatArgs(args: Record<string, unknown>): string {
   return Object.entries(args)
     .map(([k, v]) => {
-      if (k === "content" && typeof v === "string") {
-        return `${k}=<${v.length} caractères>`;
+      if (typeof v === "string" && v.length > MAX_ARG_PREVIEW) {
+        const preview = v.slice(0, MAX_ARG_PREVIEW).replace(/\n/g, " ");
+        return `${k}="${preview}..." (${v.length} caractères)`;
       }
       return `${k}=${JSON.stringify(v)}`;
     })

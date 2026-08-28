@@ -60,14 +60,19 @@ MAX_CONTEXT_CHARS = 8000
 KEEP_RECENT_TURNS = 3
 
 
+MAX_ARG_PREVIEW = 200
+
+
 def format_args(args: dict[str, object]) -> str:
-    """Renders a tool call's arguments for display, without ever dumping
-    potentially long content (e.g. write_file's "content"), just its
-    size."""
+    """Renders a tool call's arguments for display, truncating any long
+    string value (write_file's "content", run_shell's "command" with an
+    embedded heredoc, edit_file's old_string/new_string...) to a short
+    preview instead of dumping it in full."""
     parts: list[str] = []
     for k, v in args.items():
-        if k == "content" and isinstance(v, str):
-            parts.append(f"{k}=<{len(v)} characters>")
+        if isinstance(v, str) and len(v) > MAX_ARG_PREVIEW:
+            preview = v[:MAX_ARG_PREVIEW].replace("\n", " ")
+            parts.append(f'{k}="{preview}..." ({len(v)} characters total)')
         else:
             parts.append(f"{k}={v!r}")
     return ", ".join(parts)
