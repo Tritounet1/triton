@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Theme } from "@astryxdesign/core/theme";
 import { neutralTheme } from "@astryxdesign/theme-neutral/built";
 import { AppShell } from "@astryxdesign/core/AppShell";
@@ -157,12 +157,6 @@ function toolCallStatus(result: string): "complete" | "error" {
 }
 
 function App() {
-  // scroll de toute la fenetre plutot que du seul conteneur de messages :
-  // ChatLayout documente que ca fait passer le composer en position fixed,
-  // colle au bas de la fenetre en toute circonstance (peu de messages,
-  // fenetre redimensionnee, etc.), plutot que sticky-dans-le-flux.
-  const scrollRef = useRef<HTMLElement>(document.documentElement);
-
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -442,7 +436,7 @@ function App() {
       >
         <ChatLayout
           density="balanced"
-          scrollRef={scrollRef}
+          className="h-full"
           emptyState={
             <EmptyState
               title="Nouvelle conversation"
@@ -457,6 +451,16 @@ function App() {
               placeholder="Écrire un message..."
               isDisabled={sending || !!pendingConfirmation}
               density="compact"
+              elevation="none"
+              footerActions={
+                <IconButton
+                  label="Joindre (pas encore disponible)"
+                  icon={<PlusIcon />}
+                  variant="ghost"
+                  size="sm"
+                  isDisabled
+                />
+              }
               sendActions={
                 apiModel ? (
                   <Text size="2xs" color="secondary">
