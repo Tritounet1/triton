@@ -13,6 +13,7 @@ from rich.panel import Panel
 from rich.prompt import Confirm
 
 from api import call_chat
+from sessions import latest_session_path, load_session, new_session_path, save_session
 from tools import TOOLS, TOOLS_REGISTRY
 
 SYSTEM_PROMPT = "You are a concise and clear assistant."
@@ -160,9 +161,17 @@ def compress_history(
 def main():
     console = Console()
     session = PromptSession[str]()
-    messages: list[ChatCompletionMessageParam] = [
-        {"role": "system", "content": SYSTEM_PROMPT}
-    ]
+
+    session_path = latest_session_path()
+    messages: list[ChatCompletionMessageParam]
+    if session_path:
+        messages = load_session(session_path)
+        console.print(
+            f"[dim]session reprise : {session_path.name} ({len(messages)} messages)[/dim]"
+        )
+    else:
+        session_path = new_session_path()
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
     console.rule("[bold cyan]Triton[/bold cyan]")
     console.print("tape 'exit' ou 'quit' pour quitter\n", style="dim")
@@ -227,6 +236,9 @@ def main():
                 f"[red]limite de {MAX_ITERATIONS} itérations atteinte, le modèle n'a pas conclu.[/red]\n"
             )
 
+        save_session(session_path, messages)
+
+    save_session(session_path, messages)
     console.print("[dim]à bientôt[/dim]")
 
 

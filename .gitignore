@@ -14,3 +14,6 @@ wheels/
 
 # Self plan for the app
 PLAN.md
+
+# Historique de conversation persistant (donnees locales, pas versionnees)
+sessions/
