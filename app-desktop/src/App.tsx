@@ -16,6 +16,7 @@ import {
 } from "@astryxdesign/core/Chat";
 import { IconButton } from "@astryxdesign/core/IconButton";
 import { Button } from "@astryxdesign/core/Button";
+import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Markdown } from "@astryxdesign/core/Markdown";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Timestamp } from "@astryxdesign/core/Timestamp";
@@ -30,6 +31,7 @@ import {
   PlusIcon,
   SearchIcon,
   SunIcon,
+  TrashIcon,
 } from "./icons";
 import "./App.css";
 
@@ -181,6 +183,8 @@ function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState("");
+  const [deletingSession, setDeletingSession] = useState<Session | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
@@ -222,6 +226,22 @@ function App() {
       body: JSON.stringify({ title }),
     });
     setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, title } : s)));
+  }
+
+  async function confirmDeleteSession() {
+    if (!deletingSession) return;
+    setIsDeleting(true);
+
+    try {
+      await fetch(`${API_BASE}/sessions/${deletingSession.id}`, { method: "DELETE" });
+      setSessions((prev) => prev.filter((s) => s.id !== deletingSession.id));
+      if (deletingSession.id === sessionId) {
+        startNewSession();
+      }
+    } finally {
+      setIsDeleting(false);
+      setDeletingSession(null);
+    }
   }
 
   function loadHistory(id: string) {
@@ -495,16 +515,28 @@ function App() {
                     isSelected={s.id === sessionId}
                     onClick={() => switchSession(s.id)}
                     endContent={
-                      <IconButton
-                        label="Renommer"
-                        icon={<PencilIcon />}
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          startRename(s);
-                        }}
-                      />
+                      <div className="flex items-center gap-0.5">
+                        <IconButton
+                          label="Renommer"
+                          icon={<PencilIcon />}
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            startRename(s);
+                          }}
+                        />
+                        <IconButton
+                          label="Supprimer"
+                          icon={<TrashIcon />}
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDeletingSession(s);
+                          }}
+                        />
+                      </div>
                     }
                   />
                 ),
@@ -664,6 +696,18 @@ function App() {
           </ChatMessageList>
         </ChatLayout>
       </AppShell>
+
+      <AlertDialog
+        isOpen={deletingSession !== null}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) setDeletingSession(null);
+        }}
+        title="Supprimer la conversation ?"
+        description={`« ${deletingSession?.title ?? (deletingSession ? formatSessionLabel(deletingSession.id) : "")} » sera définitivement supprimée. Cette action est irréversible.`}
+        actionLabel="Supprimer"
+        isActionLoading={isDeleting}
+        onAction={confirmDeleteSession}
+      />
     </Theme>
   );
 }

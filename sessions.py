@@ -50,3 +50,18 @@ def load_title(session_id: str) -> str | None:
 def save_title(session_id: str, title: str) -> None:
     SESSIONS_DIR.mkdir(exist_ok=True)
     title_path(session_id).write_text(title.strip())
+
+
+def session_path(session_id: str) -> Path:
+    return SESSIONS_DIR / f"{session_id}.json"
+
+
+def delete_session(session_id: str) -> bool:
+    """Supprime une conversation (historique + titre). Renvoie False si elle
+    n'existait pas."""
+    path = session_path(session_id)
+    if not path.exists():
+        return False
+    path.unlink()
+    title_path(session_id).unlink(missing_ok=True)
+    return True

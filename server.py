@@ -33,6 +33,7 @@ from main import (
 )
 from sessions import (
     SESSIONS_DIR,
+    delete_session,
     load_session,
     load_title,
     new_session_path,
@@ -302,6 +303,13 @@ def rename_session(session_id: str, body: RenameRequest) -> dict[str, bool]:
     if not path.exists():
         raise HTTPException(404, "session introuvable")
     save_title(session_id, body.title)
+    return {"ok": True}
+
+
+@app.delete("/sessions/{session_id}")
+def remove_session(session_id: str) -> dict[str, bool]:
+    if not delete_session(session_id):
+        raise HTTPException(404, "session introuvable")
     return {"ok": True}
 
 
