@@ -29,7 +29,7 @@ This loop (called "ReAct" in the literature: Reason + Act) is the core of any ha
 
 - Multi-turn chat with streaming responses
 - Tool calling in a ReAct-style loop: read files, list directories, write files, run shell commands
-- Permission prompt before any action that modifies something (writing a file, running a command)
+- Permission prompt before any action that modifies something (writing a file, running a command), with an "always allow" option scoped to the current conversation
 - Automatic context compression once the conversation history grows too large
 - Persistent sessions: conversations are saved to disk and resumed automatically on the next run
 - Structured JSONL logs, plus a small script to summarize them

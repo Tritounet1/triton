@@ -52,16 +52,41 @@ def save_title(session_id: str, title: str) -> None:
     title_path(session_id).write_text(title.strip())
 
 
+def permissions_path(session_id: str) -> Path:
+    return SESSIONS_DIR / f"{session_id}.permissions.json"
+
+
+def load_always_allowed(session_id: str) -> set[str]:
+    """Outils que l'utilisateur a choisi d'autoriser sans reconfirmation, pour
+    CETTE conversation uniquement (bouton "toujours autoriser" sur le prompt
+    de confirmation). Stocké à part de l'historique, comme le titre : une
+    nouvelle conversation repart avec des confirmations vierges."""
+    path = permissions_path(session_id)
+    if not path.exists():
+        return set()
+    return set(json.loads(path.read_text()))
+
+
+def allow_always(session_id: str, tool_name: str) -> None:
+    names = load_always_allowed(session_id)
+    names.add(tool_name)
+    SESSIONS_DIR.mkdir(exist_ok=True)
+    permissions_path(session_id).write_text(
+        json.dumps(sorted(names), ensure_ascii=False, indent=2)
+    )
+
+
 def session_path(session_id: str) -> Path:
     return SESSIONS_DIR / f"{session_id}.json"
 
 
 def delete_session(session_id: str) -> bool:
-    """Supprime une conversation (historique + titre). Renvoie False si elle
-    n'existait pas."""
+    """Supprime une conversation (historique + titre + permissions). Renvoie
+    False si elle n'existait pas."""
     path = session_path(session_id)
     if not path.exists():
         return False
     path.unlink()
     title_path(session_id).unlink(missing_ok=True)
+    permissions_path(session_id).unlink(missing_ok=True)
     return True

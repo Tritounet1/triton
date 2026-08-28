@@ -14,13 +14,20 @@ from rich.console import Console
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.prompt import Confirm
+from rich.prompt import Prompt
 from rich.text import Text
 
 from api import ChatResult, call_chat, stream_chat
 from logs import log_event
 import mcp_client
-from sessions import latest_session_path, load_session, new_session_path, save_session
+from sessions import (
+    allow_always,
+    latest_session_path,
+    load_always_allowed,
+    load_session,
+    new_session_path,
+    save_session,
+)
 from tools import TOOLS, TOOLS_REGISTRY
 
 SYSTEM_PROMPT = "You are a concise and clear assistant."
@@ -46,12 +53,14 @@ def format_args(args: dict[str, object]) -> str:
 
 
 def run_tool_calls(
-    console: Console, tool_calls: list[ChatCompletionMessageToolCallUnion]
+    console: Console, session_id: str, tool_calls: list[ChatCompletionMessageToolCallUnion]
 ) -> list[ChatCompletionMessageParam]:
     """Exécute chaque appel d'outil demandé par le modèle (en demandant une
     confirmation avant les outils qui modifient quelque chose), affiche le
     résultat, et renvoie les messages "tool" correspondants à ajouter à
-    l'historique."""
+    l'historique. Le choix "toujours autoriser" (a) n'est mémorisé que pour
+    cette conversation (session_id) : une nouvelle conversation repart avec
+    des confirmations vierges."""
     tool_messages: list[ChatCompletionMessageParam] = []
 
     for tool_call in tool_calls:
@@ -72,16 +81,26 @@ def run_tool_calls(
 
             if tool is None:
                 result = f"outil inconnu : {name}"
-            elif tool.read_only or Confirm.ask(
-                f"[yellow]autoriser[/yellow] {name}({format_args(args)}) ?",
-                console=console,
-                default=False,
-            ):
+            elif tool.read_only or name in load_always_allowed(session_id):
                 start = time.perf_counter()
                 result = tool.fn(**args)
                 duration = time.perf_counter() - start
             else:
-                result = "action refusée par l'utilisateur"
+                choice = Prompt.ask(
+                    f"[yellow]autoriser[/yellow] {name}({format_args(args)}) ? "
+                    "(y : une fois, a : toujours pour cette conversation, n : refuser)",
+                    console=console,
+                    choices=["y", "n", "a"],
+                    default="n",
+                )
+                if choice == "a":
+                    allow_always(session_id, name)
+                if choice in ("y", "a"):
+                    start = time.perf_counter()
+                    result = tool.fn(**args)
+                    duration = time.perf_counter() - start
+                else:
+                    result = "action refusée par l'utilisateur"
 
         args_repr = format_args(args)
         console.print(
@@ -350,7 +369,7 @@ def main():
                         "tool_calls": to_tool_call_params(reply.tool_calls),
                     }
                 )
-                messages.extend(run_tool_calls(console, reply.tool_calls))
+                messages.extend(run_tool_calls(console, session_path.stem, reply.tool_calls))
                 continue
 
             if reply.content is None:

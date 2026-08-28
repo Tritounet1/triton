@@ -413,7 +413,7 @@ function App() {
     }
   }
 
-  async function respondToConfirmation(approved: boolean) {
+  async function respondToConfirmation(approved: boolean, remember = false) {
     if (!pendingConfirmation) return;
     const { id } = pendingConfirmation;
     setPendingConfirmation(null);
@@ -421,7 +421,7 @@ function App() {
     await fetch(`${API_BASE}/chat/confirm`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ confirmation_id: id, approved }),
+      body: JSON.stringify({ confirmation_id: id, approved, remember }),
     });
   }
 
@@ -687,7 +687,7 @@ function App() {
                 <Text weight="medium" className="text-center">
                   autoriser {pendingConfirmation.tool}({formatArgs(pendingConfirmation.args)}) ?
                 </Text>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap justify-center gap-2">
                   <Button
                     label="autoriser"
                     variant="primary"
@@ -697,8 +697,16 @@ function App() {
                     autoriser
                   </Button>
                   <Button
-                    label="refuser"
+                    label="toujours autoriser pour cette conversation"
                     variant="secondary"
+                    size="sm"
+                    onClick={() => respondToConfirmation(true, true)}
+                  >
+                    toujours autoriser (cette conversation)
+                  </Button>
+                  <Button
+                    label="refuser"
+                    variant="ghost"
                     size="sm"
                     onClick={() => respondToConfirmation(false)}
                   >

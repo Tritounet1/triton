@@ -35,7 +35,9 @@ from main import (
 )
 from sessions import (
     SESSIONS_DIR,
+    allow_always,
     delete_session,
+    load_always_allowed,
     load_session,
     load_title,
     new_session_path,
@@ -73,6 +75,7 @@ class ChatRequest(BaseModel):
 class ConfirmRequest(BaseModel):
     confirmation_id: str
     approved: bool
+    remember: bool = False
 
 
 class RenameRequest(BaseModel):
@@ -95,6 +98,7 @@ class MCPServerToggle(BaseModel):
 class PendingConfirmation:
     event: threading.Event = field(default_factory=threading.Event)
     approved: bool = False
+    remember: bool = False
 
 
 PENDING_CONFIRMATIONS: dict[str, PendingConfirmation] = {}
@@ -158,7 +162,8 @@ def run_chat_stream(
     messages: list[ChatCompletionMessageParam],
     first_message: str | None = None,
 ) -> Iterator[str]:
-    yield sse("session", {"session_id": session_path.stem})
+    session_id = session_path.stem
+    yield sse("session", {"session_id": session_id})
 
     if first_message is not None:
         title = generate_conversation_title(first_message)
@@ -213,7 +218,7 @@ def run_chat_stream(
 
                     if tool is None:
                         result = f"outil inconnu : {name}"
-                    elif tool.read_only:
+                    elif tool.read_only or name in load_always_allowed(session_id):
                         result = tool.fn(**args)
                     else:
                         confirmation_id = str(uuid.uuid4())
@@ -229,6 +234,8 @@ def run_chat_stream(
                         PENDING_CONFIRMATIONS.pop(confirmation_id, None)
 
                         if got_response and pending.approved:
+                            if pending.remember:
+                                allow_always(session_id, name)
                             result = tool.fn(**args)
                         else:
                             result = "action refusée par l'utilisateur"
@@ -299,6 +306,7 @@ def confirm(body: ConfirmRequest) -> dict[str, bool]:
         raise HTTPException(404, "confirmation inconnue ou déjà traitée")
 
     pending.approved = body.approved
+    pending.remember = body.remember
     pending.event.set()
     return {"ok": True}
 
