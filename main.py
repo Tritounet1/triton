@@ -28,10 +28,21 @@ from sessions import (
     new_session_path,
     save_session,
 )
-from tools import TOOLS, TOOLS_REGISTRY
+from tools import TOOLS, TOOLS_REGISTRY, load_memory
 
 SYSTEM_PROMPT = "You are a concise and clear assistant."
 MAX_ITERATIONS = 10
+
+
+def build_system_message() -> ChatCompletionMessageParam:
+    """Builds the initial system message for a new conversation, appending
+    any facts saved via the remember tool so they don't need repeating."""
+    content = SYSTEM_PROMPT
+    memory = load_memory()
+    if memory:
+        content += f"\n\nFacts remembered from previous conversations:\n{memory}"
+    return {"role": "system", "content": content}
+
 
 # rough approximation: no real tokenizer, estimated from the size of the
 # history's json (1 token ~= 4 characters, very approximate)
@@ -277,7 +288,7 @@ def main():
         console.print(f"[dim]session resumed: {session_path.name} ({len(messages)} messages)[/dim]")
     else:
         session_path = new_session_path()
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages = [build_system_message()]
 
     console.rule("[bold cyan]Triton[/bold cyan]")
 

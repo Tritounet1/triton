@@ -17,7 +17,7 @@ from api import MODEL, ChatResult, call_chat
 from logs import LOGS_FILE, log_event
 from main import (
     MAX_ITERATIONS,
-    SYSTEM_PROMPT,
+    build_system_message,
     compress_history_if_needed,
     timed_stream_chat,
     to_tool_call_params,
@@ -104,7 +104,7 @@ def resolve_session(
             return path, load_session(path), False
 
     path = new_session_path()
-    return path, [{"role": "system", "content": SYSTEM_PROMPT}], True
+    return path, [build_system_message()], True
 
 
 def sse(event: str, data: dict[str, object]) -> str:

@@ -98,7 +98,9 @@ uv run pre-commit run --all-files
 ```
 harness/
 ├── api.py                     model calls: call_chat() / stream_chat(), the ChatResult type
-├── tools.py                   tools exposed to the model: read_file, list_files, write_file, run_shell
+├── tools.py                   tools exposed to the model: read_file, list_files, write_file, edit_file,
+│                               delete_file, move_file, grep, glob, run_shell, run_tests, git_status,
+│                               git_diff, git_commit, fetch_url, web_search, todo_write, remember
 ├── sessions.py                conversation persistence (JSON) and their titles
 ├── logs.py                    structured logs, one JSON event per line (logs/events.jsonl)
 ├── logs_summary.py            CLI summary of the logs (uv run logs_summary.py)
