@@ -1,5 +1,6 @@
 import json
 import time
+from collections.abc import Iterator
 
 from openai.types.chat import (
     ChatCompletionMessageParam,
@@ -10,11 +11,13 @@ from openai.types.chat import (
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import HTML
 from rich.console import Console
+from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Confirm
+from rich.text import Text
 
-from api import ChatResult, call_chat
+from api import ChatResult, call_chat, stream_chat
 from logs import log_event
 from sessions import latest_session_path, load_session, new_session_path, save_session
 from tools import TOOLS, TOOLS_REGISTRY
@@ -139,6 +142,31 @@ def timed_call_chat(
     return reply
 
 
+def timed_stream_chat(
+    messages: list[ChatCompletionMessageParam],
+    tools: list[ChatCompletionToolParam] | None = None,
+) -> Iterator[str | ChatResult]:
+    """Version streaming de timed_call_chat : relaie les morceaux de texte au
+    fur et à mesure, et logue l'appel une fois le ChatResult final reçu."""
+    start = time.perf_counter()
+    for event in stream_chat(messages, tools=tools):
+        if isinstance(event, str):
+            yield event
+            continue
+
+        duration = time.perf_counter() - start
+        log_event(
+            type="model_call",
+            model=event.model,
+            prompt_tokens=event.prompt_tokens,
+            completion_tokens=event.completion_tokens,
+            total_tokens=event.total_tokens,
+            tool_calls=len(event.tool_calls),
+            duration_seconds=round(duration, 3),
+        )
+        yield event
+
+
 def estimate_size(messages: list[ChatCompletionMessageParam]) -> int:
     return len(json.dumps(messages))
 
@@ -232,8 +260,42 @@ def main():
         while iteration < MAX_ITERATIONS and not done:
             iteration += 1
 
-            with console.status("[dim]réflexion...[/dim]", spinner="dots"):
-                reply = timed_call_chat(messages, tools=TOOLS)
+            content_parts: list[str] = []
+            reply: ChatResult | None = None
+
+            with Live(
+                Text("réflexion...", style="dim"), console=console, refresh_per_second=12
+            ) as live:
+                for event in timed_stream_chat(messages, tools=TOOLS):
+                    if isinstance(event, str):
+                        content_parts.append(event)
+                        live.update(
+                            Panel(
+                                Markdown("".join(content_parts)),
+                                title="Triton",
+                                title_align="left",
+                                border_style="magenta",
+                            )
+                        )
+                    else:
+                        reply = event
+
+                if reply is not None and content_parts:
+                    live.update(
+                        Panel(
+                            Markdown("".join(content_parts)),
+                            title="Triton",
+                            title_align="left",
+                            subtitle=f"[dim]{reply.model} · {reply.total_tokens} tokens "
+                            f"({reply.prompt_tokens} + {reply.completion_tokens})[/dim]",
+                            subtitle_align="right",
+                            border_style="magenta",
+                        )
+                    )
+                elif not content_parts:
+                    live.update(Text(""))
+
+            assert reply is not None
 
             if reply.tool_calls:
                 console.print(
@@ -253,17 +315,6 @@ def main():
                 raise RuntimeError("le modèle n'a renvoyé ni texte ni appel d'outil.")
 
             messages.append({"role": "assistant", "content": reply.content})
-
-            console.print(
-                Panel(
-                    Markdown(reply.content),
-                    title="Triton",
-                    title_align="left",
-                    subtitle=f"[dim]{reply.model} · {reply.total_tokens} tokens ({reply.prompt_tokens} + {reply.completion_tokens})[/dim]",
-                    subtitle_align="right",
-                    border_style="magenta",
-                )
-            )
             console.print()
             done = True
 
