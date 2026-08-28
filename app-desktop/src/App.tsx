@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { open as openFolderDialog } from "@tauri-apps/plugin-dialog";
 import { Theme } from "@astryxdesign/core/theme";
 import { neutralTheme } from "@astryxdesign/theme-neutral/built";
@@ -172,9 +172,41 @@ function toBlocks(items: (AssistantMsg | ToolMsg)[]): Block[] {
 }
 
 function toolCallStatus(result: string): "complete" | "error" {
-  return result.startsWith("erreur") || result.startsWith("action refusée")
-    ? "error"
-    : "complete";
+  return result.startsWith("error") || result.startsWith("action denied") ? "error" : "complete";
+}
+
+/** Avant/apres pour un edit_file : construit a partir des arguments de
+ * l'appel (old_string/new_string), pas du resultat (juste un message de
+ * confirmation) - pas de diff ligne a ligne fine, juste tout l'ancien bloc
+ * en rouge puis tout le nouveau en vert, largement suffisant pour voir ce
+ * qui a change d'un coup d'oeil. */
+function EditFileDiff({ oldString, newString }: { oldString: string; newString: string }) {
+  return (
+    <div className="max-h-64 overflow-y-auto rounded-lg font-mono text-xs">
+      {oldString.split("\n").map((line, i) => (
+        <div key={`old-${i}`} className="whitespace-pre bg-error-muted px-2 py-0.5 text-error">
+          <span className="select-none opacity-60">- </span>
+          {line}
+        </div>
+      ))}
+      {newString.split("\n").map((line, i) => (
+        <div key={`new-${i}`} className="whitespace-pre bg-success-muted px-2 py-0.5 text-success">
+          <span className="select-none opacity-60">+ </span>
+          {line}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function toolResultDetail(t: ToolMsg): ReactNode {
+  const { old_string: oldString, new_string: newString } = t.args;
+  if (t.tool === "edit_file" && typeof oldString === "string" && typeof newString === "string") {
+    return <EditFileDiff oldString={oldString} newString={newString} />;
+  }
+  return (
+    <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap text-xs">{t.result}</pre>
+  );
 }
 
 function App() {
@@ -1079,11 +1111,7 @@ function App() {
                           name: t.tool,
                           status: toolCallStatus(t.result),
                           target: formatArgs(t.args),
-                          resultDetail: (
-                            <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap text-xs">
-                              {t.result}
-                            </pre>
-                          ),
+                          resultDetail: toolResultDetail(t),
                         }))}
                       />
                     ) : (
