@@ -203,36 +203,48 @@ def summarize(old_messages: list[ChatCompletionMessageParam]) -> str:
     return result.content or "(résumé vide)"
 
 
-def compress_history(
-    console: Console, messages: list[ChatCompletionMessageParam]
-) -> list[ChatCompletionMessageParam]:
-    """Résume les tours les plus anciens si l'historique dépasse un seuil, en
+def compress_history_if_needed(
+    messages: list[ChatCompletionMessageParam],
+) -> tuple[list[ChatCompletionMessageParam], str | None]:
+    """Cœur de la compression, sans dépendance à Rich (réutilisé par l'API).
+    Résume les tours les plus anciens si l'historique dépasse un seuil, en
     gardant intacts le system prompt et les derniers tours (pour ne jamais
-    couper un couple assistant/tool_calls en plein milieu)."""
+    couper un couple assistant/tool_calls en plein milieu). Renvoie
+    l'historique (inchangé ou compressé) et un message à loguer, s'il y a eu
+    compression."""
     if estimate_size(messages) <= MAX_CONTEXT_CHARS:
-        return messages
+        return messages, None
 
     turns = turn_start_indices(messages)
     if len(turns) <= KEEP_RECENT_TURNS:
-        return messages
+        return messages, None
 
     cutoff = turns[-KEEP_RECENT_TURNS]
     system_message = messages[0]
     old_messages = messages[1:cutoff]
     recent_messages = messages[cutoff:]
 
-    with console.status("[dim]compression de l'historique...[/dim]", spinner="dots"):
-        summary = summarize(old_messages)
+    summary = summarize(old_messages)
 
-    console.print(
-        f"[dim]historique compressé : {len(old_messages)} messages résumés en 1[/dim]\n"
-    )
-
-    return [
+    compressed = [
         system_message,
         {"role": "system", "content": f"résumé des échanges précédents : {summary}"},
         *recent_messages,
     ]
+    return compressed, f"historique compressé : {len(old_messages)} messages résumés en 1"
+
+
+def compress_history(
+    console: Console, messages: list[ChatCompletionMessageParam]
+) -> list[ChatCompletionMessageParam]:
+    """Wrapper CLI : ajoute le spinner et le log Rich autour de compress_history_if_needed."""
+    with console.status("[dim]compression de l'historique...[/dim]", spinner="dots"):
+        compressed, log_message = compress_history_if_needed(messages)
+
+    if log_message:
+        console.print(f"[dim]{log_message}[/dim]\n")
+
+    return compressed
 
 
 def main():
