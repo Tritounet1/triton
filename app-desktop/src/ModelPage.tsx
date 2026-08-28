@@ -8,7 +8,7 @@ import { Switch } from "@astryxdesign/core/Switch";
 import { Avatar } from "@astryxdesign/core/Avatar";
 import { Table, proportional, pixel, type TableColumn } from "@astryxdesign/core/Table";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
-import { ArrowLeftIcon, ChevronRightIcon, CpuIcon, SearchIcon } from "./icons";
+import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CpuIcon, SearchIcon } from "./icons";
 
 const API_BASE = "http://127.0.0.1:8000";
 
@@ -180,13 +180,22 @@ export function ModelPage({ onBack }: ModelPageProps) {
       header: "Modèle",
       width: proportional(3),
       renderCell: (m) => (
-        <div className="min-w-0">
-          <Text size="sm" weight="medium" className="block truncate">
-            {m.name}
-          </Text>
-          <Text size="2xs" color="secondary" className="block truncate">
-            {m.id}
-          </Text>
+        <div className="flex min-w-0 items-center gap-2">
+          {m.id === currentModel && (
+            <CheckIcon className="h-4 w-4 shrink-0 text-accent" />
+          )}
+          <div className="min-w-0">
+            <Text
+              size="sm"
+              weight="medium"
+              className={`block truncate ${m.id === currentModel ? "text-accent" : ""}`}
+            >
+              {m.name}
+            </Text>
+            <Text size="2xs" color="secondary" className="block truncate">
+              {m.id}
+            </Text>
+          </div>
         </div>
       ),
     },
@@ -230,7 +239,12 @@ export function ModelPage({ onBack }: ModelPageProps) {
       align: "end",
       renderCell: (m) =>
         m.id === currentModel ? (
-          <Badge variant="success" label="actuel" />
+          <div className="flex items-center justify-end gap-1.5 rounded-md bg-accent-muted px-3 py-1.5">
+            <CheckIcon className="h-3.5 w-3.5 text-accent" />
+            <Text size="sm" weight="medium" className="text-accent">
+              Actuel
+            </Text>
+          </div>
         ) : (
           <Button
             label="Choisir"
