@@ -58,7 +58,7 @@ uv run logs_summary.py
 
 `app-desktop/` is a [Tauri](https://tauri.app) + React app that talks to `server.py`, a small FastAPI server exposing the same agentic loop over HTTP (streaming via Server-Sent Events, with tool confirmations paused mid-stream until the client approves or denies them).
 
-Its interface is built with [Astryx](https://astryx.atmeta.com/docs/getting-started), Meta's open-source React design system — components (`AppShell`, `SideNav`, the `Chat*` family) plus a Tailwind v4 token bridge, no separate build step required.
+Its interface is built with [Astryx](https://astryx.atmeta.com/docs/getting-started), Meta's open-source React design system: components (`AppShell`, `SideNav`, the `Chat*` family) plus a Tailwind v4 token bridge, no separate build step required.
 
 Run the API first, then the app:
 
@@ -71,3 +71,30 @@ cd app-desktop
 pnpm install
 pnpm tauri dev
 ```
+
+## Harness architecture
+
+```
+harness/
+├── api.py                 model calls: call_chat() / stream_chat(), the ChatResult type
+├── tools.py                tools exposed to the model: read_file, list_files, write_file, run_shell
+├── sessions.py              conversation persistence (JSON) and their titles
+├── logs.py                  structured logs, one JSON event per line (logs/events.jsonl)
+├── logs_summary.py          CLI summary of the logs (uv run logs_summary.py)
+│
+├── main.py                 ── ENTRY POINT #1 : interactive CLI (rich + prompt_toolkit)
+├── server.py                ── ENTRY POINT #2 : the same loop over HTTP/SSE, for the desktop app
+│
+└── app-desktop/             Tauri + React GUI, talks to server.py
+    └── src/
+        ├── App.tsx            chat view: sidebar, streaming, tool confirmations
+        ├── SettingsPage.tsx   settings, links to the log viewer
+        └── LogsPage.tsx       reads logs.py's events through GET /logs
+```
+
+**Two entry points, one loop.** `main.py` and `server.py` both drive the exact same agentic loop, built from the same pieces above (`api.py`, `tools.py`, `sessions.py`, `logs.py`), just through different interfaces:
+
+- `main.py` talks to a human directly in a terminal: synchronous, renders with `rich`, confirms risky tools with a blocking `Confirm.ask()`.
+- `server.py` drives the same loop for the desktop app over HTTP: streams events as Server-Sent Events, and pauses on a tool confirmation with a `threading.Event` instead of blocking on terminal input, since there is no terminal to block on.
+
+To avoid duplicating the loop itself, `server.py` imports directly from `main.py` (`compress_history_if_needed`, `timed_stream_chat`, `to_tool_call_params`). Only the tool-confirmation flow is genuinely rewritten in `server.py`, because a terminal prompt and an HTTP request/response are fundamentally different I/O models, everything else is shared code.
