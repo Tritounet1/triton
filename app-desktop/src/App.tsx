@@ -264,6 +264,7 @@ function App() {
   }, []);
 
   function switchSession(id: string) {
+    setView("chat");
     if (id === sessionId || sending) return;
     setSessionId(id);
     localStorage.setItem("triton_session_id", id);
@@ -272,6 +273,7 @@ function App() {
   }
 
   function startNewSession() {
+    setView("chat");
     if (sending) return;
     setSessionId(null);
     localStorage.removeItem("triton_session_id");
