@@ -741,11 +741,12 @@ TOOLS_REGISTRY: dict[str, Tool] = {
                 "name": "dispatch_subagent",
                 "description": "Starts a focused, read-only research sub-agent in the "
                 "background and returns immediately, without waiting for it to finish "
-                "(true parallel execution: keep working while it runs). Its own reasoning "
+                "(true parallel execution: keep working while it runs). It can take "
+                "anywhere from several seconds to a couple minutes depending on the task "
+                "- don't check on it repeatedly, see check_subagent. Its own reasoning "
                 "and tool calls stay isolated from this conversation, only its final "
-                "result comes back, when checked with check_subagent. Give it a "
-                "self-contained task description, since it starts with no context "
-                "beyond what's provided.",
+                "result comes back. Give it a self-contained task description, since it "
+                "starts with no context beyond what's provided.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -768,7 +769,10 @@ TOOLS_REGISTRY: dict[str, Tool] = {
             "function": {
                 "name": "check_subagent",
                 "description": "Checks on a sub-agent started with dispatch_subagent: "
-                "returns its result if it finished, or that it's still running.",
+                "returns its result if it finished, or that it's still running. Don't "
+                "call this repeatedly in a tight loop - if it's still running, respond "
+                "to the user or continue other work, and check again in a later "
+                "response instead.",
                 "parameters": {
                     "type": "object",
                     "properties": {

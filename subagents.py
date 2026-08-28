@@ -14,6 +14,7 @@ deferred until the background thread actually runs.
 
 import json
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -50,10 +51,22 @@ SUBAGENT_SYSTEM_PROMPT = (
     "You are a focused, read-only research sub-agent, dispatched by a "
     "primary assistant to investigate a specific question in the "
     "background. You cannot modify any files or run commands, only read, "
-    "search, and browse the web. Answer concisely with your findings once "
-    "you're done; this answer is the only part of your work the primary "
-    "assistant and the user will see."
+    "search, and browse the web. If web_search fails or returns nothing "
+    "useful, don't compensate by guessing or fabricating URLs to fetch - "
+    "most guesses 404 and waste your remaining turns. Report what you did "
+    "find (even if partial) and note the limitation instead of endlessly "
+    "retrying. Answer concisely with your findings once you're done; this "
+    "answer is the only part of your work the primary assistant and the "
+    "user will see."
 )
+
+# a check_subagent call on a still-running task less than this many seconds
+# after the previous check gets told to stop polling instead of a plain
+# "still running": without this, an impatient model calls check_subagent in
+# a tight loop, burning its own iteration budget and cluttering the chat
+# with near-identical "still waiting..." messages
+MIN_CHECK_INTERVAL_SECONDS = 10.0
+_last_checked: dict[str, float] = {}
 
 TaskStatus = Literal["running", "done", "error"]
 
@@ -151,7 +164,20 @@ def _run(task_entry: SubagentTask) -> None:
                 )
                 messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": result})
 
-        task_entry.result = (
+        # ran out of iterations without a plain-text conclusion: force one
+        # more call with no tools, so partial research (searches/fetches
+        # that did succeed) gets synthesized into an answer instead of
+        # silently discarded
+        messages.append(
+            {
+                "role": "user",
+                "content": "You're out of research turns. Answer now with your best "
+                "understanding based on everything gathered above, noting any gaps "
+                "or unconfirmed points.",
+            }
+        )
+        final = call_chat(messages)
+        task_entry.result = final.content or (
             f"(sub-agent stopped after {SUBAGENT_MAX_ITERATIONS} iterations without concluding)"
         )
         task_entry.status = "done"
@@ -177,9 +203,22 @@ def check(task_id: str) -> str:
     task_entry = TASKS.get(task_id)
     if task_entry is None:
         return f"error: no sub-agent with id {task_id}"
-    if task_entry.status == "running":
-        return f"still running (dispatched {task_entry.created_at})"
-    return f"{task_entry.status}: {task_entry.result}"
+
+    if task_entry.status != "running":
+        _last_checked.pop(task_id, None)
+        return f"{task_entry.status}: {task_entry.result}"
+
+    now = time.monotonic()
+    last = _last_checked.get(task_id)
+    _last_checked[task_id] = now
+    if last is not None and now - last < MIN_CHECK_INTERVAL_SECONDS:
+        return (
+            "still running - you just checked this recently, there's nothing new "
+            "to report yet. Stop polling now: tell the user it's still in progress "
+            "and end your turn, or continue other work first. Check again in a "
+            "later response instead of calling this again immediately."
+        )
+    return f"still running (dispatched {task_entry.created_at})"
 
 
 def list_tasks() -> list[SubagentTask]:
