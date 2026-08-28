@@ -23,7 +23,7 @@ from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
 from api import MODEL, ChatResult, call_chat
-from logs import log_event
+from logs import LOGS_FILE, log_event
 from main import (
     MAX_ITERATIONS,
     SYSTEM_PROMPT,
@@ -311,6 +311,19 @@ def remove_session(session_id: str) -> dict[str, bool]:
     if not delete_session(session_id):
         raise HTTPException(404, "session introuvable")
     return {"ok": True}
+
+
+@app.get("/logs")
+def get_logs(limit: int = 500) -> list[dict[str, object]]:
+    """Evenements bruts de logs/events.jsonl (model_call / tool_call), les
+    plus recents en premier. `limit` borne la reponse pour ne jamais renvoyer
+    un fichier devenu enorme d'un coup."""
+    if not LOGS_FILE.exists():
+        return []
+    lines = [line for line in LOGS_FILE.read_text().splitlines() if line.strip()]
+    events = [json.loads(line) for line in lines[-limit:]]
+    events.reverse()
+    return events
 
 
 if __name__ == "__main__":

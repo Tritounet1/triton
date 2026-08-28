@@ -23,9 +23,13 @@ import { Timestamp } from "@astryxdesign/core/Timestamp";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { parseSSE } from "./sse";
+import { formatArgs } from "./format";
+import { SettingsPage } from "./SettingsPage";
+import { LogsPage } from "./LogsPage";
 import {
   CheckIcon,
   CopyIcon,
+  GearIcon,
   MoonIcon,
   PencilIcon,
   PlusIcon,
@@ -64,17 +68,6 @@ interface RawSessionMessage {
   content: string | null;
   tool_call_id?: string;
   tool_calls?: { id: string; function: { name: string; arguments: string } }[];
-}
-
-function formatArgs(args: Record<string, unknown>): string {
-  return Object.entries(args)
-    .map(([k, v]) => {
-      if (k === "content" && typeof v === "string") {
-        return `${k}=<${v.length} caractères>`;
-      }
-      return `${k}=${JSON.stringify(v)}`;
-    })
-    .join(", ");
 }
 
 /** id de session au format 2026-08-28_101500 -> "28/08/2026 10:15" */
@@ -194,6 +187,7 @@ function App() {
   const [themeMode, setThemeMode] = useState<"light" | "dark">(() =>
     localStorage.getItem("triton_theme") === "light" ? "light" : "dark",
   );
+  const [view, setView] = useState<"chat" | "settings" | "logs">("chat");
 
   function toggleTheme() {
     setThemeMode((prev) => {
@@ -473,7 +467,14 @@ function App() {
               </div>
             }
             footer={
-              <div className="flex items-center justify-end px-1 py-1">
+              <div className="flex items-center justify-end gap-0.5 px-1 py-1">
+                <IconButton
+                  label="Paramètres"
+                  icon={<GearIcon />}
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setView("settings")}
+                />
                 <IconButton
                   label={themeMode === "dark" ? "Passer en thème clair" : "Passer en thème sombre"}
                   icon={themeMode === "dark" ? <MoonIcon /> : <SunIcon />}
@@ -545,6 +546,11 @@ function App() {
           </SideNav>
         }
       >
+        {view === "settings" && (
+          <SettingsPage onBack={() => setView("chat")} onOpenLogs={() => setView("logs")} />
+        )}
+        {view === "logs" && <LogsPage onBack={() => setView("settings")} />}
+        {view === "chat" && (
         <ChatLayout
           density="balanced"
           className="h-full"
@@ -695,6 +701,7 @@ function App() {
             )}
           </ChatMessageList>
         </ChatLayout>
+        )}
       </AppShell>
 
       <AlertDialog
