@@ -26,6 +26,7 @@ import { parseSSE } from "./sse";
 import { formatArgs } from "./format";
 import { SettingsPage } from "./SettingsPage";
 import { LogsPage } from "./LogsPage";
+import { McpServersPage } from "./McpServersPage";
 import {
   CheckIcon,
   CopyIcon,
@@ -187,7 +188,7 @@ function App() {
   const [themeMode, setThemeMode] = useState<"light" | "dark">(() =>
     localStorage.getItem("triton_theme") === "light" ? "light" : "dark",
   );
-  const [view, setView] = useState<"chat" | "settings" | "logs">("chat");
+  const [view, setView] = useState<"chat" | "settings" | "logs" | "mcp">("chat");
 
   function toggleTheme() {
     setThemeMode((prev) => {
@@ -549,9 +550,14 @@ function App() {
         }
       >
         {view === "settings" && (
-          <SettingsPage onBack={() => setView("chat")} onOpenLogs={() => setView("logs")} />
+          <SettingsPage
+            onBack={() => setView("chat")}
+            onOpenLogs={() => setView("logs")}
+            onOpenMcp={() => setView("mcp")}
+          />
         )}
         {view === "logs" && <LogsPage onBack={() => setView("settings")} />}
+        {view === "mcp" && <McpServersPage onBack={() => setView("settings")} />}
         {view === "chat" && (
         <ChatLayout
           density="balanced"

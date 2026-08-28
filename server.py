@@ -12,7 +12,8 @@ L'API n'écoute que sur 127.0.0.1, jamais exposée au réseau.
 import json
 import threading
 import uuid
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from fastapi.responses import StreamingResponse
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
+import mcp_client
 from api import MODEL, ChatResult, call_chat
 from logs import LOGS_FILE, log_event
 from main import (
@@ -42,7 +44,15 @@ from sessions import (
 )
 from tools import TOOLS, TOOLS_REGISTRY
 
-app = FastAPI(title="Triton API")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    mcp_client.manager.connect_all_enabled()
+    yield
+    mcp_client.manager.disconnect_all()
+
+
+app = FastAPI(title="Triton API", lifespan=lifespan)
 
 # tout tourne en local (127.0.0.1), donc pas de vrai enjeu de sécurité à
 # restreindre les origines : la webview Tauri change d'origine entre le dev
@@ -67,6 +77,18 @@ class ConfirmRequest(BaseModel):
 
 class RenameRequest(BaseModel):
     title: str
+
+
+class MCPServerCreate(BaseModel):
+    name: str
+    command: str
+    args: list[str] = []
+    env: dict[str, str] = {}
+    enabled: bool = True
+
+
+class MCPServerToggle(BaseModel):
+    enabled: bool
 
 
 @dataclass
@@ -311,6 +333,38 @@ def remove_session(session_id: str) -> dict[str, bool]:
     if not delete_session(session_id):
         raise HTTPException(404, "session introuvable")
     return {"ok": True}
+
+
+@app.get("/mcp/servers")
+def list_mcp_servers() -> list[dict[str, object]]:
+    return mcp_client.manager.status()
+
+
+@app.post("/mcp/servers")
+def add_mcp_server(body: MCPServerCreate) -> list[dict[str, object]]:
+    config = mcp_client.MCPServerConfig(
+        name=body.name, command=body.command, args=body.args, env=body.env, enabled=body.enabled
+    )
+    try:
+        mcp_client.manager.add_server(config)
+    except ValueError as e:
+        raise HTTPException(409, str(e)) from e
+    return mcp_client.manager.status()
+
+
+@app.put("/mcp/servers/{name}")
+def toggle_mcp_server(name: str, body: MCPServerToggle) -> list[dict[str, object]]:
+    try:
+        mcp_client.manager.set_enabled(name, body.enabled)
+    except KeyError as e:
+        raise HTTPException(404, "serveur MCP introuvable") from e
+    return mcp_client.manager.status()
+
+
+@app.delete("/mcp/servers/{name}")
+def remove_mcp_server(name: str) -> list[dict[str, object]]:
+    mcp_client.manager.remove_server(name)
+    return mcp_client.manager.status()
 
 
 @app.get("/logs")

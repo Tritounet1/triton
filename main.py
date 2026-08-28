@@ -19,6 +19,7 @@ from rich.text import Text
 
 from api import ChatResult, call_chat, stream_chat
 from logs import log_event
+import mcp_client
 from sessions import latest_session_path, load_session, new_session_path, save_session
 from tools import TOOLS, TOOLS_REGISTRY
 
@@ -263,6 +264,22 @@ def main():
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
     console.rule("[bold cyan]Triton[/bold cyan]")
+
+    mcp_configs = mcp_client.load_configs()
+    if any(c.enabled for c in mcp_configs):
+        with console.status("[dim]connexion aux serveurs MCP...[/dim]", spinner="dots"):
+            mcp_client.manager.connect_all_enabled()
+        for status in mcp_client.manager.status():
+            if not status["enabled"]:
+                continue
+            if status["connected"]:
+                console.print(
+                    f"[dim]MCP « {status['name']} » connecté "
+                    f"({len(status['tools'])} outil(s))[/dim]"
+                )
+            else:
+                console.print(f"[red]MCP « {status['name']} » : {status['error']}[/red]")
+
     console.print("tape 'exit' ou 'quit' pour quitter\n", style="dim")
 
     while True:

@@ -33,6 +33,7 @@ This loop (called "ReAct" in the literature: Reason + Act) is the core of any ha
 - Automatic context compression once the conversation history grows too large
 - Persistent sessions: conversations are saved to disk and resumed automatically on the next run
 - Structured JSONL logs, plus a small script to summarize them
+- MCP client: connect to external [Model Context Protocol](https://modelcontextprotocol.io) servers as an additional source of tools, configurable at runtime (no restart needed) from the desktop app's settings
 
 ## Stack
 
@@ -81,6 +82,7 @@ harness/
 ├── sessions.py                conversation persistence (JSON) and their titles
 ├── logs.py                    structured logs, one JSON event per line (logs/events.jsonl)
 ├── logs_summary.py            CLI summary of the logs (uv run logs_summary.py)
+├── mcp_client.py              connects to configured MCP servers, merges their tools into tools.TOOLS_REGISTRY
 │
 ├── main.py                    ENTRY POINT #1 : interactive CLI (rich + prompt_toolkit)
 ├── server.py                  ENTRY POINT #2 : the same loop over HTTP/SSE, for the desktop app
@@ -88,8 +90,9 @@ harness/
 └── app-desktop/               Tauri + React GUI, talks to server.py
     └── src/
         ├── App.tsx            chat view: sidebar, streaming, tool confirmations
-        ├── SettingsPage.tsx   settings, links to the log viewer
-        └── LogsPage.tsx       reads logs.py's events through GET /logs
+        ├── SettingsPage.tsx   settings, links to the log viewer and MCP servers page
+        ├── LogsPage.tsx       reads logs.py's events through GET /logs
+        └── McpServersPage.tsx add/remove/enable MCP servers through /mcp/servers
 ```
 
 **Two entry points, one loop.** `main.py` and `server.py` both drive the exact same agentic loop, built from the same pieces above (`api.py`, `tools.py`, `sessions.py`, `logs.py`), just through different interfaces:
@@ -98,3 +101,20 @@ harness/
 - `server.py` drives the same loop for the desktop app over HTTP: streams events as Server-Sent Events, and pauses on a tool confirmation with a `threading.Event` instead of blocking on terminal input, since there is no terminal to block on.
 
 To avoid duplicating the loop itself, `server.py` imports directly from `main.py` (`compress_history_if_needed`, `timed_stream_chat`, `to_tool_call_params`). Only the tool-confirmation flow is genuinely rewritten in `server.py`, because a terminal prompt and an HTTP request/response are fundamentally different I/O models, everything else is shared code.
+
+### MCP servers
+
+Instead of hand-writing every tool in `tools.py`, the harness can connect to external [MCP](https://modelcontextprotocol.io) servers and treat their tools the same way as local ones. Same config shape as Claude Desktop: a name, a command, arguments, and environment variables.
+
+The MCP SDK is async; the rest of the harness (`Tool.fn`) is synchronous. `mcp_client.py` runs a dedicated asyncio event loop in a background thread that keeps every connected server's session open, and each tool's synchronous `fn` submits its call to that loop and blocks for the result (`asyncio.run_coroutine_threadsafe`). Connected tools are merged into `tools.TOOLS_REGISTRY` under a `mcp__<server>__<tool>` key, so `main.py` and `server.py` need zero changes to pick them up. A tool is required to confirm before running (like `write_file` or `run_shell`) unless the server explicitly marks it `readOnlyHint: true`.
+
+Manage servers from the desktop app (Settings → Serveurs MCP) or directly against the API:
+
+```
+GET    /mcp/servers          list configured servers, their connection status and tools
+POST   /mcp/servers          add a server ({name, command, args, env}) and connect immediately
+PUT    /mcp/servers/{name}   enable/disable ({enabled: bool}), connecting or disconnecting it
+DELETE /mcp/servers/{name}   remove a server
+```
+
+`mcp_servers.json` (gitignored, same reasoning as `.env`: it can hold real API keys in `env`) stores the configuration; enabled servers reconnect automatically on the next `uv run main.py` or `uv run server.py`.

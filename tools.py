@@ -142,3 +142,14 @@ TOOLS_REGISTRY: dict[str, Tool] = {
 }
 
 TOOLS: list[ChatCompletionToolParam] = [tool.schema for tool in TOOLS_REGISTRY.values()]
+
+
+def rebuild_tools_list() -> None:
+    """Recalcule TOOLS a partir de TOOLS_REGISTRY, en mutant la liste en place
+    (jamais de reassignation) : main.py et server.py ont fait `from tools
+    import TOOLS` et gardent donc une reference vers ce meme objet liste, une
+    reassignation ne serait pas vue par ces modules. Appele par mcp_client.py
+    a chaque connexion/deconnexion d'un serveur MCP, pour que les outils
+    distants apparaissent/disparaissent sans changement cote main.py/server.py."""
+    TOOLS.clear()
+    TOOLS.extend(tool.schema for tool in TOOLS_REGISTRY.values())

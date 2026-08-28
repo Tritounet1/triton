@@ -20,3 +20,7 @@ sessions/
 
 # Logs d'observabilite (donnees locales, pas versionnees)
 logs/
+
+# Config des serveurs MCP (contient souvent des cles API en clair, comme
+# claude_desktop_config.json : jamais versionne)
+mcp_servers.json
