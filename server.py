@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TypedDict
+from typing import TypedDict, cast
 
 import requests
 from fastapi import FastAPI, HTTPException
@@ -276,7 +276,12 @@ def run_chat_stream(
             done = True
             continue
 
-        messages.append({"role": "assistant", "content": reply.content})
+        messages.append(
+            cast(
+                ChatCompletionMessageParam,
+                {"role": "assistant", "content": reply.content, "model": reply.model},
+            )
+        )
         yield sse(
             "done",
             {
@@ -409,11 +414,16 @@ def list_sessions() -> list[dict[str, str | None]]:
 
 
 @app.get("/sessions/{session_id}")
-def get_session(session_id: str) -> list[ChatCompletionMessageParam]:
+def get_session(session_id: str) -> list[dict[str, object]]:
+    """Returns the raw message dicts as stored on disk. Typed loosely
+    (not list[ChatCompletionMessageParam]) on purpose: that TypedDict-based
+    return type made FastAPI's response serialization silently strip extra
+    keys we stash on assistant messages (e.g. "model", used by the desktop
+    app to show which model answered)."""
     path = SESSIONS_DIR / f"{session_id}.json"
     if not path.exists():
         raise HTTPException(404, "session not found")
-    return load_session(path)
+    return cast(list[dict[str, object]], load_session(path))
 
 
 @app.put("/sessions/{session_id}/title")

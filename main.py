@@ -1,6 +1,7 @@
 import json
 import time
 from collections.abc import Iterator
+from typing import cast
 
 from openai.types.chat import (
     ChatCompletionMessageParam,
@@ -397,7 +398,12 @@ def main():
             if reply.content is None:
                 raise RuntimeError("the model returned neither text nor a tool call.")
 
-            messages.append({"role": "assistant", "content": reply.content})
+            messages.append(
+                cast(
+                    ChatCompletionMessageParam,
+                    {"role": "assistant", "content": reply.content, "model": reply.model},
+                )
+            )
             console.print()
             done = True
 

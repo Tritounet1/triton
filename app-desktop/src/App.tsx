@@ -51,7 +51,7 @@ const API_BASE = "http://127.0.0.1:8000";
 
 type ChatMsg =
   | { kind: "user"; text: string; time: number }
-  | { kind: "assistant"; text: string; time: number }
+  | { kind: "assistant"; text: string; time: number; model?: string }
   | { kind: "tool"; tool: string; args: Record<string, unknown>; result: string; time: number }
   | { kind: "info"; text: string; time: number }
   | { kind: "error"; text: string; time: number };
@@ -79,6 +79,7 @@ interface RawSessionMessage {
   content: string | null;
   tool_call_id?: string;
   tool_calls?: { id: string; function: { name: string; arguments: string } }[];
+  model?: string;
 }
 
 /** id de session au format 2026-08-28_101500 -> "28/08/2026 10:15" */
@@ -111,7 +112,7 @@ function historyToMessages(raw: RawSessionMessage[]): ChatMsg[] {
         });
       }
       if (m.content) {
-        out.push({ kind: "assistant", text: m.content, time: now });
+        out.push({ kind: "assistant", text: m.content, time: now, model: m.model });
       }
     }
   }
@@ -559,6 +560,22 @@ function App() {
             }
             break;
           }
+          case "done": {
+            // rattache le modele qui a repondu au dernier message assistant
+            // (pour l'avatar), et reconcilie son texte avec la version
+            // finale envoyee par le serveur au cas ou il manquerait un
+            // morceau (ex. le dernier flush programme n'a pas encore tourne).
+            const model = data.model as string;
+            const content = data.content as string;
+            setMessages((prev) => {
+              const last = prev[prev.length - 1];
+              if (last?.kind === "assistant") {
+                return [...prev.slice(0, -1), { ...last, text: content || last.text, model }];
+              }
+              return [...prev, { kind: "assistant", text: content, time: Date.now(), model }];
+            });
+            break;
+          }
           case "confirmation_required": {
             setPendingConfirmation({
               id: data.confirmation_id as string,
@@ -675,11 +692,6 @@ function App() {
   );
 
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
-
-  // logo du fournisseur du modele actuellement selectionne (Paramètres >
-  // Modèle), avec repli sur les initiales quand la famille n'a pas de
-  // logo connu (voir modelFamilies.ts, partage avec ModelPage.tsx)
-  const assistantAvatar = modelAvatar(apiModel);
 
   return (
     <Theme theme={neutralTheme} mode={themeMode}>
@@ -833,16 +845,57 @@ function App() {
                     {!isCollapsed &&
                       sessions
                         .filter((s) => s.project_id === p.id)
-                        .map((s) => (
-                          <SideNavItem
-                            key={s.id}
-                            label={s.title ?? formatSessionLabel(s.id)}
-                            icon={<Avatar name={assistantAvatar.name} src={assistantAvatar.logo} size="xsm" />}
-                            isSelected={s.id === sessionId}
-                            onClick={() => { switchSession(s.id); }}
-                            className="pl-4"
-                          />
-                        ))}
+                        .map((s) =>
+                          editingSessionId === s.id ? (
+                            <div key={s.id} className="py-1 pl-4">
+                              <TextInput
+                                value={editingValue}
+                                onChange={setEditingValue}
+                                isLabelHidden
+                                label="Titre de la conversation"
+                                size="sm"
+                                hasAutoFocus
+                                onEnter={() => { void commitRename(s.id); }}
+                                onBlur={() => { void commitRename(s.id); }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Escape") setEditingSessionId(null);
+                                }}
+                              />
+                            </div>
+                          ) : (
+                            <SideNavItem
+                              key={s.id}
+                              label={s.title ?? formatSessionLabel(s.id)}
+                              isSelected={s.id === sessionId}
+                              onClick={() => { switchSession(s.id); }}
+                              className="pl-4"
+                              endContent={
+                                <div className="flex items-center gap-0.5">
+                                  <IconButton
+                                    label="Renommer"
+                                    icon={<PencilIcon />}
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      startRename(s);
+                                    }}
+                                  />
+                                  <IconButton
+                                    label="Supprimer"
+                                    icon={<TrashIcon />}
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setDeletingSession(s);
+                                    }}
+                                  />
+                                </div>
+                              }
+                            />
+                          ),
+                        )}
                   </div>
                 );
               })}
@@ -877,7 +930,6 @@ function App() {
                   <SideNavItem
                     key={s.id}
                     label={s.title ?? formatSessionLabel(s.id)}
-                    icon={<Avatar name={assistantAvatar.name} src={assistantAvatar.logo} size="xsm" />}
                     isSelected={s.id === sessionId}
                     onClick={() => { switchSession(s.id); }}
                     endContent={
@@ -1002,12 +1054,21 @@ function App() {
               // n'est qu'un garde-fou pour TypeScript (noUncheckedIndexedAccess).
               if (!lastItem) throw new Error("groupe assistant sans element");
               const lastIsText = lastItem.kind === "assistant";
+              // le modele qui a effectivement repondu dans ce groupe (pas
+              // forcement celui actuellement selectionne dans les parametres,
+              // qui a pu changer depuis) ; undefined pour un historique
+              // enregistre avant l'ajout de ce champ, l'avatar retombe alors
+              // sur les initiales.
+              const groupModel = group.items.find(
+                (it): it is AssistantMsg => it.kind === "assistant",
+              )?.model;
+              const messageAvatar = modelAvatar(groupModel ?? null);
 
               return (
                 <ChatMessage
                   key={gi}
                   sender="assistant"
-                  avatar={<Avatar name={assistantAvatar.name} src={assistantAvatar.logo} size="sm" />}
+                  avatar={<Avatar name={messageAvatar.name} src={messageAvatar.logo} size="sm" />}
                   name="Triton"
                 >
                   {blocks.map((block, bi) =>
