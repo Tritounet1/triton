@@ -6,9 +6,10 @@ interface SettingsPageProps {
   onBack: () => void;
   onOpenLogs: () => void;
   onOpenMcp: () => void;
+  onOpenModel: () => void;
 }
 
-export function SettingsPage({ onBack, onOpenLogs, onOpenMcp }: SettingsPageProps) {
+export function SettingsPage({ onBack, onOpenLogs, onOpenMcp, onOpenModel }: SettingsPageProps) {
   return (
     <div className="mx-auto max-w-2xl px-6 py-8">
       <div className="mb-6 flex items-center gap-3">
@@ -26,6 +27,21 @@ export function SettingsPage({ onBack, onOpenLogs, onOpenMcp }: SettingsPageProp
           </Text>
         </div>
       </div>
+
+      <Text size="2xs" color="secondary" className="mb-2 block px-1 uppercase tracking-wide">
+        Modèle
+      </Text>
+      <button
+        onClick={onOpenModel}
+        className="mb-6 w-full rounded-xl border border-default bg-surface px-4 py-3 text-left hover:bg-muted"
+      >
+        <Text weight="medium" className="block">
+          Choisir le modèle
+        </Text>
+        <Text size="2xs" color="secondary" className="block">
+          Parcourt les modèles OpenRouter avec leur prix par million de tokens
+        </Text>
+      </button>
 
       <Text size="2xs" color="secondary" className="mb-2 block px-1 uppercase tracking-wide">
         Outils

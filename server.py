@@ -5,7 +5,9 @@ from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TypedDict
 
+import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -14,7 +16,7 @@ from pydantic import BaseModel
 
 import mcp_client
 import subagents
-from api import MODEL, ChatResult, call_chat
+from api import ChatResult, call_chat, get_model
 from logs import LOGS_FILE, log_event
 from main import (
     MAX_ITERATIONS,
@@ -38,6 +40,7 @@ from sessions import (
     save_session_project,
     save_title,
 )
+from settings import save_model
 from tools import TOOLS, TOOLS_REGISTRY, is_skipped
 
 
@@ -296,7 +299,65 @@ def run_chat_stream(
 
 @app.get("/health")
 def health() -> dict[str, bool | str]:
-    return {"ok": True, "model": MODEL}
+    return {"ok": True, "model": get_model()}
+
+
+class ModelUpdate(BaseModel):
+    model: str
+
+
+class ModelInfo(TypedDict):
+    id: str
+    name: str
+    context_length: int
+    prompt_price: float
+    completion_price: float
+    supports_tools: bool
+
+
+@app.get("/settings/model")
+def get_current_model() -> dict[str, str]:
+    return {"model": get_model()}
+
+
+@app.put("/settings/model")
+def set_current_model(body: ModelUpdate) -> dict[str, str]:
+    save_model(body.model)
+    return {"model": body.model}
+
+
+@app.get("/openrouter/models")
+def list_openrouter_models() -> list[ModelInfo]:
+    """Proxies OpenRouter's public model catalog (no API key required),
+    trimmed to what the desktop app's model picker needs: id/name, context
+    size, price per million tokens (OpenRouter reports per-token), and
+    whether the model supports function calling at all (this harness is
+    unusable with the tool-calling loop otherwise)."""
+    try:
+        resp = requests.get("https://openrouter.ai/api/v1/models", timeout=15)
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        raise HTTPException(502, f"could not reach OpenRouter ({e})") from e
+
+    models: list[ModelInfo] = []
+    for m in resp.json().get("data", []):
+        pricing = m.get("pricing") or {}
+        try:
+            prompt_price = float(pricing.get("prompt", 0)) * 1_000_000
+            completion_price = float(pricing.get("completion", 0)) * 1_000_000
+        except (TypeError, ValueError):
+            continue
+        models.append(
+            {
+                "id": m["id"],
+                "name": m.get("name") or m["id"],
+                "context_length": m.get("context_length") or 0,
+                "prompt_price": round(prompt_price, 4),
+                "completion_price": round(completion_price, 4),
+                "supports_tools": "tools" in (m.get("supported_parameters") or []),
+            }
+        )
+    return models
 
 
 @app.post("/chat")

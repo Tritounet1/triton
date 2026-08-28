@@ -33,3 +33,6 @@ mcp_servers.json
 
 # Projets (dossiers locaux de la machine, pas versionnes)
 projects.json
+
+# Preferences locales (modele choisi, etc.)
+settings.json

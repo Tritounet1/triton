@@ -12,6 +12,8 @@ from openai.types.chat import (
 )
 from openai.types.chat.chat_completion_message_function_tool_call import Function
 
+from settings import load_model
+
 _ = load_dotenv()
 
 open_router_api_key = os.getenv("OPEN_ROUTER_API_KEY")
@@ -21,12 +23,19 @@ client = OpenAI(
     api_key=open_router_api_key,
 )
 
-MODEL = "anthropic/claude-haiku-4.5"
 # 1024 was too low for tool calls carrying a full file as their "content"
 # argument (e.g. write_file on an HTML page with inline CSS): the completion
 # got truncated mid-JSON, the tool call became unparseable, and the model
 # burned iterations retrying increasingly convoluted workarounds instead.
 MAX_TOKENS = 8192
+
+
+def get_model() -> str:
+    """Reads the currently selected model fresh from settings.json on every
+    call (like mcp_client.load_configs(), projects.load_projects()...), so
+    a change made in the desktop app's Settings takes effect immediately,
+    no restart needed."""
+    return load_model()
 
 
 @dataclass
@@ -43,16 +52,17 @@ def call_chat(
     messages: list[ChatCompletionMessageParam],
     tools: list[ChatCompletionToolParam] | None = None,
 ) -> ChatResult:
+    model = get_model()
     if tools:
         resp = client.chat.completions.create(
-            model=MODEL,
+            model=model,
             messages=messages,
             tools=tools,
             max_tokens=MAX_TOKENS,
         )
     else:
         resp = client.chat.completions.create(
-            model=MODEL,
+            model=model,
             messages=messages,
             max_tokens=MAX_TOKENS,
         )
@@ -77,9 +87,10 @@ def stream_chat(
     arrives, then the full ChatResult once the response is complete (tool
     calls are never streamed chunk by chunk, just reconstructed silently,
     there's no point displaying them partially)."""
+    model = get_model()
     if tools:
         stream = client.chat.completions.create(
-            model=MODEL,
+            model=model,
             messages=messages,
             tools=tools,
             max_tokens=MAX_TOKENS,
@@ -88,7 +99,7 @@ def stream_chat(
         )
     else:
         stream = client.chat.completions.create(
-            model=MODEL,
+            model=model,
             messages=messages,
             max_tokens=MAX_TOKENS,
             stream=True,
@@ -97,7 +108,7 @@ def stream_chat(
 
     content_parts: list[str] = []
     tool_call_parts: dict[int, dict[str, str]] = {}
-    model_name = MODEL
+    model_name = model
     prompt_tokens = completion_tokens = total_tokens = 0
 
     for chunk in stream:

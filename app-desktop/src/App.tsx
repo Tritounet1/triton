@@ -26,6 +26,7 @@ import { TextInput } from "@astryxdesign/core/TextInput";
 import { parseSSE } from "./sse";
 import { formatArgs } from "./format";
 import { SettingsPage } from "./SettingsPage";
+import { ModelPage } from "./ModelPage";
 import { LogsPage } from "./LogsPage";
 import { McpServersPage } from "./McpServersPage";
 import { ProjectFilePanel } from "./ProjectFilePanel";
@@ -230,7 +231,7 @@ function App() {
   const [themeMode, setThemeMode] = useState<"light" | "dark">(() =>
     localStorage.getItem("triton_theme") === "light" ? "light" : "dark",
   );
-  const [view, setView] = useState<"chat" | "settings" | "logs" | "mcp">("chat");
+  const [view, setView] = useState<"chat" | "settings" | "logs" | "mcp" | "model">("chat");
 
   function toggleTheme() {
     setThemeMode((prev) => {
@@ -913,10 +914,12 @@ function App() {
             onBack={() => { setView("chat"); }}
             onOpenLogs={() => { setView("logs"); }}
             onOpenMcp={() => { setView("mcp"); }}
+            onOpenModel={() => { setView("model"); }}
           />
         )}
         {view === "logs" && <LogsPage onBack={() => { setView("settings"); }} />}
         {view === "mcp" && <McpServersPage onBack={() => { setView("settings"); }} />}
+        {view === "model" && <ModelPage onBack={() => { setView("settings"); }} />}
         {view === "chat" && (
         <div className="flex h-full">
         <ChatLayout
