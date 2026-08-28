@@ -1,6 +1,10 @@
 import json
 
-from openai.types.chat import ChatCompletionMessageParam
+from openai.types.chat import (
+    ChatCompletionMessageParam,
+    ChatCompletionMessageToolCallUnion,
+    ChatCompletionMessageToolCallUnionParam,
+)
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import HTML
 from rich.console import Console
@@ -11,6 +15,73 @@ from api import call_chat
 from tools import TOOL_FUNCTIONS, TOOLS
 
 SYSTEM_PROMPT = "You are a concise and clear assistant."
+MAX_ITERATIONS = 10
+
+
+def run_tool_calls(
+    console: Console, tool_calls: list[ChatCompletionMessageToolCallUnion]
+) -> list[ChatCompletionMessageParam]:
+    """Exécute chaque appel d'outil demandé par le modèle, affiche le résultat,
+    et renvoie les messages "tool" correspondants à ajouter à l'historique."""
+    tool_messages: list[ChatCompletionMessageParam] = []
+
+    for tool_call in tool_calls:
+        if tool_call.type != "function":
+            continue
+
+        name = tool_call.function.name
+        raw_args = tool_call.function.arguments
+
+        try:
+            args = json.loads(raw_args)
+        except json.JSONDecodeError:
+            result = f"erreur : arguments invalides ({raw_args})"
+            args = {}
+        else:
+            fn = TOOL_FUNCTIONS.get(name)
+            result = fn(**args) if fn else f"outil inconnu : {name}"
+
+        args_repr = ", ".join(f"{k}={v!r}" for k, v in args.items())
+        console.print(
+            Panel(
+                result,
+                title=f"outil : {name}({args_repr})",
+                title_align="left",
+                border_style="yellow",
+            )
+        )
+
+        tool_messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "content": result,
+            }
+        )
+
+    return tool_messages
+
+
+def to_tool_call_params(
+    tool_calls: list[ChatCompletionMessageToolCallUnion],
+) -> list[ChatCompletionMessageToolCallUnionParam]:
+    """Convertit les appels d'outils reçus de l'API vers le format attendu en entrée,
+    pour pouvoir les remettre dans l'historique de messages."""
+    params: list[ChatCompletionMessageToolCallUnionParam] = []
+    for tool_call in tool_calls:
+        if tool_call.type != "function":
+            continue
+        params.append(
+            {
+                "id": tool_call.id,
+                "type": "function",
+                "function": {
+                    "name": tool_call.function.name,
+                    "arguments": tool_call.function.arguments,
+                },
+            }
+        )
+    return params
 
 
 def main():
@@ -36,56 +107,51 @@ def main():
 
         messages.append({"role": "user", "content": user_input})
 
-        with console.status("[dim]réflexion...[/dim]", spinner="dots"):
-            reply = call_chat(messages, tools=TOOLS)
+        iteration = 0
+        done = False
 
-        if reply.tool_calls:
-            # étape 4 : on exécute l'outil et on affiche le résultat une fois,
-            # sans rappeler le modèle automatiquement (ça viendra à l'étape 5)
-            for tool_call in reply.tool_calls:
-                if tool_call.type != "function":
-                    continue
+        while iteration < MAX_ITERATIONS and not done:
+            iteration += 1
 
-                name = tool_call.function.name
-                try:
-                    args = json.loads(tool_call.function.arguments)
-                except json.JSONDecodeError:
-                    console.print(
-                        f"[red]arguments invalides pour {name} : {tool_call.function.arguments}[/red]"
-                    )
-                    continue
+            with console.status("[dim]réflexion...[/dim]", spinner="dots"):
+                reply = call_chat(messages, tools=TOOLS)
 
-                fn = TOOL_FUNCTIONS.get(name)
-                result = fn(**args) if fn else f"outil inconnu : {name}"
-
-                args_repr = ", ".join(f"{k}={v!r}" for k, v in args.items())
+            if reply.tool_calls:
                 console.print(
-                    Panel(
-                        result,
-                        title=f"outil : {name}({args_repr})",
-                        title_align="left",
-                        border_style="yellow",
-                    )
+                    f"[dim]itération {iteration} : {len(reply.tool_calls)} appel(s) d'outil[/dim]"
                 )
-            console.print()
-            continue
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": reply.content,
+                        "tool_calls": to_tool_call_params(reply.tool_calls),
+                    }
+                )
+                messages.extend(run_tool_calls(console, reply.tool_calls))
+                continue
 
-        if reply.content is None:
-            raise RuntimeError("le modèle n'a renvoyé ni texte ni appel d'outil.")
+            if reply.content is None:
+                raise RuntimeError("le modèle n'a renvoyé ni texte ni appel d'outil.")
 
-        messages.append({"role": "assistant", "content": reply.content})
+            messages.append({"role": "assistant", "content": reply.content})
 
-        console.print(
-            Panel(
-                Markdown(reply.content),
-                title="Triton",
-                title_align="left",
-                subtitle=f"[dim]{reply.model} · {reply.total_tokens} tokens ({reply.prompt_tokens} + {reply.completion_tokens})[/dim]",
-                subtitle_align="right",
-                border_style="magenta",
+            console.print(
+                Panel(
+                    Markdown(reply.content),
+                    title="Triton",
+                    title_align="left",
+                    subtitle=f"[dim]{reply.model} · {reply.total_tokens} tokens ({reply.prompt_tokens} + {reply.completion_tokens})[/dim]",
+                    subtitle_align="right",
+                    border_style="magenta",
+                )
             )
-        )
-        console.print()
+            console.print()
+            done = True
+
+        if not done:
+            console.print(
+                f"[red]limite de {MAX_ITERATIONS} itérations atteinte, le modèle n'a pas conclu.[/red]\n"
+            )
 
     console.print("[dim]à bientôt[/dim]")
 
