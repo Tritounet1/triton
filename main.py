@@ -10,6 +10,7 @@ from prompt_toolkit.formatted_text import HTML
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.prompt import Confirm
 
 from api import call_chat
 from tools import TOOLS, TOOLS_REGISTRY
@@ -21,8 +22,10 @@ MAX_ITERATIONS = 10
 def run_tool_calls(
     console: Console, tool_calls: list[ChatCompletionMessageToolCallUnion]
 ) -> list[ChatCompletionMessageParam]:
-    """Exécute chaque appel d'outil demandé par le modèle, affiche le résultat,
-    et renvoie les messages "tool" correspondants à ajouter à l'historique."""
+    """Exécute chaque appel d'outil demandé par le modèle (en demandant une
+    confirmation avant les outils qui modifient quelque chose), affiche le
+    résultat, et renvoie les messages "tool" correspondants à ajouter à
+    l'historique."""
     tool_messages: list[ChatCompletionMessageParam] = []
 
     for tool_call in tool_calls:
@@ -39,7 +42,17 @@ def run_tool_calls(
             args = {}
         else:
             tool = TOOLS_REGISTRY.get(name)
-            result = tool.fn(**args) if tool else f"outil inconnu : {name}"
+
+            if tool is None:
+                result = f"outil inconnu : {name}"
+            elif tool.read_only or Confirm.ask(
+                f"[yellow]autoriser[/yellow] {name}({', '.join(f'{k}={v!r}' for k, v in args.items())}) ?",
+                console=console,
+                default=False,
+            ):
+                result = tool.fn(**args)
+            else:
+                result = "action refusée par l'utilisateur"
 
         args_repr = ", ".join(f"{k}={v!r}" for k, v in args.items())
         console.print(
