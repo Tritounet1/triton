@@ -76,16 +76,16 @@ pnpm tauri dev
 
 ```
 harness/
-├── api.py                 model calls: call_chat() / stream_chat(), the ChatResult type
-├── tools.py                tools exposed to the model: read_file, list_files, write_file, run_shell
-├── sessions.py              conversation persistence (JSON) and their titles
-├── logs.py                  structured logs, one JSON event per line (logs/events.jsonl)
-├── logs_summary.py          CLI summary of the logs (uv run logs_summary.py)
+├── api.py                     model calls: call_chat() / stream_chat(), the ChatResult type
+├── tools.py                   tools exposed to the model: read_file, list_files, write_file, run_shell
+├── sessions.py                conversation persistence (JSON) and their titles
+├── logs.py                    structured logs, one JSON event per line (logs/events.jsonl)
+├── logs_summary.py            CLI summary of the logs (uv run logs_summary.py)
 │
-├── main.py                 ── ENTRY POINT #1 : interactive CLI (rich + prompt_toolkit)
-├── server.py                ── ENTRY POINT #2 : the same loop over HTTP/SSE, for the desktop app
+├── main.py                    ENTRY POINT #1 : interactive CLI (rich + prompt_toolkit)
+├── server.py                  ENTRY POINT #2 : the same loop over HTTP/SSE, for the desktop app
 │
-└── app-desktop/             Tauri + React GUI, talks to server.py
+└── app-desktop/               Tauri + React GUI, talks to server.py
     └── src/
         ├── App.tsx            chat view: sidebar, streaming, tool confirmations
         ├── SettingsPage.tsx   settings, links to the log viewer
