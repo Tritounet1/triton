@@ -208,6 +208,25 @@ function App() {
     null,
   );
   const abortControllerRef = useRef<AbortController | null>(null);
+  // ids des sous-agents dispatches dans la conversation ACTIVE (remis a
+  // zero au changement de conversation) : permet de relancer le modele
+  // automatiquement une fois l'un d'eux termine, plutot que de rester en
+  // attente indefiniment d'un nouveau message de l'utilisateur.
+  const pendingSubagentIdsRef = useRef<Set<string>>(new Set());
+  // tenues a jour apres chaque rendu (effet sans tableau de dependances),
+  // lues depuis un minuteur autonome (setInterval) plutot qu'une fermeture
+  // figee sur le rendu ou l'effet a demarre : evite de redemarrer ce
+  // minuteur a chaque frappe/changement d'etat, cf. cancelMessage/
+  // useCallback plus haut pour le meme probleme. Mutation directe pendant
+  // le rendu interdite par react-hooks/refs, d'ou l'effet.
+  const sendingRef = useRef(sending);
+  const inputRef = useRef(input);
+  const sendMessageRef = useRef((_text: string): void => undefined);
+  useEffect(() => {
+    sendingRef.current = sending;
+    inputRef.current = input;
+    sendMessageRef.current = (text: string) => { void sendMessage(text); };
+  });
   const [themeMode, setThemeMode] = useState<"light" | "dark">(() =>
     localStorage.getItem("triton_theme") === "light" ? "light" : "dark",
   );
@@ -359,6 +378,38 @@ function App() {
 
   }, []);
 
+  // relance automatiquement le modele une fois qu'un sous-agent dispatche
+  // dans la conversation active se termine : sans ca, le tour se termine
+  // des que le modele repond en texte (pas d'appel d'outil) et plus rien ne
+  // le fait revenir verifier le resultat tant que l'utilisateur n'envoie
+  // pas un nouveau message. Lit sending/input via des refs (tenues a jour
+  // a chaque rendu plus haut) plutot que de redemarrer ce minuteur a chaque
+  // frappe/etat.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (pendingSubagentIdsRef.current.size === 0) return;
+      if (sendingRef.current || inputRef.current.trim()) return;
+
+      fetch(`${API_BASE}/subagents`)
+        .then((r) => (r.ok ? r.json() : []))
+        .then((data: { id: string; status: string }[]) => {
+          const finished = data.find(
+            (t) => pendingSubagentIdsRef.current.has(t.id) && t.status !== "running",
+          );
+          if (!finished) return;
+          pendingSubagentIdsRef.current.delete(finished.id);
+          sendMessageRef.current(
+            `(vérification automatique) Le sous-agent ${finished.id} a terminé, ` +
+              "regarde son résultat avec check_subagent et continue la tâche.",
+          );
+        })
+        .catch(() => {
+          // API hors ligne : nouvelle tentative au prochain intervalle
+        });
+    }, 4000);
+    return () => { clearInterval(interval); };
+  }, []);
+
   function switchSession(id: string) {
     setView("chat");
     if (id === sessionId || sending) return;
@@ -366,6 +417,7 @@ function App() {
     localStorage.setItem("triton_session_id", id);
     setMessages([]);
     setActiveProjectId(sessions.find((s) => s.id === id)?.project_id ?? null);
+    pendingSubagentIdsRef.current.clear();
     loadHistory(id);
   }
 
@@ -376,6 +428,7 @@ function App() {
     localStorage.removeItem("triton_session_id");
     setMessages([]);
     setActiveProjectId(null);
+    pendingSubagentIdsRef.current.clear();
   }
 
   function startProjectSession(projectId: string) {
@@ -385,6 +438,7 @@ function App() {
     localStorage.removeItem("triton_session_id");
     setMessages([]);
     setActiveProjectId(projectId);
+    pendingSubagentIdsRef.current.clear();
   }
 
   function toggleProjectCollapsed(projectId: string) {
@@ -501,6 +555,10 @@ function App() {
             // (couvre aussi les outils MCP) : une requete GET en trop est
             // negligeable.
             setFileRefreshTick((t) => t + 1);
+            if (data.tool === "dispatch_subagent") {
+              const match = /\(id=([a-f0-9]+)\)/.exec((data.result as string) || "");
+              if (match?.[1]) pendingSubagentIdsRef.current.add(match[1]);
+            }
             break;
           }
           case "confirmation_required": {
