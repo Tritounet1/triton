@@ -13,6 +13,7 @@ from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
 import mcp_client
+import subagents
 from api import MODEL, ChatResult, call_chat
 from logs import LOGS_FILE, log_event
 from main import (
@@ -474,6 +475,11 @@ def get_project_tree(project_id: str) -> dict[str, object]:
     budget = [MAX_TREE_ENTRIES]
     tree = _build_tree(root, budget)
     return {"tree": tree, "truncated": budget[0] <= 0}
+
+
+@app.get("/subagents")
+def list_subagents() -> list[subagents.SubagentTask]:
+    return subagents.list_tasks()
 
 
 @app.get("/logs")

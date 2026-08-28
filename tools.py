@@ -8,6 +8,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 import requests
 from openai.types.chat import ChatCompletionToolParam
 
+import subagents
+
 
 @dataclass
 class Tool:
@@ -290,6 +292,14 @@ def load_memory() -> str:
     if not MEMORY_FILE.exists():
         return ""
     return MEMORY_FILE.read_text().strip()
+
+
+def dispatch_subagent(task: str) -> str:
+    return subagents.dispatch(task)
+
+
+def check_subagent(task_id: str) -> str:
+    return subagents.check(task_id)
 
 
 TOOLS_REGISTRY: dict[str, Tool] = {
@@ -723,6 +733,56 @@ TOOLS_REGISTRY: dict[str, Tool] = {
         },
         fn=remember,
         read_only=False,
+    ),
+    "dispatch_subagent": Tool(
+        schema={
+            "type": "function",
+            "function": {
+                "name": "dispatch_subagent",
+                "description": "Starts a focused, read-only research sub-agent in the "
+                "background and returns immediately, without waiting for it to finish "
+                "(true parallel execution: keep working while it runs). Its own reasoning "
+                "and tool calls stay isolated from this conversation, only its final "
+                "result comes back, when checked with check_subagent. Give it a "
+                "self-contained task description, since it starts with no context "
+                "beyond what's provided.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "task": {
+                            "type": "string",
+                            "description": "Self-contained description of what the "
+                            "sub-agent should research or find out.",
+                        },
+                    },
+                    "required": ["task"],
+                },
+            },
+        },
+        fn=dispatch_subagent,
+        read_only=True,
+    ),
+    "check_subagent": Tool(
+        schema={
+            "type": "function",
+            "function": {
+                "name": "check_subagent",
+                "description": "Checks on a sub-agent started with dispatch_subagent: "
+                "returns its result if it finished, or that it's still running.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "task_id": {
+                            "type": "string",
+                            "description": "Id returned by dispatch_subagent.",
+                        },
+                    },
+                    "required": ["task_id"],
+                },
+            },
+        },
+        fn=check_subagent,
+        read_only=True,
     ),
 }
 

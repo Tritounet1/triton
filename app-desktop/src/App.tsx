@@ -29,6 +29,7 @@ import { SettingsPage } from "./SettingsPage";
 import { LogsPage } from "./LogsPage";
 import { McpServersPage } from "./McpServersPage";
 import { ProjectFilePanel } from "./ProjectFilePanel";
+import { SubagentsPanel } from "./SubagentsPanel";
 import {
   CheckIcon,
   ChevronRightIcon,
@@ -785,6 +786,8 @@ function App() {
                 );
               })}
             </SideNavSection>
+
+            <SubagentsPanel />
 
             <SideNavSection title="Conversations">
               {filteredSessions.length === 0 && (
