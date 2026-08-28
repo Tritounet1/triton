@@ -31,6 +31,19 @@ MAX_CONTEXT_CHARS = 8000
 KEEP_RECENT_TURNS = 3
 
 
+def format_args(args: dict[str, object]) -> str:
+    """Représente les arguments d'un appel d'outil pour l'affichage, sans
+    jamais dumper un contenu potentiellement long (ex. le "content" de
+    write_file), juste sa taille."""
+    parts: list[str] = []
+    for k, v in args.items():
+        if k == "content" and isinstance(v, str):
+            parts.append(f"{k}=<{len(v)} caractères>")
+        else:
+            parts.append(f"{k}={v!r}")
+    return ", ".join(parts)
+
+
 def run_tool_calls(
     console: Console, tool_calls: list[ChatCompletionMessageToolCallUnion]
 ) -> list[ChatCompletionMessageParam]:
@@ -59,7 +72,7 @@ def run_tool_calls(
             if tool is None:
                 result = f"outil inconnu : {name}"
             elif tool.read_only or Confirm.ask(
-                f"[yellow]autoriser[/yellow] {name}({', '.join(f'{k}={v!r}' for k, v in args.items())}) ?",
+                f"[yellow]autoriser[/yellow] {name}({format_args(args)}) ?",
                 console=console,
                 default=False,
             ):
@@ -69,7 +82,7 @@ def run_tool_calls(
             else:
                 result = "action refusée par l'utilisateur"
 
-        args_repr = ", ".join(f"{k}={v!r}" for k, v in args.items())
+        args_repr = format_args(args)
         console.print(
             Panel(
                 result,
