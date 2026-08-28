@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { Theme } from "@astryxdesign/core/theme";
 import { neutralTheme } from "@astryxdesign/theme-neutral/built";
 import { AppShell } from "@astryxdesign/core/AppShell";
@@ -16,6 +16,7 @@ import {
 } from "@astryxdesign/core/Chat";
 import { IconButton } from "@astryxdesign/core/IconButton";
 import { Button } from "@astryxdesign/core/Button";
+import { Markdown } from "@astryxdesign/core/Markdown";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Timestamp } from "@astryxdesign/core/Timestamp";
 import { Text } from "@astryxdesign/core/Text";
@@ -444,33 +445,32 @@ function App() {
             />
           }
           composer={
-            <div className="px-6 pb-4">
-              <ChatComposer
-                value={input}
-                onChange={setInput}
-                onSubmit={sendMessage}
-                placeholder="Écrire un message..."
-                isDisabled={sending || !!pendingConfirmation}
-                density="compact"
-                elevation="none"
-                footerActions={
-                  <IconButton
-                    label="Joindre (pas encore disponible)"
-                    icon={<PlusIcon />}
-                    variant="ghost"
-                    size="sm"
-                    isDisabled
-                  />
-                }
-                sendActions={
-                  apiModel ? (
-                    <Text size="2xs" color="secondary">
-                      {apiModel}
-                    </Text>
-                  ) : undefined
-                }
-              />
-            </div>
+            <ChatComposer
+              value={input}
+              onChange={setInput}
+              onSubmit={sendMessage}
+              placeholder="Écrire un message..."
+              isDisabled={sending || !!pendingConfirmation}
+              density="compact"
+              elevation="none"
+              style={{ "--_chat-composer-padding": "16px" } as CSSProperties}
+              footerActions={
+                <IconButton
+                  label="Joindre (pas encore disponible)"
+                  icon={<PlusIcon />}
+                  variant="ghost"
+                  size="sm"
+                  isDisabled
+                />
+              }
+              sendActions={
+                apiModel ? (
+                  <Text size="2xs" color="secondary">
+                    {apiModel}
+                  </Text>
+                ) : undefined
+              }
+            />
           }
         >
           <ChatMessageList isStreaming={sending}>
@@ -532,7 +532,7 @@ function App() {
                       />
                     ) : (
                       <ChatMessageBubble key={bi} variant="ghost" width="100%">
-                        {block.msg.text}
+                        <Markdown>{block.msg.text}</Markdown>
                       </ChatMessageBubble>
                     ),
                   )}
