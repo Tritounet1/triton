@@ -22,6 +22,11 @@ client = OpenAI(
 )
 
 MODEL = "anthropic/claude-haiku-4.5"
+# 1024 was too low for tool calls carrying a full file as their "content"
+# argument (e.g. write_file on an HTML page with inline CSS): the completion
+# got truncated mid-JSON, the tool call became unparseable, and the model
+# burned iterations retrying increasingly convoluted workarounds instead.
+MAX_TOKENS = 8192
 
 
 @dataclass
@@ -43,13 +48,13 @@ def call_chat(
             model=MODEL,
             messages=messages,
             tools=tools,
-            max_tokens=1024,
+            max_tokens=MAX_TOKENS,
         )
     else:
         resp = client.chat.completions.create(
             model=MODEL,
             messages=messages,
-            max_tokens=1024,
+            max_tokens=MAX_TOKENS,
         )
 
     message = resp.choices[0].message
@@ -77,7 +82,7 @@ def stream_chat(
             model=MODEL,
             messages=messages,
             tools=tools,
-            max_tokens=1024,
+            max_tokens=MAX_TOKENS,
             stream=True,
             stream_options={"include_usage": True},
         )
@@ -85,7 +90,7 @@ def stream_chat(
         stream = client.chat.completions.create(
             model=MODEL,
             messages=messages,
-            max_tokens=1024,
+            max_tokens=MAX_TOKENS,
             stream=True,
             stream_options={"include_usage": True},
         )
