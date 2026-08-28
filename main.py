@@ -1,9 +1,11 @@
 import json
+import time
 
 from openai.types.chat import (
     ChatCompletionMessageParam,
     ChatCompletionMessageToolCallUnion,
     ChatCompletionMessageToolCallUnionParam,
+    ChatCompletionToolParam,
 )
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import HTML
@@ -12,7 +14,8 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Confirm
 
-from api import call_chat
+from api import ChatResult, call_chat
+from logs import log_event
 from sessions import latest_session_path, load_session, new_session_path, save_session
 from tools import TOOLS, TOOLS_REGISTRY
 
@@ -40,6 +43,7 @@ def run_tool_calls(
 
         name = tool_call.function.name
         raw_args = tool_call.function.arguments
+        duration = 0.0
 
         try:
             args = json.loads(raw_args)
@@ -56,7 +60,9 @@ def run_tool_calls(
                 console=console,
                 default=False,
             ):
+                start = time.perf_counter()
                 result = tool.fn(**args)
+                duration = time.perf_counter() - start
             else:
                 result = "action refusée par l'utilisateur"
 
@@ -68,6 +74,15 @@ def run_tool_calls(
                 title_align="left",
                 border_style="yellow",
             )
+        )
+
+        log_event(
+            type="tool_call",
+            tool=name,
+            args=args,
+            result_preview=result[:300],
+            result_chars=len(result),
+            duration_seconds=round(duration, 3),
         )
 
         tool_messages.append(
@@ -103,6 +118,27 @@ def to_tool_call_params(
     return params
 
 
+def timed_call_chat(
+    messages: list[ChatCompletionMessageParam],
+    tools: list[ChatCompletionToolParam] | None = None,
+) -> ChatResult:
+    """Appelle le modèle en chronométrant l'appel et en le loguant."""
+    start = time.perf_counter()
+    reply = call_chat(messages, tools=tools)
+    duration = time.perf_counter() - start
+
+    log_event(
+        type="model_call",
+        model=reply.model,
+        prompt_tokens=reply.prompt_tokens,
+        completion_tokens=reply.completion_tokens,
+        total_tokens=reply.total_tokens,
+        tool_calls=len(reply.tool_calls),
+        duration_seconds=round(duration, 3),
+    )
+    return reply
+
+
 def estimate_size(messages: list[ChatCompletionMessageParam]) -> int:
     return len(json.dumps(messages))
 
@@ -122,7 +158,7 @@ def summarize(old_messages: list[ChatCompletionMessageParam]) -> str:
         },
         {"role": "user", "content": f"résume cette conversation :\n\n{transcript}"},
     ]
-    result = call_chat(summary_request)
+    result = timed_call_chat(summary_request)
     return result.content or "(résumé vide)"
 
 
@@ -197,7 +233,7 @@ def main():
             iteration += 1
 
             with console.status("[dim]réflexion...[/dim]", spinner="dots"):
-                reply = call_chat(messages, tools=TOOLS)
+                reply = timed_call_chat(messages, tools=TOOLS)
 
             if reply.tool_calls:
                 console.print(

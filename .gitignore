@@ -17,3 +17,6 @@ PLAN.md
 
 # Historique de conversation persistant (donnees locales, pas versionnees)
 sessions/
+
+# Logs d'observabilite (donnees locales, pas versionnees)
+logs/
