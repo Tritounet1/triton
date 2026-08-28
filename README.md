@@ -53,3 +53,21 @@ To inspect the logs afterward:
 ```
 uv run logs_summary.py
 ```
+
+## Desktop app
+
+`app-desktop/` is a [Tauri](https://tauri.app) + React app that talks to `server.py`, a small FastAPI server exposing the same agentic loop over HTTP (streaming via Server-Sent Events, with tool confirmations paused mid-stream until the client approves or denies them).
+
+Its interface is built with [Astryx](https://astryx.atmeta.com/docs/getting-started), Meta's open-source React design system — components (`AppShell`, `SideNav`, the `Chat*` family) plus a Tailwind v4 token bridge, no separate build step required.
+
+Run the API first, then the app:
+
+```
+uv run server.py
+```
+
+```
+cd app-desktop
+pnpm install
+pnpm tauri dev
+```
