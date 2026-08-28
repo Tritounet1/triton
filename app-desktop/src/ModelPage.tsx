@@ -35,9 +35,8 @@ const FAMILIES: Record<string, { label: string; logo?: string }> = {
   openai: { label: "OpenAI (ChatGPT)", logo: "/openai-logo.svg" },
   google: { label: "Google (Gemini)", logo: "/gemini-logo.svg" },
   qwen: { label: "Qwen (Alibaba)", logo: "/qwen-logo.svg" },
-  "meta-llama": { label: "Meta (Llama)" },
-  meta: { label: "Meta (Llama)" },
-  mistralai: { label: "Mistral AI" },
+  "meta-llama": { label: "Meta (Llama)", logo: "/meta-logo.svg" },
+  mistralai: { label: "Mistral AI", logo: "/mistral-logo.svg" },
   "x-ai": { label: "xAI (Grok)" },
   deepseek: { label: "DeepSeek" },
   "z-ai": { label: "Z.ai (GLM)" },
@@ -50,13 +49,22 @@ const FAMILIES: Record<string, { label: string; logo?: string }> = {
   microsoft: { label: "Microsoft" },
 };
 
+// prefixes OpenRouter differents pour une meme famille (ex. "meta" et
+// "meta-llama" designent tous les deux Meta) : normalises vers une seule
+// cle canonique avant regroupement, sinon ils apparaissent comme deux
+// groupes separes avec le meme nom
+const FAMILY_ALIASES: Record<string, string> = {
+  meta: "meta-llama",
+};
+
 // grandes familles en premier (dans cet ordre), puis le reste des familles
 // nommees par ordre alphabetique, "Autres" toujours en dernier
 const FAMILY_PRIORITY = ["anthropic", "openai", "google", "qwen"];
 
 function familyKey(id: string): string {
   const prefix = id.replace(/^~/, "").split("/")[0] ?? "";
-  return prefix in FAMILIES ? prefix : "other";
+  const canonical = FAMILY_ALIASES[prefix] ?? prefix;
+  return canonical in FAMILIES ? canonical : "other";
 }
 
 function familyInfo(key: string): { label: string; logo?: string } {
@@ -83,9 +91,9 @@ export function ModelPage({ onBack }: ModelPageProps) {
   const [search, setSearch] = useState("");
   const [toolsOnly, setToolsOnly] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
-  const [collapsedFamilies, setCollapsedFamilies] = useState<Set<string>>(
-    () => new Set(["other"]),
-  );
+  // ferme par defaut : aucune famille n'est ouverte tant que l'utilisateur
+  // n'a pas clique dessus (ou tape une recherche, qui ignore cet etat).
+  const [expandedFamilies, setExpandedFamilies] = useState<Set<string>>(() => new Set());
 
   // pas d'appel synchrone a setLoading()/setError() ici (seulement dans les
   // callbacks), pour pouvoir etre utilisee telle quelle dans l'effet de
@@ -126,7 +134,7 @@ export function ModelPage({ onBack }: ModelPageProps) {
   }
 
   function toggleFamily(key: string) {
-    setCollapsedFamilies((prev) => {
+    setExpandedFamilies((prev) => {
       const next = new Set(prev);
       if (next.has(key)) {
         next.delete(key);
@@ -290,7 +298,7 @@ export function ModelPage({ onBack }: ModelPageProps) {
         <div className="flex flex-col gap-4">
           {groups.map(([key, list]) => {
             const info = familyInfo(key);
-            const isCollapsed = !isSearching && collapsedFamilies.has(key);
+            const isCollapsed = !isSearching && !expandedFamilies.has(key);
             return (
               <div key={key} className="overflow-hidden rounded-xl border border-border">
                 <button
