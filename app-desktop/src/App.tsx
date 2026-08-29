@@ -32,6 +32,7 @@ import { McpServersPage } from "./McpServersPage";
 import { ProjectFilePanel } from "./ProjectFilePanel";
 import { SubagentsPanel } from "./SubagentsPanel";
 import { modelAvatar } from "./modelFamilies";
+import { notifyIfBackground } from "./notifications";
 import {
   CheckIcon,
   ChevronRightIcon,
@@ -48,6 +49,10 @@ import {
 import "./App.css";
 
 const API_BASE = "http://127.0.0.1:8000";
+// en dessous de ce seuil, une reponse est consideree "rapide" : pas de
+// notif meme si l'app est en arriere-plan, pour ne pas notifier a chaque
+// petit echange.
+const LONG_RESPONSE_MS = 15000;
 
 type ChatMsg =
   | { kind: "user"; text: string; time: number }
@@ -449,12 +454,13 @@ function App() {
 
       fetch(`${API_BASE}/subagents`)
         .then((r) => (r.ok ? r.json() : []))
-        .then((data: { id: string; status: string }[]) => {
+        .then((data: { id: string; task: string; status: string }[]) => {
           const finished = data.find(
             (t) => pendingSubagentIdsRef.current.has(t.id) && t.status !== "running",
           );
           if (!finished) return;
           pendingSubagentIdsRef.current.delete(finished.id);
+          notifyIfBackground("Sous-agent terminé", finished.task);
           sendMessageRef.current(
             `(vérification automatique) Le sous-agent ${finished.id} a terminé, ` +
               "regarde son résultat avec check_subagent et continue la tâche.",
@@ -519,6 +525,8 @@ function App() {
   async function sendMessage(rawText: string) {
     const text = rawText.trim();
     if (!text || sending) return;
+
+    const startTime = performance.now();
 
     setInput("");
     setMessages((prev) => [...prev, { kind: "user", text, time: Date.now() }]);
@@ -688,6 +696,13 @@ function App() {
       setPendingConfirmation(null);
       setSending(false);
       loadSessions();
+
+      if (performance.now() - startTime > LONG_RESPONSE_MS) {
+        notifyIfBackground(
+          "Triton a terminé",
+          assistantText ? assistantText.slice(0, 200) : "La réponse est prête.",
+        );
+      }
     }
   }
 
