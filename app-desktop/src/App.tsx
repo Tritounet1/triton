@@ -6,6 +6,7 @@ import { Button } from "@astryxdesign/core/Button";
 import {
     ChatComposer,
     ChatComposerDrawer,
+    ChatComposerInput,
     ChatLayout,
     ChatMessage,
     ChatMessageBubble,
@@ -13,6 +14,7 @@ import {
     ChatMessageMetadata,
     ChatSystemMessage,
     ChatToolCalls,
+    type ChatComposerTrigger,
 } from "@astryxdesign/core/Chat";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { IconButton } from "@astryxdesign/core/IconButton";
@@ -28,6 +30,7 @@ import { TextInput } from "@astryxdesign/core/TextInput";
 import { Spinner } from "@astryxdesign/core/Spinner";
 import { Theme } from "@astryxdesign/core/theme";
 import { Timestamp } from "@astryxdesign/core/Timestamp";
+import { createStaticSource, type SearchableItem } from "@astryxdesign/core/Typeahead";
 import { neutralTheme } from "@astryxdesign/theme-neutral/built";
 import { open as openFolderDialog } from "@tauri-apps/plugin-dialog";
 import {
@@ -81,6 +84,47 @@ const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 // dans le composer habituel.
 const MULTI_AGENT_PREFIX = "/multi-agents ";
 const MULTI_AGENT_POLL_INTERVAL_MS = 1500;
+
+// menu declenche par "/" dans le composer (style Notion/Discord), via le
+// mecanisme de trigger deja fourni par ChatComposerInput - une seule
+// commande pour l'instant, mais fait pour en accueillir d'autres.
+const SLASH_COMMANDS: SearchableItem<{ description: string }>[] = [
+  {
+    id: "multi-agents",
+    label: "multi-agents",
+    auxiliaryData: {
+      description: "Répartit la tâche entre plusieurs agents spécialisés (recherche, code, rédaction...)",
+    },
+  },
+];
+
+const slashCommandSource = createStaticSource(SLASH_COMMANDS);
+
+const composerTriggers: ChatComposerTrigger[] = [
+  {
+    character: "/",
+    searchSource: slashCommandSource,
+    menuLabel: "Commandes",
+    emptySearchResultsText: "Aucune commande",
+    onSelect: (item) => `/${item.label} `,
+    renderItem: (item) => {
+      const description = (item as SearchableItem<{ description: string }>).auxiliaryData
+        ?.description;
+      return (
+        <div className="flex flex-col gap-0.5 px-2 py-1.5">
+          <Text size="sm" weight="medium">
+            /{item.label}
+          </Text>
+          {description && (
+            <Text size="2xs" color="secondary">
+              {description}
+            </Text>
+          )}
+        </div>
+      );
+    },
+  },
+];
 
 interface SentFile {
   name: string;
@@ -1639,6 +1683,7 @@ function App() {
                   isDisabled={sending || !!pendingConfirmation}
                   density="compact"
                   elevation="none"
+                  input={<ChatComposerInput triggers={composerTriggers} />}
                   style={
                     { "--_chat-composer-padding": "24px" } as CSSProperties
                   }

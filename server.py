@@ -1,4 +1,5 @@
 import json
+import logging
 import threading
 import uuid
 from collections.abc import AsyncIterator, Iterator
@@ -51,6 +52,28 @@ from sessions import (
 )
 from settings import load_monthly_budget, save_model, save_monthly_budget
 from tools import TOOLS, TOOLS_REGISTRY, enforce_project_sandbox, invoke_tool, is_skipped
+
+
+class _QuietPollingEndpoints(logging.Filter):
+    """The desktop app polls a handful of endpoints every 1.5-3s
+    (background tasks, subagents, an in-flight multi-agent run) for as
+    long as it's open - uvicorn's access log otherwise fills up with
+    almost nothing else, drowning out anything worth actually noticing.
+    Drops just those access log lines; POSTs, errors, and every other
+    route still log normally. Uvicorn's h11 protocol logs each request as
+    access_logger.info('%s - "%s %s HTTP/%s" %d', client_addr, method,
+    path, http_version, status) - record.args[2] is the path."""
+
+    _quiet_prefixes = ("/background_tasks", "/subagents", "/orchestrator/")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not isinstance(record.args, tuple) or len(record.args) < 3:
+            return True
+        path = record.args[2]
+        return not (isinstance(path, str) and path.startswith(self._quiet_prefixes))
+
+
+logging.getLogger("uvicorn.access").addFilter(_QuietPollingEndpoints())
 
 
 @asynccontextmanager
