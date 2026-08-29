@@ -76,9 +76,10 @@ export function BackgroundTasksSection({
           ) : (
             <IconButton
               label="Supprimer"
-              icon={<XIcon />}
+              icon={<XIcon className="h-3 w-3" />}
               variant="destructive"
               size="sm"
+              className="h-5 w-5 min-w-0 rounded-full p-0"
               onClick={(e) => {
                 e.stopPropagation();
                 onDelete(t.id);
