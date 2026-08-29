@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 import background_tasks
 import mcp_client
+import orchestrator
 import subagents
 from api import ChatResult, call_chat, get_model
 from logs import LOGS_FILE, log_event
@@ -782,6 +783,28 @@ def get_project_tree(project_id: str) -> dict[str, object]:
 @app.get("/subagents")
 def list_subagents() -> list[subagents.SubagentTask]:
     return subagents.list_tasks()
+
+
+class OrchestratorDispatch(BaseModel):
+    task: str
+
+
+@app.post("/orchestrator")
+def dispatch_orchestrator(body: OrchestratorDispatch) -> dict[str, str]:
+    return {"run_id": orchestrator.dispatch(body.task)}
+
+
+@app.get("/orchestrator")
+def list_orchestrator_runs() -> list[orchestrator.OrchestratorRun]:
+    return orchestrator.list_runs()
+
+
+@app.get("/orchestrator/{run_id}")
+def get_orchestrator_run(run_id: str) -> orchestrator.OrchestratorRun:
+    run = orchestrator.get(run_id)
+    if run is None:
+        raise HTTPException(404, "orchestrator run not found")
+    return run
 
 
 @app.get("/background_tasks")

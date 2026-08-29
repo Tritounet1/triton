@@ -62,8 +62,14 @@ class ChatResult:
 def call_chat(
     messages: list[ChatCompletionMessageParam],
     tools: list[ChatCompletionToolParam] | None = None,
+    model: str | None = None,
 ) -> ChatResult:
-    model = get_model()
+    """`model` overrides the currently selected model (settings.json) for
+    this call only - used by orchestrator.py, where each role runs a
+    specific model regardless of what's selected for the main conversation.
+    Omit it (the default) to keep using get_model(), as every other caller
+    does."""
+    model = model or get_model()
     if tools:
         resp = client.chat.completions.create(
             model=model,
