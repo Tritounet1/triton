@@ -376,6 +376,30 @@ def run_chat_stream(
             continue
 
         if reply.content is None:
+            if reply.finish_reason == "length":
+                # the model hit the output token limit before producing any
+                # visible content or tool call at all (common with reasoning
+                # models, which can burn the whole budget on hidden
+                # reasoning tokens) - recoverable, unlike a genuinely empty
+                # response: nudge it and let the loop retry, bounded by the
+                # same MAX_ITERATIONS as everything else.
+                yield sse(
+                    "info",
+                    {
+                        "message": "the model's response was cut off by the output length "
+                        "limit before producing anything usable - asking it to continue.",
+                    },
+                )
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": "Your last response was cut off by the output length "
+                        "limit before it produced any visible content or tool call. "
+                        "Continue, breaking the work into smaller steps if that's what "
+                        "caused it (e.g. write large files in smaller edits).",
+                    }
+                )
+                continue
             yield sse("error", {"message": "the model returned neither text nor a tool call."})
             done = True
             continue

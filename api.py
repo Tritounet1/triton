@@ -27,7 +27,12 @@ client = OpenAI(
 # argument (e.g. write_file on an HTML page with inline CSS): the completion
 # got truncated mid-JSON, the tool call became unparseable, and the model
 # burned iterations retrying increasingly convoluted workarounds instead.
-MAX_TOKENS = 8192
+# 8192 later proved too low too, for a different reason: reasoning models
+# (e.g. gemini-3.7-flash) count hidden "reasoning" tokens against the same
+# budget, and can burn through all of it before producing any visible
+# content or tool call at all (see run_chat_stream's handling of
+# finish_reason == "length" for what happens when that still occurs).
+MAX_TOKENS = 16384
 
 
 def get_model() -> str:
@@ -46,6 +51,12 @@ class ChatResult:
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
+    # "length" means max_tokens was hit before the model produced any
+    # content or tool call - distinguishing this from a genuinely empty
+    # response matters because it's recoverable (see run_chat_stream):
+    # reasoning models can burn their entire budget on hidden reasoning
+    # tokens with nothing left over for visible output.
+    finish_reason: str | None = None
 
 
 def call_chat(
@@ -67,15 +78,16 @@ def call_chat(
             max_tokens=MAX_TOKENS,
         )
 
-    message = resp.choices[0].message
+    choice = resp.choices[0]
     usage = resp.usage
     return ChatResult(
-        content=message.content,
-        tool_calls=list(message.tool_calls or []),
+        content=choice.message.content,
+        tool_calls=list(choice.message.tool_calls or []),
         model=resp.model,
         prompt_tokens=usage.prompt_tokens if usage else 0,
         completion_tokens=usage.completion_tokens if usage else 0,
         total_tokens=usage.total_tokens if usage else 0,
+        finish_reason=choice.finish_reason,
     )
 
 
@@ -110,6 +122,7 @@ def stream_chat(
     tool_call_parts: dict[int, dict[str, str]] = {}
     model_name = model
     prompt_tokens = completion_tokens = total_tokens = 0
+    finish_reason: str | None = None
 
     for chunk in stream:
         model_name = chunk.model
@@ -120,6 +133,9 @@ def stream_chat(
 
         if not chunk.choices:
             continue
+
+        if chunk.choices[0].finish_reason:
+            finish_reason = chunk.choices[0].finish_reason
 
         delta = chunk.choices[0].delta
 
@@ -155,4 +171,5 @@ def stream_chat(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=total_tokens,
+        finish_reason=finish_reason,
     )

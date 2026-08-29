@@ -132,6 +132,20 @@ def _run(task_entry: SubagentTask) -> None:
             )
 
             if not reply.tool_calls:
+                if reply.content is None and reply.finish_reason == "length":
+                    # cut off before producing anything usable (see
+                    # server.py's run_chat_stream for the full story) -
+                    # recoverable, nudge it and let the loop retry rather
+                    # than reporting a hollow "no text" result.
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": "Your last response was cut off by the output "
+                            "length limit before it produced any content. Continue, "
+                            "more concisely if needed.",
+                        }
+                    )
+                    continue
                 task_entry.result = reply.content or "(the sub-agent returned no text)"
                 task_entry.status = "done"
                 return

@@ -34,7 +34,11 @@ from sessions import (
 from tools import TOOLS, TOOLS_REGISTRY, invoke_tool, load_memory
 
 SYSTEM_PROMPT = "You are a concise and clear assistant."
-MAX_ITERATIONS = 10
+# raised from 10: a single non-trivial task (e.g. building a multi-section
+# styled page) can genuinely need this many tool calls, and the
+# length-truncation retry in run_chat_stream now also spends an iteration
+# each time it happens, both of which made 10 too tight in practice.
+MAX_ITERATIONS = 25
 
 
 def build_system_message(project: Project | None = None) -> ChatCompletionMessageParam:
@@ -399,6 +403,23 @@ def main():
                 continue
 
             if reply.content is None:
+                if reply.finish_reason == "length":
+                    # see server.py's run_chat_stream for why this is
+                    # recoverable rather than a hard failure
+                    console.print(
+                        "[dim]response cut off by the output length limit before producing "
+                        "anything usable, asking the model to continue...[/dim]"
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": "Your last response was cut off by the output length "
+                            "limit before it produced any visible content or tool call. "
+                            "Continue, breaking the work into smaller steps if that's what "
+                            "caused it (e.g. write large files in smaller edits).",
+                        }
+                    )
+                    continue
                 raise RuntimeError("the model returned neither text nor a tool call.")
 
             messages.append(
