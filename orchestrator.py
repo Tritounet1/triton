@@ -18,11 +18,18 @@ same safety boundary, not duplicated) and main.to_tool_call_params, but
 everything else - planning, role routing, parallel dispatch, synthesis -
 lives here.
 
-Read-only, like subagents.py, for the same reason: nothing here goes
-through the confirmation flow a live conversation has, so no subtask can
-write files or run shell commands, even a "code" one - it can read and
-analyze code, not change it. Lifting that needs a real confirmation story
-for a background thread, which doesn't exist yet.
+Read-only for every role except one deliberate exception: a "code"
+subtask gets write access (write_file/edit_file/delete_file/move_file,
+plus run_tests) when - and only when - the run is scoped to a Project,
+so those writes are always confined to that project's folder via the
+same enforce_project_sandbox every conversation gets. With no project
+selected, "code" stays exactly as read-only as every other role. This is
+still unsupervised: nothing here goes through the confirmation flow a
+live conversation has, so a code subtask can write/edit/delete files with
+no human review in the loop - the project scope is the only safety net,
+not a substitute for one. run_shell and git_commit are withheld from
+every role regardless: arbitrary command execution and committing
+autonomously are a different order of blast radius than file edits.
 
 Runs are persisted to RUNS_DIR (one JSON file per run) and reloaded at
 import time, so they survive a harness restart - unlike a live run's
@@ -62,32 +69,76 @@ MAX_SUBTASKS = 6
 RUNS_DIR = Path(__file__).parent / "orchestrator_runs"
 _persist_lock = threading.Lock()
 
-PLANNER_SYSTEM_PROMPT = (
+PLANNER_SYSTEM_PROMPT_TEMPLATE = (
     "You are a planning agent. Break the user's task into a small number of "
     "independent subtasks (as few as make sense, never more than "
     f"{MAX_SUBTASKS}), each tagged with the role best suited to it: "
-    "'code' (reading/analyzing code, suggesting changes - it cannot write "
-    "files), 'research' (web search, reading files/URLs, gathering "
-    "information), 'vision' (analyzing an image or PDF already referenced "
-    "in the task), or 'conversational' (anything else - drafting text, "
-    "general reasoning). Respond with ONLY a JSON array, no prose, no "
-    'markdown fences: [{"role": "...", "description": "..."}, ...]. Each '
-    "description must be self-contained: the subtask has no access to this "
-    "conversation, only what you write in its description."
+    "'code' ({code_capability}), 'research' (web search, reading "
+    "files/URLs, gathering information), 'vision' (analyzing an image or "
+    "PDF already referenced in the task), or 'conversational' (anything "
+    "else - drafting text, general reasoning). Respond with ONLY a JSON "
+    'array, no prose, no markdown fences: [{{"role": "...", "description": '
+    '"..."}}, ...]. Each description must be self-contained: the subtask '
+    "has no access to this conversation, only what you write in its "
+    "description."
 )
 
-SUBTASK_SYSTEM_PROMPT = (
-    "You are a focused, read-only sub-agent working on one part of a "
-    "larger task, assigned by a planner. You cannot modify any files or "
-    "run commands, only read, search, and browse the web. If web_search "
-    "fails or returns nothing useful, don't compensate by guessing or "
-    "fabricating URLs to fetch. Never infer or guess a date, version "
-    "number, or other specific fact from context - quote it exactly as it "
-    "appears in the source, and say plainly when a source doesn't state "
-    "something explicitly instead of filling the gap with a guess. Answer "
-    "concisely with your findings once you're done; this answer is the "
-    "only part of your work the planner will see."
+CODE_ROLE_READ_ONLY = "reading/analyzing code, suggesting changes - it cannot write files"
+CODE_ROLE_CAN_WRITE = (
+    "reading, analyzing, and actually writing/editing/deleting files "
+    "within the working directory given below - use it for changes you "
+    "want actually made, not just described"
 )
+
+
+def _planner_system_prompt(can_write_code: bool) -> str:
+    code_capability = CODE_ROLE_CAN_WRITE if can_write_code else CODE_ROLE_READ_ONLY
+    return PLANNER_SYSTEM_PROMPT_TEMPLATE.format(code_capability=code_capability)
+
+
+SUBTASK_SYSTEM_PROMPT_TEMPLATE = (
+    "You are a focused sub-agent working on one part of a larger task, "
+    "assigned by a planner. {capability_line} If web_search fails or "
+    "returns nothing useful, don't compensate by guessing or fabricating "
+    "URLs to fetch. Never infer or guess a date, version number, or other "
+    "specific fact from context - quote it exactly as it appears in the "
+    "source, and say plainly when a source doesn't state something "
+    "explicitly instead of filling the gap with a guess. Answer concisely "
+    "with what you did/found once you're done; this answer is the only "
+    "part of your work the planner will see."
+)
+
+READ_ONLY_CAPABILITY_LINE = (
+    "You cannot modify any files or run commands, only read, search, and browse the web."
+)
+
+CODE_WRITE_CAPABILITY_LINE = (
+    "Your role is 'code': unlike other sub-agents, you can write, edit, "
+    "and delete files within your working directory, and run the test "
+    "suite - but you cannot run arbitrary shell commands or make a git "
+    "commit. Nothing you do goes through a human confirmation step, so be "
+    "conservative: make the smallest change that accomplishes the task, "
+    "and run the tests after a change if the project has them."
+)
+
+
+def _subtask_system_prompt(can_write: bool) -> str:
+    capability_line = CODE_WRITE_CAPABILITY_LINE if can_write else READ_ONLY_CAPABILITY_LINE
+    return SUBTASK_SYSTEM_PROMPT_TEMPLATE.format(capability_line=capability_line)
+
+
+# a "code" subtask gets these instead of SUBAGENT_TOOL_NAMES only when a
+# project is scoped (see _run_subtask) - deliberately no run_shell
+# (arbitrary command execution) and no git_commit (nothing should commit
+# autonomously, unsupervised).
+CODE_WRITE_TOOL_NAMES = SUBAGENT_TOOL_NAMES | {
+    "write_file",
+    "edit_file",
+    "delete_file",
+    "move_file",
+    "run_tests",
+}
+
 
 SYNTHESIS_SYSTEM_PROMPT = (
     "You are the planner from earlier, reviewing the results of the "
@@ -183,14 +234,16 @@ def _parse_plan(raw: str) -> list[dict[str, str]]:
 def _run_subtask(run: OrchestratorRun, subtask: Subtask, project: Project | None) -> None:
     from tools import TOOLS_REGISTRY
 
+    can_write = subtask.role == "code" and project is not None
+    tool_names = CODE_WRITE_TOOL_NAMES if can_write else SUBAGENT_TOOL_NAMES
     registry: dict[str, Tool] = {
-        name: TOOLS_REGISTRY[name] for name in SUBAGENT_TOOL_NAMES if name in TOOLS_REGISTRY
+        name: TOOLS_REGISTRY[name] for name in tool_names if name in TOOLS_REGISTRY
     }
     schema = [tool.schema for tool in registry.values()]
 
     project_line = f"\nWorking directory: {project.folder_path}\n" if project else ""
     messages: list[ChatCompletionMessageParam] = [
-        {"role": "system", "content": SUBTASK_SYSTEM_PROMPT},
+        {"role": "system", "content": _subtask_system_prompt(can_write)},
         {
             "role": "user",
             "content": f"Role: {subtask.role}{project_line}\nTask: {subtask.description}",
@@ -279,7 +332,7 @@ def _run(run: OrchestratorRun) -> None:
     try:
         plan_reply = call_chat(
             [
-                {"role": "system", "content": PLANNER_SYSTEM_PROMPT},
+                {"role": "system", "content": _planner_system_prompt(project is not None)},
                 {"role": "user", "content": run.task + project_context},
             ],
             model=model_for_role("orchestrator"),

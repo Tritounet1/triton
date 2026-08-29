@@ -15,7 +15,7 @@ Role = str  # "orchestrator" | "conversational" | "code" | "research" | "vision"
 ROLE_MODELS: dict[str, str] = {
     "orchestrator": "anthropic/claude-sonnet-5",
     "conversational": "google/gemini-3.7-flash",
-    "code": "qwen/qwen3-coder-30b-a3b-instruct",
+    "code": "deepseek/deepseek-v4-flash",
     "research": "deepseek/deepseek-v4-flash",
     "vision": "google/gemini-3.7-flash",
 }
