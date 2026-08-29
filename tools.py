@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 import requests
 from openai.types.chat import ChatCompletionToolParam
 
+import background_tasks
 import subagents
 
 
@@ -16,6 +17,19 @@ class Tool:
     schema: ChatCompletionToolParam
     fn: Callable[..., str]
     read_only: bool
+
+
+# tools whose implementation needs to know which conversation called them
+# (e.g. to scope a background task to the session that started it), beyond
+# the plain model-provided arguments. server.py/main.py inject session_id
+# through invoke_tool() instead of the generic tool.fn(**args) call.
+SESSION_AWARE_TOOLS = {"start_background_task", "list_background_tasks"}
+
+
+def invoke_tool(tool: Tool, name: str, args: dict[str, object], session_id: str) -> str:
+    if name in SESSION_AWARE_TOOLS:
+        return tool.fn(session_id=session_id, **args)
+    return tool.fn(**args)
 
 
 def read_file(path: str) -> str:
@@ -300,6 +314,23 @@ def dispatch_subagent(task: str) -> str:
 
 def check_subagent(task_id: str) -> str:
     return subagents.check(task_id)
+
+
+def start_background_task(
+    command: str, session_id: str, name: str = "", directory: str = "."
+) -> str:
+    return background_tasks.start(session_id, command, name, directory)
+
+
+def stop_background_task(task_id: str) -> str:
+    return background_tasks.stop(task_id)
+
+
+def list_background_tasks(session_id: str) -> str:
+    tasks = background_tasks.list_tasks(session_id=session_id)
+    if not tasks:
+        return "(no background tasks in this conversation)"
+    return "\n".join(f"{t.id} [{t.status}] {t.name} (directory={t.directory})" for t in tasks)
 
 
 TOOLS_REGISTRY: dict[str, Tool] = {
@@ -786,6 +817,76 @@ TOOLS_REGISTRY: dict[str, Tool] = {
             },
         },
         fn=check_subagent,
+        read_only=True,
+    ),
+    "start_background_task": Tool(
+        schema={
+            "type": "function",
+            "function": {
+                "name": "start_background_task",
+                "description": "Starts a long-running background process (e.g. a dev server, "
+                "a watch/build command) that keeps running after this call returns, without "
+                "blocking the conversation. Don't use this for one-off commands that finish "
+                "on their own - use run_shell for those. Check on it with "
+                "list_background_tasks, and stop it with stop_background_task when done. "
+                "The user can also see it, read its live output, and stop it from the app.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "Shell command to run in the background.",
+                        },
+                        "name": {
+                            "type": "string",
+                            "description": "Short label to identify the task "
+                            "(default: the command itself).",
+                        },
+                        "directory": {
+                            "type": "string",
+                            "description": "Working directory to run the command in "
+                            "(default: current directory).",
+                        },
+                    },
+                    "required": ["command"],
+                },
+            },
+        },
+        fn=start_background_task,
+        read_only=False,
+    ),
+    "stop_background_task": Tool(
+        schema={
+            "type": "function",
+            "function": {
+                "name": "stop_background_task",
+                "description": "Stops a background task started with start_background_task.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "task_id": {
+                            "type": "string",
+                            "description": "Id returned by start_background_task.",
+                        },
+                    },
+                    "required": ["task_id"],
+                },
+            },
+        },
+        fn=stop_background_task,
+        read_only=True,
+    ),
+    "list_background_tasks": Tool(
+        schema={
+            "type": "function",
+            "function": {
+                "name": "list_background_tasks",
+                "description": "Lists the background tasks started in this conversation, "
+                "with their status.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        fn=list_background_tasks,
         read_only=True,
     ),
 }

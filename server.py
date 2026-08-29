@@ -14,6 +14,7 @@ from fastapi.responses import StreamingResponse
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
+import background_tasks
 import mcp_client
 import subagents
 from api import ChatResult, call_chat, get_model
@@ -48,7 +49,7 @@ from sessions import (
     save_title,
 )
 from settings import load_monthly_budget, save_model, save_monthly_budget
-from tools import TOOLS, TOOLS_REGISTRY, is_skipped
+from tools import TOOLS, TOOLS_REGISTRY, invoke_tool, is_skipped
 
 
 @asynccontextmanager
@@ -197,6 +198,7 @@ SANDBOXED_PATH_ARGS: dict[str, list[str]] = {
     "git_diff": ["directory", "path"],
     "git_commit": ["directory", "paths"],
     "run_tests": ["path"],
+    "start_background_task": ["directory"],
 }
 
 # for these, an omitted argument otherwise defaults to "." (the harness's
@@ -204,7 +206,15 @@ SANDBOXED_PATH_ARGS: dict[str, list[str]] = {
 # project, default it to the project folder instead, so a call that omits
 # the argument stays inside the project rather than leaking the harness's
 # own source tree
-DEFAULTABLE_PATH_ARGS = {"list_files", "grep", "glob", "git_status", "git_diff", "git_commit"}
+DEFAULTABLE_PATH_ARGS = {
+    "list_files",
+    "grep",
+    "glob",
+    "git_status",
+    "git_diff",
+    "git_commit",
+    "start_background_task",
+}
 
 
 def enforce_project_sandbox(
@@ -320,7 +330,7 @@ def run_chat_stream(
                     elif tool is None:
                         result = f"unknown tool: {name}"
                     elif tool.read_only or name in load_always_allowed(session_id):
-                        result = tool.fn(**args)
+                        result = invoke_tool(tool, name, args, session_id)
                     else:
                         confirmation_id = str(uuid.uuid4())
                         pending = PendingConfirmation()
@@ -337,7 +347,7 @@ def run_chat_stream(
                         if got_response and pending.approved:
                             if pending.remember:
                                 allow_always(session_id, name)
-                            result = tool.fn(**args)
+                            result = invoke_tool(tool, name, args, session_id)
                         else:
                             result = "action denied by the user"
 
@@ -685,6 +695,28 @@ def get_project_tree(project_id: str) -> dict[str, object]:
 @app.get("/subagents")
 def list_subagents() -> list[subagents.SubagentTask]:
     return subagents.list_tasks()
+
+
+@app.get("/background_tasks")
+def list_background_tasks_endpoint(session_id: str | None = None) -> list[dict[str, object]]:
+    return [background_tasks.summary(t) for t in background_tasks.list_tasks(session_id)]
+
+
+@app.get("/background_tasks/{task_id}")
+def get_background_task(task_id: str) -> dict[str, object]:
+    task = background_tasks.get(task_id)
+    if task is None:
+        raise HTTPException(404, "background task not found")
+    return background_tasks.detail(task)
+
+
+@app.post("/background_tasks/{task_id}/stop")
+def stop_background_task_endpoint(task_id: str) -> dict[str, object]:
+    task = background_tasks.get(task_id)
+    if task is None:
+        raise HTTPException(404, "background task not found")
+    background_tasks.stop(task_id)
+    return background_tasks.detail(task)
 
 
 @app.get("/logs")

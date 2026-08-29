@@ -1,52 +1,67 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { open as openFolderDialog } from "@tauri-apps/plugin-dialog";
-import { Theme } from "@astryxdesign/core/theme";
-import { neutralTheme } from "@astryxdesign/theme-neutral/built";
-import { AppShell } from "@astryxdesign/core/AppShell";
-import { SideNav, SideNavSection, SideNavItem, SideNavHeading } from "@astryxdesign/core/SideNav";
-import { Avatar } from "@astryxdesign/core/Avatar";
-import {
-  ChatLayout,
-  ChatMessageList,
-  ChatMessage,
-  ChatMessageBubble,
-  ChatMessageMetadata,
-  ChatToolCalls,
-  ChatComposer,
-  ChatSystemMessage,
-} from "@astryxdesign/core/Chat";
-import { IconButton } from "@astryxdesign/core/IconButton";
-import { Button } from "@astryxdesign/core/Button";
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
-import { Markdown } from "@astryxdesign/core/Markdown";
+import { AppShell } from "@astryxdesign/core/AppShell";
+import { Avatar } from "@astryxdesign/core/Avatar";
+import { Button } from "@astryxdesign/core/Button";
+import {
+    ChatComposer,
+    ChatLayout,
+    ChatMessage,
+    ChatMessageBubble,
+    ChatMessageList,
+    ChatMessageMetadata,
+    ChatSystemMessage,
+    ChatToolCalls,
+} from "@astryxdesign/core/Chat";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
-import { Timestamp } from "@astryxdesign/core/Timestamp";
+import { IconButton } from "@astryxdesign/core/IconButton";
+import { Markdown } from "@astryxdesign/core/Markdown";
+import {
+    SideNav,
+    SideNavHeading,
+    SideNavItem,
+    SideNavSection,
+} from "@astryxdesign/core/SideNav";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
-import { parseSSE } from "./sse";
+import { Theme } from "@astryxdesign/core/theme";
+import { Timestamp } from "@astryxdesign/core/Timestamp";
+import { neutralTheme } from "@astryxdesign/theme-neutral/built";
+import { open as openFolderDialog } from "@tauri-apps/plugin-dialog";
+import {
+    useCallback,
+    useEffect,
+    useRef,
+    useState,
+    type CSSProperties,
+    type ReactNode,
+} from "react";
+import "./App.css";
+import { BackgroundTasksPanel } from "./BackgroundTasksPanel";
+import { type BackgroundTask } from "./BackgroundTasksSection";
 import { formatArgs } from "./format";
-import { SettingsPage } from "./SettingsPage";
-import { ModelPage } from "./ModelPage";
+import {
+    CheckIcon,
+    ChevronRightIcon,
+    CopyIcon,
+    FolderIcon,
+    GearIcon,
+    MoonIcon,
+    PencilIcon,
+    PlusIcon,
+    SearchIcon,
+    SunIcon,
+    TrashIcon,
+} from "./icons";
 import { LogsPage } from "./LogsPage";
 import { McpServersPage } from "./McpServersPage";
-import { ProjectFilePanel } from "./ProjectFilePanel";
-import { SubagentsPanel } from "./SubagentsPanel";
 import { modelAvatar } from "./modelFamilies";
+import { ModelPage } from "./ModelPage";
 import { notifyIfBackground } from "./notifications";
-import {
-  CheckIcon,
-  ChevronRightIcon,
-  CopyIcon,
-  FolderIcon,
-  GearIcon,
-  MoonIcon,
-  PencilIcon,
-  PlusIcon,
-  SearchIcon,
-  SunIcon,
-  TrashIcon,
-} from "./icons";
-import "./App.css";
+import { ProjectFilePanel } from "./ProjectFilePanel";
+import { SettingsPage } from "./SettingsPage";
+import { parseSSE } from "./sse";
+import { SubagentsPanel } from "./SubagentsPanel";
+import { TaskView } from "./TaskView";
 
 const API_BASE = "http://127.0.0.1:8000";
 // en dessous de ce seuil, une reponse est consideree "rapide" : pas de
@@ -57,7 +72,13 @@ const LONG_RESPONSE_MS = 15000;
 type ChatMsg =
   | { kind: "user"; text: string; time: number }
   | { kind: "assistant"; text: string; time: number; model?: string }
-  | { kind: "tool"; tool: string; args: Record<string, unknown>; result: string; time: number }
+  | {
+      kind: "tool";
+      tool: string;
+      args: Record<string, unknown>;
+      result: string;
+      time: number;
+    }
   | { kind: "info"; text: string; time: number }
   | { kind: "error"; text: string; time: number };
 
@@ -104,7 +125,10 @@ function historyToMessages(raw: RawSessionMessage[]): ChatMsg[] {
       out.push({ kind: "user", text: m.content, time: now });
     } else if (m.role === "assistant") {
       for (const toolCall of m.tool_calls ?? []) {
-        const args = JSON.parse(toolCall.function.arguments || "{}") as Record<string, unknown>;
+        const args = JSON.parse(toolCall.function.arguments || "{}") as Record<
+          string,
+          unknown
+        >;
         const toolResult = raw.find(
           (x) => x.role === "tool" && x.tool_call_id === toolCall.id,
         );
@@ -117,7 +141,12 @@ function historyToMessages(raw: RawSessionMessage[]): ChatMsg[] {
         });
       }
       if (m.content) {
-        out.push({ kind: "assistant", text: m.content, time: now, model: m.model });
+        out.push({
+          kind: "assistant",
+          text: m.content,
+          time: now,
+          model: m.model,
+        });
       }
     }
   }
@@ -155,7 +184,8 @@ function groupMessages(msgs: ChatMsg[]): RenderGroup[] {
   return groups;
 }
 
-type Block = { kind: "tools"; items: ToolMsg[] } | { kind: "text"; msg: AssistantMsg };
+type Block =
+  { kind: "tools"; items: ToolMsg[] } | { kind: "text"; msg: AssistantMsg };
 
 /** Dans un groupe assistant, fusionne les appels d'outils consécutifs en un
  * seul ChatToolCalls (résumé repliable natif si plusieurs), sépare le texte. */
@@ -177,7 +207,9 @@ function toBlocks(items: (AssistantMsg | ToolMsg)[]): Block[] {
 }
 
 function toolCallStatus(result: string): "complete" | "error" {
-  return result.startsWith("error") || result.startsWith("action denied") ? "error" : "complete";
+  return result.startsWith("error") || result.startsWith("action denied")
+    ? "error"
+    : "complete";
 }
 
 /** Avant/apres pour un edit_file : construit a partir des arguments de
@@ -185,17 +217,29 @@ function toolCallStatus(result: string): "complete" | "error" {
  * confirmation) - pas de diff ligne a ligne fine, juste tout l'ancien bloc
  * en rouge puis tout le nouveau en vert, largement suffisant pour voir ce
  * qui a change d'un coup d'oeil. */
-function EditFileDiff({ oldString, newString }: { oldString: string; newString: string }) {
+function EditFileDiff({
+  oldString,
+  newString,
+}: {
+  oldString: string;
+  newString: string;
+}) {
   return (
     <div className="max-h-64 overflow-y-auto rounded-lg font-mono text-xs">
       {oldString.split("\n").map((line, i) => (
-        <div key={`old-${i}`} className="whitespace-pre bg-error-muted px-2 py-0.5 text-error">
+        <div
+          key={`old-${i}`}
+          className="whitespace-pre bg-error-muted px-2 py-0.5 text-error"
+        >
           <span className="select-none opacity-60">- </span>
           {line}
         </div>
       ))}
       {newString.split("\n").map((line, i) => (
-        <div key={`new-${i}`} className="whitespace-pre bg-success-muted px-2 py-0.5 text-success">
+        <div
+          key={`new-${i}`}
+          className="whitespace-pre bg-success-muted px-2 py-0.5 text-success"
+        >
           <span className="select-none opacity-60">+ </span>
           {line}
         </div>
@@ -206,11 +250,17 @@ function EditFileDiff({ oldString, newString }: { oldString: string; newString: 
 
 function toolResultDetail(t: ToolMsg): ReactNode {
   const { old_string: oldString, new_string: newString } = t.args;
-  if (t.tool === "edit_file" && typeof oldString === "string" && typeof newString === "string") {
+  if (
+    t.tool === "edit_file" &&
+    typeof oldString === "string" &&
+    typeof newString === "string"
+  ) {
     return <EditFileDiff oldString={oldString} newString={newString} />;
   }
   return (
-    <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap text-xs">{t.result}</pre>
+    <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap text-xs">
+      {t.result}
+    </pre>
   );
 }
 
@@ -237,7 +287,9 @@ function App() {
   const [creatingProject, setCreatingProject] = useState(false);
   const [projectFormError, setProjectFormError] = useState<string | null>(null);
   const [deletingProject, setDeletingProject] = useState<Project | null>(null);
-  const [collapsedProjectIds, setCollapsedProjectIds] = useState<Set<string>>(() => new Set());
+  const [collapsedProjectIds, setCollapsedProjectIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [fileRefreshTick, setFileRefreshTick] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -246,11 +298,12 @@ function App() {
   // un delai via /sessions/search, qui lit les fichiers de session cote
   // serveur plutot que de rapatrier tout l'historique de chaque
   // conversation juste pour la filtrer.
-  const [contentMatchIds, setContentMatchIds] = useState<Set<string>>(() => new Set());
-  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
-  const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(
-    null,
+  const [contentMatchIds, setContentMatchIds] = useState<Set<string>>(
+    () => new Set(),
   );
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const [pendingConfirmation, setPendingConfirmation] =
+    useState<PendingConfirmation | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   // ids des sous-agents dispatches dans la conversation ACTIVE (remis a
   // zero au changement de conversation) : permet de relancer le modele
@@ -269,12 +322,18 @@ function App() {
   useEffect(() => {
     sendingRef.current = sending;
     inputRef.current = input;
-    sendMessageRef.current = (text: string) => { void sendMessage(text); };
+    sendMessageRef.current = (text: string) => {
+      void sendMessage(text);
+    };
   });
   const [themeMode, setThemeMode] = useState<"light" | "dark">(() =>
     localStorage.getItem("triton_theme") === "light" ? "light" : "dark",
   );
-  const [view, setView] = useState<"chat" | "settings" | "logs" | "mcp" | "model">("chat");
+  const [view, setView] = useState<
+    "chat" | "settings" | "logs" | "mcp" | "model" | "task"
+  >("chat");
+  const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
 
   function toggleTheme() {
     setThemeMode((prev) => {
@@ -287,7 +346,9 @@ function App() {
   function loadSessions() {
     fetch(`${API_BASE}/sessions`)
       .then((r) => (r.ok ? r.json() : []))
-      .then((list: Session[]) => { setSessions([...list].reverse()); })
+      .then((list: Session[]) => {
+        setSessions([...list].reverse());
+      })
       .catch(() => {
         // API hors ligne ou requete echouee : la sidebar reste vide, sans casser l'app
       });
@@ -296,7 +357,9 @@ function App() {
   function loadProjects() {
     fetch(`${API_BASE}/projects`)
       .then((r) => (r.ok ? r.json() : []))
-      .then((list: Project[]) => { setProjects(list); })
+      .then((list: Project[]) => {
+        setProjects(list);
+      })
       .catch(() => {
         // API hors ligne ou requete echouee : la liste de projets reste vide
       });
@@ -333,7 +396,9 @@ function App() {
       });
 
       if (!res.ok) {
-        const body = (await res.json().catch(() => null)) as { detail?: string } | null;
+        const body = (await res.json().catch(() => null)) as {
+          detail?: string;
+        } | null;
         setProjectFormError(body?.detail ?? `erreur ${res.status}`);
         return;
       }
@@ -341,7 +406,9 @@ function App() {
       setProjects((await res.json()) as Project[]);
       resetProjectForm();
     } catch {
-      setProjectFormError("impossible de contacter l'API Triton (127.0.0.1:8000).");
+      setProjectFormError(
+        "impossible de contacter l'API Triton (127.0.0.1:8000).",
+      );
     } finally {
       setCreatingProject(false);
     }
@@ -401,7 +468,9 @@ function App() {
     setIsDeleting(true);
 
     try {
-      await fetch(`${API_BASE}/sessions/${deletingSession.id}`, { method: "DELETE" });
+      await fetch(`${API_BASE}/sessions/${deletingSession.id}`, {
+        method: "DELETE",
+      });
       setSessions((prev) => prev.filter((s) => s.id !== deletingSession.id));
       if (deletingSession.id === sessionId) {
         startNewSession();
@@ -426,8 +495,12 @@ function App() {
   useEffect(() => {
     fetch(`${API_BASE}/health`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((data: { ok: boolean; model: string } | null) => { setApiModel(data?.model ?? null); })
-      .catch(() => { setApiModel(null); });
+      .then((data: { ok: boolean; model: string } | null) => {
+        setApiModel(data?.model ?? null);
+      })
+      .catch(() => {
+        setApiModel(null);
+      });
 
     loadSessions();
     loadProjects();
@@ -437,7 +510,6 @@ function App() {
     // sinon ca part en course avec le streaming en cours.
     const stored = localStorage.getItem("triton_session_id");
     if (stored) loadHistory(stored);
-
   }, []);
 
   // relance automatiquement le modele une fois qu'un sous-agent dispatche
@@ -456,7 +528,8 @@ function App() {
         .then((r) => (r.ok ? r.json() : []))
         .then((data: { id: string; task: string; status: string }[]) => {
           const finished = data.find(
-            (t) => pendingSubagentIdsRef.current.has(t.id) && t.status !== "running",
+            (t) =>
+              pendingSubagentIdsRef.current.has(t.id) && t.status !== "running",
           );
           if (!finished) return;
           pendingSubagentIdsRef.current.delete(finished.id);
@@ -470,8 +543,46 @@ function App() {
           // API hors ligne : nouvelle tentative au prochain intervalle
         });
     }, 4000);
-    return () => { clearInterval(interval); };
+    return () => {
+      clearInterval(interval);
+    };
   }, []);
+
+  // taches en arriere-plan (start_background_task) de la conversation
+  // active : affichees dans le panneau lateral droit (BackgroundTasksPanel /
+  // ProjectFilePanel), quel que soit le view courant, pour rester "vite
+  // accessibles" pendant que le modele travaille dans la conversation.
+  useEffect(() => {
+    if (!sessionId) return;
+    let cancelled = false;
+    function load() {
+      fetch(`${API_BASE}/background_tasks?session_id=${sessionId}`)
+        .then((r) => (r.ok ? r.json() : []))
+        .then((data: BackgroundTask[]) => {
+          if (!cancelled) setBackgroundTasks(data);
+        })
+        .catch(() => {
+          // API hors ligne : nouvelle tentative au prochain intervalle
+        });
+    }
+    load();
+    const interval = setInterval(load, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [sessionId]);
+
+  function openTask(id: string) {
+    setActiveTaskId(id);
+    setView("task");
+  }
+
+  function stopTask(id: string) {
+    fetch(`${API_BASE}/background_tasks/${id}/stop`, { method: "POST" }).catch(() => {
+      // API hors ligne : le prochain polling reflete quand meme l'etat reel
+    });
+  }
 
   function switchSession(id: string) {
     setView("chat");
@@ -481,6 +592,7 @@ function App() {
     setMessages([]);
     setActiveProjectId(sessions.find((s) => s.id === id)?.project_id ?? null);
     pendingSubagentIdsRef.current.clear();
+    setBackgroundTasks([]);
     loadHistory(id);
   }
 
@@ -492,6 +604,7 @@ function App() {
     setMessages([]);
     setActiveProjectId(null);
     pendingSubagentIdsRef.current.clear();
+    setBackgroundTasks([]);
   }
 
   function startProjectSession(projectId: string) {
@@ -502,6 +615,7 @@ function App() {
     setMessages([]);
     setActiveProjectId(projectId);
     pendingSubagentIdsRef.current.clear();
+    setBackgroundTasks([]);
   }
 
   function toggleProjectCollapsed(projectId: string) {
@@ -519,7 +633,9 @@ function App() {
   async function copyToClipboard(text: string, index: number) {
     await navigator.clipboard.writeText(text);
     setCopiedIndex(index);
-    setTimeout(() => { setCopiedIndex((current) => (current === index ? null : current)); }, 1500);
+    setTimeout(() => {
+      setCopiedIndex((current) => (current === index ? null : current));
+    }, 1500);
   }
 
   async function sendMessage(rawText: string) {
@@ -557,7 +673,10 @@ function App() {
           if (last?.kind === "assistant") {
             return [...prev.slice(0, -1), { ...last, text: textSoFar }];
           }
-          return [...prev, { kind: "assistant", text: textSoFar, time: Date.now() }];
+          return [
+            ...prev,
+            { kind: "assistant", text: textSoFar, time: Date.now() },
+          ];
         });
       });
     }
@@ -569,7 +688,11 @@ function App() {
       const res = await fetch(`${API_BASE}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: sessionId, message: text, project_id: activeProjectId }),
+        body: JSON.stringify({
+          session_id: sessionId,
+          message: text,
+          project_id: activeProjectId,
+        }),
         signal: controller.signal,
       });
 
@@ -621,7 +744,9 @@ function App() {
             // negligeable.
             setFileRefreshTick((t) => t + 1);
             if (data.tool === "dispatch_subagent") {
-              const match = /\(id=([a-f0-9]+)\)/.exec((data.result as string) || "");
+              const match = /\(id=([a-f0-9]+)\)/.exec(
+                (data.result as string) || "",
+              );
               if (match?.[1]) pendingSubagentIdsRef.current.add(match[1]);
             }
             break;
@@ -636,9 +761,15 @@ function App() {
             setMessages((prev) => {
               const last = prev[prev.length - 1];
               if (last?.kind === "assistant") {
-                return [...prev.slice(0, -1), { ...last, text: content || last.text, model }];
+                return [
+                  ...prev.slice(0, -1),
+                  { ...last, text: content || last.text, model },
+                ];
               }
-              return [...prev, { kind: "assistant", text: content, time: Date.now(), model }];
+              return [
+                ...prev,
+                { kind: "assistant", text: content, time: Date.now(), model },
+              ];
             });
             break;
           }
@@ -678,7 +809,10 @@ function App() {
           if (last?.kind === "assistant") {
             return [...prev.slice(0, -1), { ...last, text: finalText }];
           }
-          return [...prev, { kind: "assistant", text: finalText, time: Date.now() }];
+          return [
+            ...prev,
+            { kind: "assistant", text: finalText, time: Date.now() },
+          ];
         });
       } else {
         console.error("erreur pendant l'échange avec l'API Triton :", err);
@@ -755,7 +889,9 @@ function App() {
       if (e.key === "Escape") cancelMessage();
     }
     document.addEventListener("keydown", handleKeyDown);
-    return () => { document.removeEventListener("keydown", handleKeyDown); };
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
   }, [sending, cancelMessage]);
 
   // recherche dans le CONTENU des messages (le titre est deja filtre
@@ -772,13 +908,17 @@ function App() {
       }
       fetch(`${API_BASE}/sessions/search?q=${encodeURIComponent(query)}`)
         .then((r) => (r.ok ? r.json() : []))
-        .then((ids: string[]) => { setContentMatchIds(new Set(ids)); })
+        .then((ids: string[]) => {
+          setContentMatchIds(new Set(ids));
+        })
         .catch(() => {
           // API hors ligne : pas de resultats bases sur le contenu, la
           // recherche par titre (instantanee) continue de fonctionner
         });
     }, 300);
-    return () => { clearTimeout(timeout); };
+    return () => {
+      clearTimeout(timeout);
+    };
   }, [search]);
 
   const filteredSessions = sessions.filter((s) => {
@@ -799,7 +939,12 @@ function App() {
         height="fill"
         sideNav={
           <SideNav
-            header={<SideNavHeading heading="Triton" icon={<Avatar name="Triton" size="xsm" />} />}
+            header={
+              <SideNavHeading
+                heading="Triton"
+                icon={<Avatar src="triton-logo.jpeg" name="Triton" size="xsm" />}
+              />
+            }
             topContent={
               <div className="flex flex-col gap-2">
                 <div className="flex items-center gap-1">
@@ -816,7 +961,9 @@ function App() {
                     icon={<SearchIcon />}
                     variant="ghost"
                     size="sm"
-                    onClick={() => { setSearchOpen((v) => !v); }}
+                    onClick={() => {
+                      setSearchOpen((v) => !v);
+                    }}
                   />
                 </div>
                 {searchOpen && (
@@ -839,10 +986,16 @@ function App() {
                   icon={<GearIcon />}
                   variant="ghost"
                   size="sm"
-                  onClick={() => { setView("settings"); }}
+                  onClick={() => {
+                    setView("settings");
+                  }}
                 />
                 <IconButton
-                  label={themeMode === "dark" ? "Passer en thème clair" : "Passer en thème sombre"}
+                  label={
+                    themeMode === "dark"
+                      ? "Passer en thème clair"
+                      : "Passer en thème sombre"
+                  }
                   icon={themeMode === "dark" ? <MoonIcon /> : <SunIcon />}
                   variant="ghost"
                   size="sm"
@@ -859,7 +1012,9 @@ function App() {
                   icon={<PlusIcon />}
                   variant="ghost"
                   size="sm"
-                  onClick={() => { setShowProjectForm((v) => !v); }}
+                  onClick={() => {
+                    setShowProjectForm((v) => !v);
+                  }}
                 />
               }
             >
@@ -878,7 +1033,9 @@ function App() {
                     label={newProjectFolder || "Choisir un dossier..."}
                     variant="secondary"
                     size="sm"
-                    onClick={() => { void pickProjectFolder(); }}
+                    onClick={() => {
+                      void pickProjectFolder();
+                    }}
                     className="justify-start truncate"
                   />
                   {projectFormError && (
@@ -892,10 +1049,17 @@ function App() {
                       variant="primary"
                       size="sm"
                       isLoading={creatingProject}
-                      onClick={() => { void submitNewProject(); }}
+                      onClick={() => {
+                        void submitNewProject();
+                      }}
                       className="flex-1"
                     />
-                    <Button label="Annuler" variant="ghost" size="sm" onClick={resetProjectForm} />
+                    <Button
+                      label="Annuler"
+                      variant="ghost"
+                      size="sm"
+                      onClick={resetProjectForm}
+                    />
                   </div>
                 </div>
               )}
@@ -917,8 +1081,12 @@ function App() {
                           label="Nom du projet"
                           size="sm"
                           hasAutoFocus
-                          onEnter={() => { void commitRenameProject(p.id); }}
-                          onBlur={() => { void commitRenameProject(p.id); }}
+                          onEnter={() => {
+                            void commitRenameProject(p.id);
+                          }}
+                          onBlur={() => {
+                            void commitRenameProject(p.id);
+                          }}
                           onKeyDown={(e) => {
                             if (e.key === "Escape") setEditingProjectId(null);
                           }}
@@ -928,8 +1096,12 @@ function App() {
                       <SideNavItem
                         label={p.name}
                         icon={<FolderIcon className="h-4 w-4" />}
-                        isSelected={p.id === activeProjectId && sessionId === null}
-                        onClick={() => { toggleProjectCollapsed(p.id); }}
+                        isSelected={
+                          p.id === activeProjectId && sessionId === null
+                        }
+                        onClick={() => {
+                          toggleProjectCollapsed(p.id);
+                        }}
                         endContent={
                           <div className="flex items-center gap-0.5">
                             <IconButton
@@ -982,10 +1154,15 @@ function App() {
                                 label="Titre de la conversation"
                                 size="sm"
                                 hasAutoFocus
-                                onEnter={() => { void commitRename(s.id); }}
-                                onBlur={() => { void commitRename(s.id); }}
+                                onEnter={() => {
+                                  void commitRename(s.id);
+                                }}
+                                onBlur={() => {
+                                  void commitRename(s.id);
+                                }}
                                 onKeyDown={(e) => {
-                                  if (e.key === "Escape") setEditingSessionId(null);
+                                  if (e.key === "Escape")
+                                    setEditingSessionId(null);
                                 }}
                               />
                             </div>
@@ -994,7 +1171,9 @@ function App() {
                               key={s.id}
                               label={s.title ?? formatSessionLabel(s.id)}
                               isSelected={s.id === sessionId}
-                              onClick={() => { switchSession(s.id); }}
+                              onClick={() => {
+                                switchSession(s.id);
+                              }}
                               className="pl-4"
                               endContent={
                                 <div className="flex items-center gap-0.5">
@@ -1046,8 +1225,12 @@ function App() {
                       label="Titre de la conversation"
                       size="sm"
                       hasAutoFocus
-                      onEnter={() => { void commitRename(s.id); }}
-                      onBlur={() => { void commitRename(s.id); }}
+                      onEnter={() => {
+                        void commitRename(s.id);
+                      }}
+                      onBlur={() => {
+                        void commitRename(s.id);
+                      }}
                       onKeyDown={(e) => {
                         if (e.key === "Escape") setEditingSessionId(null);
                       }}
@@ -1058,7 +1241,9 @@ function App() {
                     key={s.id}
                     label={s.title ?? formatSessionLabel(s.id)}
                     isSelected={s.id === sessionId}
-                    onClick={() => { switchSession(s.id); }}
+                    onClick={() => {
+                      switchSession(s.id);
+                    }}
                     endContent={
                       <div className="flex items-center gap-0.5">
                         <IconButton
@@ -1092,195 +1277,269 @@ function App() {
       >
         {view === "settings" && (
           <SettingsPage
-            onBack={() => { setView("chat"); }}
-            onOpenLogs={() => { setView("logs"); }}
-            onOpenMcp={() => { setView("mcp"); }}
-            onOpenModel={() => { setView("model"); }}
+            onBack={() => {
+              setView("chat");
+            }}
+            onOpenLogs={() => {
+              setView("logs");
+            }}
+            onOpenMcp={() => {
+              setView("mcp");
+            }}
+            onOpenModel={() => {
+              setView("model");
+            }}
           />
         )}
-        {view === "logs" && <LogsPage onBack={() => { setView("settings"); }} />}
-        {view === "mcp" && <McpServersPage onBack={() => { setView("settings"); }} />}
-        {view === "model" && <ModelPage onBack={() => { setView("settings"); }} />}
+        {view === "logs" && (
+          <LogsPage
+            onBack={() => {
+              setView("settings");
+            }}
+          />
+        )}
+        {view === "mcp" && (
+          <McpServersPage
+            onBack={() => {
+              setView("settings");
+            }}
+          />
+        )}
+        {view === "model" && (
+          <ModelPage
+            onBack={() => {
+              setView("settings");
+            }}
+          />
+        )}
+        {view === "task" && activeTaskId && (
+          <TaskView
+            key={activeTaskId}
+            taskId={activeTaskId}
+            onBack={() => {
+              setView("chat");
+            }}
+          />
+        )}
         {view === "chat" && (
-        <div className="flex h-full">
-        <ChatLayout
-          density="balanced"
-          className="h-full min-w-0 flex-1"
-          emptyState={
-            <EmptyState
-              title="Nouvelle conversation"
-              description="Écris un message pour démarrer la conversation."
-            />
-          }
-          composer={
-            <ChatComposer
-              value={input}
-              onChange={setInput}
-              onSubmit={(value) => { void sendMessage(value); }}
-              onStop={cancelMessage}
-              isStopShown={sending}
-              placeholder="Écrire un message..."
-              isDisabled={sending || !!pendingConfirmation}
-              density="compact"
-              elevation="none"
-              style={{ "--_chat-composer-padding": "16px" } as CSSProperties}
-              footerActions={
-                <IconButton
-                  label="Joindre (pas encore disponible)"
-                  icon={<PlusIcon />}
-                  variant="ghost"
-                  size="sm"
-                  isDisabled
+          <div className="flex h-full">
+            <ChatLayout
+              density="balanced"
+              className="h-full min-w-0 flex-1"
+              emptyState={
+                <EmptyState
+                  title="Nouvelle conversation"
+                  description="Écris un message pour démarrer la conversation."
                 />
               }
-              sendActions={
-                apiModel ? (
-                  <Text size="2xs" color="secondary">
-                    {apiModel}
-                  </Text>
-                ) : undefined
+              composer={
+                <ChatComposer
+                  value={input}
+                  onChange={setInput}
+                  onSubmit={(value) => {
+                    void sendMessage(value);
+                  }}
+                  onStop={cancelMessage}
+                  isStopShown={sending}
+                  placeholder="Écrire un message..."
+                  isDisabled={sending || !!pendingConfirmation}
+                  density="compact"
+                  elevation="none"
+                  style={
+                    { "--_chat-composer-padding": "16px" } as CSSProperties
+                  }
+                  footerActions={
+                    <IconButton
+                      label="Joindre (pas encore disponible)"
+                      icon={<PlusIcon />}
+                      variant="ghost"
+                      size="sm"
+                      isDisabled
+                    />
+                  }
+                  sendActions={
+                    apiModel ? (
+                      <Text size="2xs" color="secondary">
+                        {apiModel}
+                      </Text>
+                    ) : undefined
+                  }
+                />
               }
-            />
-          }
-        >
-          <ChatMessageList isStreaming={sending}>
-            {groupMessages(messages).map((group, gi) => {
-              if (group.type === "user") {
-                return (
-                  <ChatMessage key={gi} sender="user">
-                    <ChatMessageBubble
-                      metadata={
-                        <ChatMessageMetadata
-                          timestamp={<Timestamp value={group.msg.time / 1000} format="time" />}
-                          status="sent"
+            >
+              <ChatMessageList isStreaming={sending}>
+                {groupMessages(messages).map((group, gi) => {
+                  if (group.type === "user") {
+                    return (
+                      <ChatMessage key={gi} sender="user">
+                        <ChatMessageBubble
+                          metadata={
+                            <ChatMessageMetadata
+                              timestamp={
+                                <Timestamp
+                                  value={group.msg.time / 1000}
+                                  format="time"
+                                />
+                              }
+                              status="sent"
+                            />
+                          }
+                        >
+                          {group.msg.text}
+                        </ChatMessageBubble>
+                      </ChatMessage>
+                    );
+                  }
+
+                  if (group.type === "system") {
+                    return (
+                      <ChatSystemMessage key={gi}>
+                        {group.msg.kind === "error" ? (
+                          <span className="text-error">{group.msg.text}</span>
+                        ) : (
+                          group.msg.text
+                        )}
+                      </ChatSystemMessage>
+                    );
+                  }
+
+                  const blocks = toBlocks(group.items);
+                  const lastItem = group.items[group.items.length - 1];
+                  // groupMessages() ne cree jamais un groupe "assistant" avec un
+                  // tableau items vide (toujours au moins un push initial) : ceci
+                  // n'est qu'un garde-fou pour TypeScript (noUncheckedIndexedAccess).
+                  if (!lastItem)
+                    throw new Error("groupe assistant sans element");
+                  const lastIsText = lastItem.kind === "assistant";
+                  // le modele qui a effectivement repondu dans ce groupe (pas
+                  // forcement celui actuellement selectionne dans les parametres,
+                  // qui a pu changer depuis) ; undefined pour un historique
+                  // enregistre avant l'ajout de ce champ, l'avatar retombe alors
+                  // sur les initiales.
+                  const groupModel = group.items.find(
+                    (it): it is AssistantMsg => it.kind === "assistant",
+                  )?.model;
+                  const messageAvatar = modelAvatar(groupModel ?? null);
+
+                  return (
+                    <ChatMessage
+                      key={gi}
+                      sender="assistant"
+                      avatar={
+                        <Avatar
+                          name={messageAvatar.name}
+                          src={messageAvatar.logo}
+                          size="sm"
                         />
                       }
+                      name="Triton"
                     >
-                      {group.msg.text}
-                    </ChatMessageBubble>
-                  </ChatMessage>
-                );
-              }
-
-              if (group.type === "system") {
-                return (
-                  <ChatSystemMessage key={gi}>
-                    {group.msg.kind === "error" ? (
-                      <span className="text-error">{group.msg.text}</span>
-                    ) : (
-                      group.msg.text
-                    )}
-                  </ChatSystemMessage>
-                );
-              }
-
-              const blocks = toBlocks(group.items);
-              const lastItem = group.items[group.items.length - 1];
-              // groupMessages() ne cree jamais un groupe "assistant" avec un
-              // tableau items vide (toujours au moins un push initial) : ceci
-              // n'est qu'un garde-fou pour TypeScript (noUncheckedIndexedAccess).
-              if (!lastItem) throw new Error("groupe assistant sans element");
-              const lastIsText = lastItem.kind === "assistant";
-              // le modele qui a effectivement repondu dans ce groupe (pas
-              // forcement celui actuellement selectionne dans les parametres,
-              // qui a pu changer depuis) ; undefined pour un historique
-              // enregistre avant l'ajout de ce champ, l'avatar retombe alors
-              // sur les initiales.
-              const groupModel = group.items.find(
-                (it): it is AssistantMsg => it.kind === "assistant",
-              )?.model;
-              const messageAvatar = modelAvatar(groupModel ?? null);
-
-              return (
-                <ChatMessage
-                  key={gi}
-                  sender="assistant"
-                  avatar={<Avatar name={messageAvatar.name} src={messageAvatar.logo} size="sm" />}
-                  name="Triton"
-                >
-                  {blocks.map((block, bi) =>
-                    block.kind === "tools" ? (
-                      <ChatToolCalls
-                        key={bi}
-                        calls={block.items.map((t) => ({
-                          name: t.tool,
-                          status: toolCallStatus(t.result),
-                          target: formatArgs(t.args),
-                          resultDetail: toolResultDetail(t),
-                        }))}
+                      {blocks.map((block, bi) =>
+                        block.kind === "tools" ? (
+                          <ChatToolCalls
+                            key={bi}
+                            calls={block.items.map((t) => ({
+                              name: t.tool,
+                              status: toolCallStatus(t.result),
+                              target: formatArgs(t.args),
+                              resultDetail: toolResultDetail(t),
+                            }))}
+                          />
+                        ) : (
+                          <ChatMessageBubble
+                            key={bi}
+                            variant="ghost"
+                            width="100%"
+                          >
+                            <Markdown>{block.msg.text}</Markdown>
+                          </ChatMessageBubble>
+                        ),
+                      )}
+                      <ChatMessageMetadata
+                        timestamp={
+                          <Timestamp
+                            value={lastItem.time / 1000}
+                            format="time"
+                          />
+                        }
+                        footer={
+                          lastIsText && lastItem.text ? (
+                            <button
+                              onClick={() => {
+                                void copyToClipboard(lastItem.text, gi);
+                              }}
+                              className="inline-flex items-center gap-1 text-secondary hover:text-primary"
+                              title="Copier"
+                            >
+                              {copiedIndex === gi ? (
+                                <CheckIcon className="h-3.5 w-3.5" />
+                              ) : (
+                                <CopyIcon className="h-3.5 w-3.5" />
+                              )}
+                            </button>
+                          ) : undefined
+                        }
                       />
-                    ) : (
-                      <ChatMessageBubble key={bi} variant="ghost" width="100%">
-                        <Markdown>{block.msg.text}</Markdown>
-                      </ChatMessageBubble>
-                    ),
-                  )}
-                  <ChatMessageMetadata
-                    timestamp={<Timestamp value={lastItem.time / 1000} format="time" />}
-                    footer={
-                      lastIsText && lastItem.text ? (
-                        <button
-                          onClick={() => { void copyToClipboard(lastItem.text, gi); }}
-                          className="inline-flex items-center gap-1 text-secondary hover:text-primary"
-                          title="Copier"
-                        >
-                          {copiedIndex === gi ? (
-                            <CheckIcon className="h-3.5 w-3.5" />
-                          ) : (
-                            <CopyIcon className="h-3.5 w-3.5" />
-                          )}
-                        </button>
-                      ) : undefined
-                    }
-                  />
-                </ChatMessage>
-              );
-            })}
+                    </ChatMessage>
+                  );
+                })}
 
-            {pendingConfirmation && (
-              <div className="mx-auto flex max-w-md flex-col items-center gap-3 rounded-lg border border-warning bg-warning-muted px-4 py-3">
-                <Text weight="medium" className="text-center">
-                  autoriser {pendingConfirmation.tool}({formatArgs(pendingConfirmation.args)}) ?
-                </Text>
-                <div className="flex flex-wrap justify-center gap-2">
-                  <Button
-                    label="autoriser"
-                    variant="primary"
-                    size="sm"
-                    onClick={() => { void respondToConfirmation(true); }}
-                  >
-                    autoriser
-                  </Button>
-                  <Button
-                    label="toujours autoriser pour cette conversation"
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => { void respondToConfirmation(true, true); }}
-                  >
-                    toujours autoriser (cette conversation)
-                  </Button>
-                  <Button
-                    label="refuser"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => { void respondToConfirmation(false); }}
-                  >
-                    refuser
-                  </Button>
-                </div>
-              </div>
+                {pendingConfirmation && (
+                  <div className="mx-auto flex max-w-md flex-col items-center gap-3 rounded-lg border border-warning bg-warning-muted px-4 py-3">
+                    <Text weight="medium" className="text-center">
+                      autoriser {pendingConfirmation.tool}(
+                      {formatArgs(pendingConfirmation.args)}) ?
+                    </Text>
+                    <div className="flex flex-wrap justify-center gap-2">
+                      <Button
+                        label="autoriser"
+                        variant="primary"
+                        size="sm"
+                        onClick={() => {
+                          void respondToConfirmation(true);
+                        }}
+                      >
+                        autoriser
+                      </Button>
+                      <Button
+                        label="toujours autoriser pour cette conversation"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => {
+                          void respondToConfirmation(true, true);
+                        }}
+                      >
+                        toujours autoriser (cette conversation)
+                      </Button>
+                      <Button
+                        label="refuser"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          void respondToConfirmation(false);
+                        }}
+                      >
+                        refuser
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </ChatMessageList>
+            </ChatLayout>
+            {activeProject ? (
+              <ProjectFilePanel
+                projectId={activeProject.id}
+                projectName={activeProject.name}
+                folderPath={activeProject.folder_path}
+                refreshSignal={fileRefreshTick}
+                tasks={backgroundTasks}
+                onOpenTask={openTask}
+                onStopTask={stopTask}
+              />
+            ) : (
+              <BackgroundTasksPanel tasks={backgroundTasks} onOpen={openTask} onStop={stopTask} />
             )}
-          </ChatMessageList>
-        </ChatLayout>
-        {activeProject && (
-          <ProjectFilePanel
-            projectId={activeProject.id}
-            projectName={activeProject.name}
-            folderPath={activeProject.folder_path}
-            refreshSignal={fileRefreshTick}
-          />
-        )}
-        </div>
+          </div>
         )}
       </AppShell>
 

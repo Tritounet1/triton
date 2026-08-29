@@ -4,6 +4,7 @@ import { TreeList, type TreeListItemData } from "@astryxdesign/core/TreeList";
 import { Text } from "@astryxdesign/core/Text";
 import { IconButton } from "@astryxdesign/core/IconButton";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { BackgroundTasksSection, type BackgroundTask } from "./BackgroundTasksSection";
 import { FileIcon, FolderIcon, RefreshIcon } from "./icons";
 
 const API_BASE = "http://127.0.0.1:8000";
@@ -22,6 +23,9 @@ interface ProjectFilePanelProps {
   /** Change ce numero pour forcer un rechargement de l'arbre (ex. apres un
    * appel d'outil qui a pu creer/supprimer un fichier). */
   refreshSignal: number;
+  tasks: BackgroundTask[];
+  onOpenTask: (id: string) => void;
+  onStopTask: (id: string) => void;
 }
 
 function toTreeItems(nodes: TreeNode[]): TreeListItemData[] {
@@ -49,6 +53,9 @@ export function ProjectFilePanel({
   projectName,
   folderPath,
   refreshSignal,
+  tasks,
+  onOpenTask,
+  onStopTask,
 }: ProjectFilePanelProps) {
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [truncated, setTruncated] = useState(false);
@@ -98,6 +105,8 @@ export function ProjectFilePanel({
           }}
         />
       </div>
+
+      <BackgroundTasksSection tasks={tasks} onOpen={onOpenTask} onStop={onStopTask} />
 
       <div className="flex-1 overflow-y-auto px-2 py-2">
         {error && (

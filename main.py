@@ -31,7 +31,7 @@ from sessions import (
     new_session_path,
     save_session,
 )
-from tools import TOOLS, TOOLS_REGISTRY, load_memory
+from tools import TOOLS, TOOLS_REGISTRY, invoke_tool, load_memory
 
 SYSTEM_PROMPT = "You are a concise and clear assistant."
 MAX_ITERATIONS = 10
@@ -110,7 +110,7 @@ def run_tool_calls(
                 result = f"unknown tool: {name}"
             elif tool.read_only or name in load_always_allowed(session_id):
                 start = time.perf_counter()
-                result = tool.fn(**args)
+                result = invoke_tool(tool, name, args, session_id)
                 duration = time.perf_counter() - start
             else:
                 choice = Prompt.ask(
@@ -124,7 +124,7 @@ def run_tool_calls(
                     allow_always(session_id, name)
                 if choice in ("y", "a"):
                     start = time.perf_counter()
-                    result = tool.fn(**args)
+                    result = invoke_tool(tool, name, args, session_id)
                     duration = time.perf_counter() - start
                 else:
                     result = "action denied by the user"
