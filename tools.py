@@ -27,9 +27,22 @@ SESSION_AWARE_TOOLS = {"start_background_task", "list_background_tasks"}
 
 
 def invoke_tool(tool: Tool, name: str, args: dict[str, object], session_id: str) -> str:
-    if name in SESSION_AWARE_TOOLS:
-        return tool.fn(session_id=session_id, **args)
-    return tool.fn(**args)
+    """Calls a tool's implementation, translating any exception into an
+    error string instead of letting it propagate. The model isn't actually
+    bound by the JSON schema it's given - it can (and does) hallucinate an
+    argument a tool doesn't accept, e.g. calling run_shell with a
+    `directory` kwarg it only has because other tools have one. Without
+    this, that raises an uncaught TypeError deep inside run_chat_stream's
+    generator and crashes the whole SSE response, not just that one call."""
+    try:
+        if name in SESSION_AWARE_TOOLS:
+            return tool.fn(session_id=session_id, **args)
+        return tool.fn(**args)
+    except TypeError as e:
+        return f"error: invalid arguments for {name} ({e})"
+    except Exception as e:
+        # broad on purpose: a tool's own bug must not crash the conversation
+        return f"error: {name} failed unexpectedly ({type(e).__name__}: {e})"
 
 
 def read_file(path: str) -> str:

@@ -169,7 +169,17 @@ def _run(task_entry: SubagentTask) -> None:
                     args = {}
                 else:
                     tool = registry.get(name)
-                    result = tool.fn(**args) if tool else f"unknown tool: {name}"
+                    if tool is None:
+                        result = f"unknown tool: {name}"
+                    else:
+                        try:
+                            result = tool.fn(**args)
+                        except TypeError as e:
+                            # the model can call a tool with an argument it
+                            # doesn't accept (e.g. hallucinated from another
+                            # tool's schema) - report it back like any other
+                            # tool error instead of ending the sub-agent early
+                            result = f"error: invalid arguments for {name} ({e})"
 
                 log_event(
                     type="subagent_tool_call",
