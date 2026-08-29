@@ -710,17 +710,31 @@ def list_subagents() -> list[subagents.SubagentTask]:
 
 class OrchestratorDispatch(BaseModel):
     task: str
+    session_id: str | None = None
     project_id: str | None = None
 
 
 @app.post("/orchestrator")
 def dispatch_orchestrator(body: OrchestratorDispatch) -> dict[str, str]:
-    return {"run_id": orchestrator.dispatch(body.task, body.project_id)}
+    """Entry point for the /multi-agents slash command: resolves/creates a
+    session exactly like /chat does (same title generation, same project
+    attachment for a new session), saves the task as a normal user
+    message, then dispatches the multi-agent run against that session -
+    once it finishes, its own exchange is appended there too (see
+    orchestrator._append_result_to_session), so the conversation reads
+    seamlessly afterward instead of needing a separate view."""
+    session_path, messages, is_new = resolve_session(body.session_id, body.project_id)
+    session_id = session_path.stem
+    messages.append({"role": "user", "content": body.task})
 
+    if is_new:
+        save_title(session_id, generate_conversation_title(body.task))
 
-@app.get("/orchestrator")
-def list_orchestrator_runs() -> list[orchestrator.OrchestratorRun]:
-    return orchestrator.list_runs()
+    save_session(session_path, messages)
+
+    project_id = load_session_project(session_id)
+    run_id = orchestrator.dispatch(body.task, project_id=project_id, session_id=session_id)
+    return {"run_id": run_id, "session_id": session_id}
 
 
 @app.get("/orchestrator/{run_id}")

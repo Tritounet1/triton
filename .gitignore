@@ -39,6 +39,3 @@ settings.json
 
 # Etat des taches en arriere-plan (pid, logs) - donnees locales, pas versionnees
 background_tasks_state/
-
-# Runs du mode multi-agent - donnees locales, pas versionnees
-orchestrator_runs/

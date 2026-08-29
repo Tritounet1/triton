@@ -1,22 +1,19 @@
 """Multi-agent orchestrator: a planner model breaks a task into role-tagged
-subtasks, dispatches each one to a focused, read-only sub-agent running the
-model configured for its role (model_roles.py) in a parallel background
-thread, then synthesizes their results into one final answer.
+subtasks, dispatches each one to a focused sub-agent running the model
+configured for its role (model_roles.py) in a parallel background thread,
+then synthesizes their results into one final answer.
 
-Deliberately self-contained and separate from both subagents.py (a single
-ad-hoc research sub-agent dispatched by the main conversation) and
-server.py's session/project conversation loop: this is its own mode with
-its own tracking, not merged into either. Per the "fusionner Projets et
-multi-agent ?" decision in PLAN.md: Conversations and Runs stay two
-separate things, but a run can optionally reference a project_id and
-reuses the exact same Project entity and sandboxing (tools.py's
-enforce_project_sandbox) that a conversation does - no second, duplicate
-folder picker.
-
-It reuses subagents.SUBAGENT_TOOL_NAMES for its subtasks' toolset (the
-same safety boundary, not duplicated) and main.to_tool_call_params, but
-everything else - planning, role routing, parallel dispatch, synthesis -
-lives here.
+Triggered from an ordinary conversation via the /multi-agents <task> slash
+command (see server.py's /orchestrator endpoint) rather than a separate
+page/mode: once a run finishes, its exchange is folded into that same
+conversation's session file (sessions.py) so it reads like a normal
+assistant turn from then on - each subtask becomes a fake tool call
+(role name, model + description as its "arguments", result as the tool
+response), which the desktop app's existing tool-call rendering already
+knows how to display, live or from history, with no dedicated UI of its
+own. Runs live only in memory (RUNS) for as long as they're in flight -
+once folded into the session, the session file is the only copy that
+matters, so there's nothing further to persist here.
 
 Read-only for every role except one deliberate exception: a "code"
 subtask gets write access (write_file/edit_file/delete_file/move_file,
@@ -30,21 +27,15 @@ no human review in the loop - the project scope is the only safety net,
 not a substitute for one. run_shell and git_commit are withheld from
 every role regardless: arbitrary command execution and committing
 autonomously are a different order of blast radius than file edits.
-
-Runs are persisted to RUNS_DIR (one JSON file per run) and reloaded at
-import time, so they survive a harness restart - unlike a live run's
-threads, which don't: a run still "planning"/"running" when the harness
-died is reloaded as "error" (no way to know how it would have finished).
 """
 
 import json
 import re
 import threading
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 from api import call_chat
 from logs import log_event
@@ -52,6 +43,7 @@ from main import to_tool_call_params
 from model_roles import model_for_role
 from pricing import estimate_cost
 from projects import Project, get_project
+from sessions import load_session, save_session, session_path
 from subagents import SUBAGENT_TOOL_NAMES
 from tools import enforce_project_sandbox
 
@@ -63,11 +55,13 @@ if TYPE_CHECKING:
 SubtaskStatus = Literal["pending", "running", "done", "error"]
 RunStatus = Literal["planning", "running", "done", "error"]
 
-MAX_SUBTASK_ITERATIONS = 6
+# raised from 6 after a real run hit this ceiling on two subtasks at once
+# without concluding (a research search and a code read, neither an
+# unusually hard task) - matches subagents.py's SUBAGENT_MAX_ITERATIONS=8,
+# a little higher since a "code" subtask writing/testing files can
+# reasonably need more back-and-forth than pure research.
+MAX_SUBTASK_ITERATIONS = 10
 MAX_SUBTASKS = 6
-
-RUNS_DIR = Path(__file__).parent / "orchestrator_runs"
-_persist_lock = threading.Lock()
 
 PLANNER_SYSTEM_PROMPT_TEMPLATE = (
     "You are a planning agent. Break the user's task into a small number of "
@@ -168,46 +162,65 @@ class OrchestratorRun:
     error: str | None = None
     created_at: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
     project_id: str | None = None
+    session_id: str | None = None
 
 
-def _persist(run: OrchestratorRun) -> None:
-    RUNS_DIR.mkdir(exist_ok=True)
-    with _persist_lock:
-        (RUNS_DIR / f"{run.id}.json").write_text(json.dumps(asdict(run), indent=2))
+RUNS: dict[str, OrchestratorRun] = {}
 
 
-def _load_persisted_runs() -> dict[str, OrchestratorRun]:
-    if not RUNS_DIR.exists():
-        return {}
+def _append_result_to_session(run: OrchestratorRun) -> None:
+    """Folds a finished run into its conversation's history. Each subtask
+    becomes a fake tool call (its role as the "tool" name, model+task as
+    its arguments, its result as the tool response) - the exact shape a
+    real tool call/response pair has, so the desktop app's existing
+    reconstruction of tool calls from session history renders it with no
+    changes needed there, the same way it would for a real tool. The
+    synthesis (or the error, if the run failed) is the final assistant
+    message, same as any other reply."""
+    assert run.session_id is not None
+    path = session_path(run.session_id)
+    try:
+        messages = load_session(path)
+    except (OSError, ValueError):
+        return
 
-    runs: dict[str, OrchestratorRun] = {}
-    for path in RUNS_DIR.glob("*.json"):
-        try:
-            data = json.loads(path.read_text())
-        except (OSError, ValueError):
-            continue
-
-        subtasks = [Subtask(**s) for s in data.get("subtasks", [])]
-        run = OrchestratorRun(
-            id=data["id"],
-            task=data["task"],
-            status=data["status"],
-            subtasks=subtasks,
-            final_result=data.get("final_result"),
-            error=data.get("error"),
-            created_at=data["created_at"],
-            project_id=data.get("project_id"),
+    if run.subtasks:
+        messages.append(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": f"multiagent_{s.id}",
+                        "type": "function",
+                        "function": {
+                            "name": s.role,
+                            "arguments": json.dumps({"model": s.model, "task": s.description}),
+                        },
+                    }
+                    for s in run.subtasks
+                ],
+            }
         )
-        if run.status in ("planning", "running"):
-            # its background threads died with the harness - no way to
-            # know how it would have finished
-            run.status = "error"
-            run.error = "the harness restarted before this run finished"
-        runs[run.id] = run
-    return runs
+        for s in run.subtasks:
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": f"multiagent_{s.id}",
+                    "content": s.result or "(no result)",
+                }
+            )
 
-
-RUNS: dict[str, OrchestratorRun] = _load_persisted_runs()
+    final_text = (
+        run.final_result if run.status == "done" else (run.error or "multi-agent run failed")
+    )
+    messages.append(
+        cast(
+            "ChatCompletionMessageParam",
+            {"role": "assistant", "content": final_text, "model": model_for_role("orchestrator")},
+        )
+    )
+    save_session(path, messages)
 
 
 def _parse_plan(raw: str) -> list[dict[str, str]]:
@@ -231,7 +244,7 @@ def _parse_plan(raw: str) -> list[dict[str, str]]:
     return subtasks
 
 
-def _run_subtask(run: OrchestratorRun, subtask: Subtask, project: Project | None) -> None:
+def _run_subtask(subtask: Subtask, project: Project | None) -> None:
     from tools import TOOLS_REGISTRY
 
     can_write = subtask.role == "code" and project is not None
@@ -251,7 +264,6 @@ def _run_subtask(run: OrchestratorRun, subtask: Subtask, project: Project | None
     ]
 
     subtask.status = "running"
-    _persist(run)
     try:
         for _ in range(MAX_SUBTASK_ITERATIONS):
             reply = call_chat(messages, tools=schema, model=subtask.model)
@@ -282,7 +294,6 @@ def _run_subtask(run: OrchestratorRun, subtask: Subtask, project: Project | None
                     continue
                 subtask.result = reply.content or "(the sub-agent returned no output)"
                 subtask.status = "done"
-                _persist(run)
                 return
 
             messages.append(
@@ -318,11 +329,9 @@ def _run_subtask(run: OrchestratorRun, subtask: Subtask, project: Project | None
 
         subtask.result = f"(stopped after {MAX_SUBTASK_ITERATIONS} iterations without concluding)"
         subtask.status = "done"
-        _persist(run)
     except Exception as e:
         subtask.status = "error"
         subtask.result = f"{type(e).__name__}: {e}"
-        _persist(run)
 
 
 def _run(run: OrchestratorRun) -> None:
@@ -354,7 +363,8 @@ def _run(run: OrchestratorRun) -> None:
     except Exception as e:
         run.status = "error"
         run.error = f"planning failed: {type(e).__name__}: {e}"
-        _persist(run)
+        if run.session_id:
+            _append_result_to_session(run)
         return
 
     run.subtasks = [
@@ -367,11 +377,9 @@ def _run(run: OrchestratorRun) -> None:
         for item in raw_subtasks
     ]
     run.status = "running"
-    _persist(run)
 
     threads = [
-        threading.Thread(target=_run_subtask, args=(run, s, project), daemon=True)
-        for s in run.subtasks
+        threading.Thread(target=_run_subtask, args=(s, project), daemon=True) for s in run.subtasks
     ]
     for t in threads:
         t.start()
@@ -401,26 +409,24 @@ def _run(run: OrchestratorRun) -> None:
         )
         run.final_result = synth_reply.content or "(the planner returned no synthesis)"
         run.status = "done"
-        _persist(run)
     except Exception as e:
         run.status = "error"
         run.error = f"synthesis failed: {type(e).__name__}: {e}"
-        _persist(run)
+
+    if run.session_id:
+        _append_result_to_session(run)
 
 
-def dispatch(task: str, project_id: str | None = None) -> str:
+def dispatch(task: str, project_id: str | None = None, session_id: str | None = None) -> str:
     """Starts a multi-agent run in a background thread and returns its id
     immediately, without waiting for it to finish."""
-    run = OrchestratorRun(id=uuid.uuid4().hex[:8], task=task, project_id=project_id)
+    run = OrchestratorRun(
+        id=uuid.uuid4().hex[:8], task=task, project_id=project_id, session_id=session_id
+    )
     RUNS[run.id] = run
-    _persist(run)
     threading.Thread(target=_run, args=(run,), daemon=True).start()
     return run.id
 
 
 def get(run_id: str) -> OrchestratorRun | None:
     return RUNS.get(run_id)
-
-
-def list_runs() -> list[OrchestratorRun]:
-    return sorted(RUNS.values(), key=lambda r: r.created_at, reverse=True)
