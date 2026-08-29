@@ -25,7 +25,14 @@ from main import (
     timed_stream_chat,
     to_tool_call_params,
 )
-from projects import Project, create_project, delete_project, get_project, load_projects
+from projects import (
+    Project,
+    create_project,
+    delete_project,
+    get_project,
+    load_projects,
+    rename_project,
+)
 from sessions import (
     SESSIONS_DIR,
     allow_always,
@@ -96,6 +103,10 @@ class MCPServerToggle(BaseModel):
 class ProjectCreate(BaseModel):
     name: str
     folder_path: str
+
+
+class ProjectRename(BaseModel):
+    name: str
 
 
 @dataclass
@@ -601,6 +612,13 @@ def add_project(body: ProjectCreate) -> list[Project]:
     if not folder.is_dir():
         raise HTTPException(400, "folder not found")
     create_project(body.name, str(folder))
+    return load_projects()
+
+
+@app.put("/projects/{project_id}")
+def rename_project_endpoint(project_id: str, body: ProjectRename) -> list[Project]:
+    if not rename_project(project_id, body.name):
+        raise HTTPException(404, "project not found")
     return load_projects()
 
 

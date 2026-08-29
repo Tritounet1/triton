@@ -220,6 +220,8 @@ function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState("");
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [editingProjectValue, setEditingProjectValue] = useState("");
   const [deletingSession, setDeletingSession] = useState<Session | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -369,6 +371,24 @@ function App() {
       body: JSON.stringify({ title }),
     });
     setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, title } : s)));
+  }
+
+  function startRenameProject(project: Project) {
+    setEditingProjectId(project.id);
+    setEditingProjectValue(project.name);
+  }
+
+  async function commitRenameProject(id: string) {
+    const name = editingProjectValue.trim();
+    setEditingProjectId(null);
+    if (!name) return;
+
+    const res = await fetch(`${API_BASE}/projects/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    if (res.ok) setProjects((await res.json()) as Project[]);
   }
 
   async function confirmDeleteSession() {
@@ -873,39 +893,67 @@ function App() {
                 const isCollapsed = collapsedProjectIds.has(p.id);
                 return (
                   <div key={p.id}>
-                    <SideNavItem
-                      label={p.name}
-                      icon={<FolderIcon className="h-4 w-4" />}
-                      isSelected={p.id === activeProjectId && sessionId === null}
-                      onClick={() => { toggleProjectCollapsed(p.id); }}
-                      endContent={
-                        <div className="flex items-center gap-0.5">
-                          <IconButton
-                            label="Nouvelle conversation dans ce projet"
-                            icon={<PlusIcon />}
-                            variant="ghost"
-                            size="sm"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              startProjectSession(p.id);
-                            }}
-                          />
-                          <IconButton
-                            label="Supprimer le projet"
-                            icon={<TrashIcon />}
-                            variant="ghost"
-                            size="sm"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setDeletingProject(p);
-                            }}
-                          />
-                          <ChevronRightIcon
-                            className={`h-4 w-4 shrink-0 text-secondary transition-transform ${isCollapsed ? "" : "rotate-90"}`}
-                          />
-                        </div>
-                      }
-                    />
+                    {editingProjectId === p.id ? (
+                      <div className="px-2 py-1">
+                        <TextInput
+                          value={editingProjectValue}
+                          onChange={setEditingProjectValue}
+                          isLabelHidden
+                          label="Nom du projet"
+                          size="sm"
+                          hasAutoFocus
+                          onEnter={() => { void commitRenameProject(p.id); }}
+                          onBlur={() => { void commitRenameProject(p.id); }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Escape") setEditingProjectId(null);
+                          }}
+                        />
+                      </div>
+                    ) : (
+                      <SideNavItem
+                        label={p.name}
+                        icon={<FolderIcon className="h-4 w-4" />}
+                        isSelected={p.id === activeProjectId && sessionId === null}
+                        onClick={() => { toggleProjectCollapsed(p.id); }}
+                        endContent={
+                          <div className="flex items-center gap-0.5">
+                            <IconButton
+                              label="Nouvelle conversation dans ce projet"
+                              icon={<PlusIcon />}
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                startProjectSession(p.id);
+                              }}
+                            />
+                            <IconButton
+                              label="Renommer le projet"
+                              icon={<PencilIcon />}
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                startRenameProject(p);
+                              }}
+                            />
+                            <IconButton
+                              label="Supprimer le projet"
+                              icon={<TrashIcon />}
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDeletingProject(p);
+                              }}
+                            />
+                            <ChevronRightIcon
+                              className={`h-4 w-4 shrink-0 text-secondary transition-transform ${isCollapsed ? "" : "rotate-90"}`}
+                            />
+                          </div>
+                        }
+                      />
+                    )}
                     {!isCollapsed &&
                       sessions
                         .filter((s) => s.project_id === p.id)

@@ -38,6 +38,19 @@ def create_project(name: str, folder_path: str) -> Project:
     return project
 
 
+def rename_project(project_id: str, name: str) -> bool:
+    projects = load_projects()
+    found = False
+    for p in projects:
+        if p.id == project_id:
+            p.name = name
+            found = True
+    if not found:
+        return False
+    save_projects(projects)
+    return True
+
+
 def delete_project(project_id: str) -> bool:
     projects = load_projects()
     remaining = [p for p in projects if p.id != project_id]
