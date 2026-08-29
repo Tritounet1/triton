@@ -56,6 +56,7 @@ import {
     PencilIcon,
     PlusIcon,
     SearchIcon,
+    SidebarIcon,
     SunIcon,
     TrashIcon,
     XIcon,
@@ -66,6 +67,7 @@ import { modelAvatar } from "./modelFamilies";
 import { ModelPage } from "./ModelPage";
 import { notifyIfBackground } from "./notifications";
 import { ProjectFilePanel } from "./ProjectFilePanel";
+import { SearchPage } from "./SearchPage";
 import { SettingsPage } from "./SettingsPage";
 import { parseSSE } from "./sse";
 import { SubagentsPanel } from "./SubagentsPanel";
@@ -438,16 +440,14 @@ function App() {
     () => new Set(),
   );
   const [fileRefreshTick, setFileRefreshTick] = useState(0);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [search, setSearch] = useState("");
-  // ids des conversations dont le CONTENU (pas le titre, deja filtre
-  // instantanement cote client) correspond a la recherche - remplis avec
-  // un delai via /sessions/search, qui lit les fichiers de session cote
-  // serveur plutot que de rapatrier tout l'historique de chaque
-  // conversation juste pour la filtrer.
-  const [contentMatchIds, setContentMatchIds] = useState<Set<string>>(
-    () => new Set(),
+  // sidebar repliable a la Claude desktop : repliee, elle disparait
+  // entierement (pas un simple rail d'icones) ; passer la souris sur le
+  // bord gauche la montre en survol temporaire (sidebarPeeking), il faut
+  // cliquer le bouton pour l'epingler ouverte pour de bon.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => localStorage.getItem("triton_sidebar_collapsed") === "1",
   );
+  const [sidebarPeeking, setSidebarPeeking] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [pendingConfirmation, setPendingConfirmation] =
     useState<PendingConfirmation | null>(null);
@@ -477,7 +477,7 @@ function App() {
     localStorage.getItem("triton_theme") === "light" ? "light" : "dark",
   );
   const [view, setView] = useState<
-    "chat" | "settings" | "logs" | "mcp" | "model" | "task"
+    "chat" | "settings" | "logs" | "mcp" | "model" | "task" | "search"
   >("chat");
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
@@ -1207,41 +1207,9 @@ function App() {
     };
   }, [sending, cancelMessage]);
 
-  // recherche dans le CONTENU des messages (le titre est deja filtre
-  // instantanement cote client dans filteredSessions ci-dessous) : debounce
-  // de 300ms pour ne pas relire tous les fichiers de session a chaque
-  // frappe. setContentMatchIds() reste dans le callback du timeout (jamais
-  // synchrone dans le corps de l'effet), y compris pour la remise a vide.
-  useEffect(() => {
-    const query = search.trim();
-    const timeout = setTimeout(() => {
-      if (!query) {
-        setContentMatchIds(new Set());
-        return;
-      }
-      fetch(`${API_BASE}/sessions/search?q=${encodeURIComponent(query)}`)
-        .then((r) => (r.ok ? r.json() : []))
-        .then((ids: string[]) => {
-          setContentMatchIds(new Set(ids));
-        })
-        .catch(() => {
-          // API hors ligne : pas de resultats bases sur le contenu, la
-          // recherche par titre (instantanee) continue de fonctionner
-        });
-    }, 300);
-    return () => {
-      clearTimeout(timeout);
-    };
-  }, [search]);
-
-  const filteredSessions = sessions.filter((s) => {
-    if (s.project_id !== null) return false;
-    if (!search) return true;
-    const titleMatches = (s.title ?? formatSessionLabel(s.id))
-      .toLowerCase()
-      .includes(search.toLowerCase());
-    return titleMatches || contentMatchIds.has(s.id);
-  });
+  // liste des conversations hors projet, telle qu'affichee dans la sidebar
+  // (la recherche par titre/contenu est sa propre page - voir SearchPage.tsx)
+  const topLevelSessions = sessions.filter((s) => s.project_id === null);
 
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
   // affiche un message assistant "vide" avec un loader tant que rien n'est
@@ -1269,52 +1237,48 @@ function App() {
           ? "Joindre un PDF"
           : "Le modèle actuel ne prend pas de pièces jointes";
 
-  return (
-    <Theme theme={neutralTheme} mode={themeMode}>
-      <AppShell
-        variant="elevated"
-        height="fill"
-        sideNav={
+  const sideNavElement = (
           <SideNav
             header={
               <SideNavHeading
                 heading="Triton"
                 icon={<Avatar src="triton-logo.jpeg" name="Triton" size="xsm" />}
+                headerEndContent={
+                  <div className="flex items-center gap-0.5">
+                    <IconButton
+                      label={sidebarCollapsed ? "Épingler ouverte" : "Fermer la barre latérale"}
+                      icon={<SidebarIcon />}
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        const next = !sidebarCollapsed;
+                        setSidebarCollapsed(next);
+                        setSidebarPeeking(false);
+                        localStorage.setItem("triton_sidebar_collapsed", next ? "1" : "0");
+                      }}
+                    />
+                    <IconButton
+                      label="Rechercher"
+                      icon={<SearchIcon />}
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setView("search");
+                      }}
+                    />
+                  </div>
+                }
               />
             }
             topContent={
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center gap-1">
-                  <Button
-                    label="Nouvelle conversation"
-                    icon={<PlusIcon />}
-                    variant="secondary"
-                    size="sm"
-                    onClick={startNewSession}
-                    className="flex-1 justify-start"
-                  />
-                  <IconButton
-                    label="Rechercher"
-                    icon={<SearchIcon />}
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      setSearchOpen((v) => !v);
-                    }}
-                  />
-                </div>
-                {searchOpen && (
-                  <TextInput
-                    value={search}
-                    onChange={setSearch}
-                    placeholder="Titre ou contenu..."
-                    isLabelHidden
-                    label="Rechercher une conversation, par titre ou par contenu"
-                    size="sm"
-                    hasAutoFocus
-                  />
-                )}
-              </div>
+              <Button
+                label="Nouvelle conversation"
+                icon={<PlusIcon />}
+                variant="secondary"
+                size="sm"
+                onClick={startNewSession}
+                className="w-full justify-start"
+              />
             }
             footer={
               <div className="flex items-center justify-end gap-0.5 px-1 py-1">
@@ -1547,12 +1511,12 @@ function App() {
             <SubagentsPanel />
 
             <SideNavSection title="Conversations">
-              {filteredSessions.length === 0 && (
+              {topLevelSessions.length === 0 && (
                 <Text size="2xs" color="secondary" className="block px-2 py-1">
                   Aucune conversation.
                 </Text>
               )}
-              {filteredSessions.map((s) =>
+              {topLevelSessions.map((s) =>
                 editingSessionId === s.id ? (
                   <div key={s.id} className="px-2 py-1">
                     <TextInput
@@ -1610,7 +1574,32 @@ function App() {
               )}
             </SideNavSection>
           </SideNav>
-        }
+  );
+
+  return (
+    <Theme theme={neutralTheme} mode={themeMode}>
+      {sidebarCollapsed && (
+        <div
+          className="fixed inset-y-0 left-0 z-40 w-2"
+          onMouseEnter={() => {
+            setSidebarPeeking(true);
+          }}
+        />
+      )}
+      {sidebarCollapsed && sidebarPeeking && (
+        <div
+          className="fixed inset-y-0 left-0 z-50 shadow-2xl"
+          onMouseLeave={() => {
+            setSidebarPeeking(false);
+          }}
+        >
+          {sideNavElement}
+        </div>
+      )}
+      <AppShell
+        variant="elevated"
+        height="fill"
+        sideNav={sidebarCollapsed ? undefined : sideNavElement}
       >
         {view === "settings" && (
           <SettingsPage
@@ -1657,6 +1646,14 @@ function App() {
             onBack={() => {
               setView("chat");
             }}
+          />
+        )}
+        {view === "search" && (
+          <SearchPage
+            onBack={() => {
+              setView("chat");
+            }}
+            onSelectSession={switchSession}
           />
         )}
         {view === "chat" && (
