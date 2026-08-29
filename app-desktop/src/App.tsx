@@ -1,6 +1,7 @@
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { AppShell } from "@astryxdesign/core/AppShell";
 import { Avatar } from "@astryxdesign/core/Avatar";
+import { Badge } from "@astryxdesign/core/Badge";
 import { Button } from "@astryxdesign/core/Button";
 import {
     ChatComposer,
@@ -1489,7 +1490,7 @@ function App() {
         {view === "chat" && (
           <div className="flex h-full">
             <ChatLayout
-              density="balanced"
+              density="spacious"
               className="h-full min-w-0 flex-1"
               emptyState={
                 <EmptyState
@@ -1511,7 +1512,7 @@ function App() {
                   density="compact"
                   elevation="none"
                   style={
-                    { "--_chat-composer-padding": "16px" } as CSSProperties
+                    { "--_chat-composer-padding": "24px" } as CSSProperties
                   }
                   drawer={
                     pendingAttachments.length > 0 ? (
@@ -1582,11 +1583,7 @@ function App() {
                     </>
                   }
                   sendActions={
-                    apiModel ? (
-                      <Text size="2xs" color="secondary">
-                        {apiModel}
-                      </Text>
-                    ) : undefined
+                    apiModel ? <Badge variant="neutral" label={apiModel} /> : undefined
                   }
                 />
               }
