@@ -46,7 +46,6 @@ import {
     CheckIcon,
     ChevronRightIcon,
     CopyIcon,
-    CpuIcon,
     FileIcon,
     FolderIcon,
     GearIcon,
@@ -63,7 +62,6 @@ import { McpServersPage } from "./McpServersPage";
 import { modelAvatar } from "./modelFamilies";
 import { ModelPage } from "./ModelPage";
 import { notifyIfBackground } from "./notifications";
-import { OrchestratorPage } from "./OrchestratorPage";
 import { ProjectFilePanel } from "./ProjectFilePanel";
 import { SettingsPage } from "./SettingsPage";
 import { parseSSE } from "./sse";
@@ -78,10 +76,33 @@ const LONG_RESPONSE_MS = 15000;
 // doit rester alignee avec MAX_ATTACHMENT_BYTES cote serveur (server.py) :
 // une image plus grande est rejetee ici avant meme d'etre envoyee.
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+// declenche le mode multi-agent (orchestrator.py) directement depuis le
+// chat normal, plutot qu'un mode/page a part : "/multi-agents <tache>"
+// dans le composer habituel.
+const MULTI_AGENT_PREFIX = "/multi-agents ";
+const MULTI_AGENT_POLL_INTERVAL_MS = 1500;
 
 interface SentFile {
   name: string;
   dataUrl: string;
+}
+
+interface MultiAgentSubtask {
+  id: string;
+  role: string;
+  description: string;
+  model: string;
+  status: "pending" | "running" | "done" | "error";
+  result: string | null;
+}
+
+interface MultiAgentRun {
+  id: string;
+  task: string;
+  status: "planning" | "running" | "done" | "error";
+  subtasks: MultiAgentSubtask[];
+  final_result: string | null;
+  error: string | null;
 }
 
 type ChatMsg =
@@ -89,10 +110,18 @@ type ChatMsg =
   | { kind: "assistant"; text: string; time: number; model?: string }
   | {
       kind: "tool";
+      // presente seulement pour une sous-tache multi-agent en direct
+      // (voir dispatchMultiAgent) : permet de mettre a jour la meme entree
+      // au lieu d'en empiler une nouvelle a chaque sondage.
+      id?: string;
       tool: string;
       args: Record<string, unknown>;
       result: string;
       time: number;
+      // statut explicite pour une sous-tache multi-agent en direct (connu
+      // sans avoir a l'inferer du texte, contrairement a un vrai appel
+      // d'outil deja termine - voir toolCallStatus).
+      status?: "pending" | "running" | "complete" | "error";
     }
   | { kind: "info"; text: string; time: number }
   | { kind: "error"; text: string; time: number };
@@ -404,7 +433,7 @@ function App() {
     localStorage.getItem("triton_theme") === "light" ? "light" : "dark",
   );
   const [view, setView] = useState<
-    "chat" | "settings" | "logs" | "mcp" | "model" | "task" | "orchestrator"
+    "chat" | "settings" | "logs" | "mcp" | "model" | "task"
   >("chat");
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
@@ -766,9 +795,106 @@ function App() {
     }, 1500);
   }
 
+  // sonde un run multi-agent jusqu'a ce qu'il termine, en mettant a jour
+  // (pas en empilant) une entree "tool" par sous-tache au fil de l'eau :
+  // meme rendu que de vrais appels d'outils (ChatToolCalls), juste avec un
+  // statut connu directement plutot qu'inferre du texte (voir ChatMsg).
+  function pollMultiAgentRun(runId: string): Promise<void> {
+    return new Promise((resolve) => {
+      const interval = setInterval(() => {
+        fetch(`${API_BASE}/orchestrator/${runId}`)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((run: MultiAgentRun | null) => {
+            if (!run) return;
+
+            if (run.subtasks.length > 0) {
+              setMessages((prev) => {
+                const next = [...prev];
+                for (const s of run.subtasks) {
+                  const entry: ChatMsg = {
+                    kind: "tool",
+                    id: s.id,
+                    tool: s.role,
+                    args: { model: s.model, task: s.description },
+                    result: s.result ?? "",
+                    time: Date.now(),
+                    status: s.status === "done" ? "complete" : s.status,
+                  };
+                  const idx = next.findIndex((m) => m.kind === "tool" && m.id === s.id);
+                  if (idx >= 0) next[idx] = entry;
+                  else next.push(entry);
+                }
+                return next;
+              });
+            }
+
+            if (run.status === "done" || run.status === "error") {
+              clearInterval(interval);
+              const finalText =
+                run.status === "done"
+                  ? (run.final_result ?? "(le planificateur n'a rien synthétisé)")
+                  : (run.error ?? "le run multi-agent a échoué");
+              setMessages((prev) => [
+                ...prev,
+                { kind: "assistant", text: finalText, time: Date.now() },
+              ]);
+              resolve();
+            }
+          })
+          .catch(() => {
+            // API hors ligne : nouvelle tentative au prochain intervalle
+          });
+      }, MULTI_AGENT_POLL_INTERVAL_MS);
+    });
+  }
+
+  async function dispatchMultiAgent(rawCommand: string) {
+    const task = rawCommand.slice(MULTI_AGENT_PREFIX.length).trim();
+    if (!task) return;
+
+    setInput("");
+    setMessages((prev) => [...prev, { kind: "user", text: rawCommand, time: Date.now() }]);
+    setSending(true);
+
+    try {
+      const res = await fetch(`${API_BASE}/orchestrator`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ task, session_id: sessionId, project_id: activeProjectId }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      const data = (await res.json()) as { run_id: string; session_id: string };
+
+      if (data.session_id !== sessionId) {
+        setSessionId(data.session_id);
+        localStorage.setItem("triton_session_id", data.session_id);
+      }
+      loadSessions();
+
+      await pollMultiAgentRun(data.run_id);
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        {
+          kind: "error",
+          text: "impossible de contacter l'API Triton (127.0.0.1:8000).",
+          time: Date.now(),
+        },
+      ]);
+    } finally {
+      setSending(false);
+      loadSessions();
+    }
+  }
+
   async function sendMessage(rawText: string) {
     const text = rawText.trim();
     if ((!text && pendingAttachments.length === 0) || sending) return;
+
+    if (text.toLowerCase().startsWith(MULTI_AGENT_PREFIX)) {
+      await dispatchMultiAgent(text);
+      return;
+    }
 
     const startTime = performance.now();
     const attachments = pendingAttachments;
@@ -1144,31 +1270,6 @@ function App() {
                     hasAutoFocus
                   />
                 )}
-                <div className="flex items-center gap-1">
-                  <Button
-                    label="Retour au mode normal"
-                    variant={view === "orchestrator" ? "ghost" : "secondary"}
-                    size="sm"
-                    onClick={() => {
-                      setView("chat");
-                    }}
-                    className="flex-1 justify-center"
-                  >
-                    Normal
-                  </Button>
-                  <Button
-                    label="Passer en mode multi-agent"
-                    icon={<CpuIcon />}
-                    variant={view === "orchestrator" ? "secondary" : "ghost"}
-                    size="sm"
-                    onClick={() => {
-                      setView("orchestrator");
-                    }}
-                    className="flex-1 justify-center"
-                  >
-                    Multi-agent
-                  </Button>
-                </div>
               </div>
             }
             footer={
@@ -1514,13 +1615,6 @@ function App() {
             }}
           />
         )}
-        {view === "orchestrator" && (
-          <OrchestratorPage
-            onBack={() => {
-              setView("chat");
-            }}
-          />
-        )}
         {view === "chat" && (
           <div className="flex h-full">
             <ChatLayout
@@ -1720,7 +1814,7 @@ function App() {
                             key={bi}
                             calls={block.items.map((t) => ({
                               name: t.tool,
-                              status: toolCallStatus(t.result),
+                              status: t.status ?? toolCallStatus(t.result),
                               target: formatArgs(t.args),
                               resultDetail: toolResultDetail(t),
                             }))}
