@@ -308,6 +308,7 @@ def _run_subtask(subtask: Subtask, project: Project | None) -> None:
                 if tool_call.type != "function":
                     continue
                 name = tool_call.function.name
+                args: dict[str, object] = {}
                 try:
                     args = json.loads(tool_call.function.arguments)
                 except json.JSONDecodeError:
@@ -325,9 +326,45 @@ def _run_subtask(subtask: Subtask, project: Project | None) -> None:
                                 result = tool.fn(**args)
                             except TypeError as e:
                                 result = f"error: invalid arguments for {name} ({e})"
+                log_event(
+                    type="orchestrator_subtask_tool_call",
+                    subtask_id=subtask.id,
+                    tool=name,
+                    args=args,
+                    result_preview=result[:300],
+                    result_chars=len(result),
+                )
                 messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": result})
 
-        subtask.result = f"(stopped after {MAX_SUBTASK_ITERATIONS} iterations without concluding)"
+        # ran out of iterations without a plain-text conclusion: force one
+        # more call with no tools, so partial work (searches/reads that did
+        # succeed, a file already written) gets synthesized into an answer
+        # instead of silently discarded - same recovery subagents.py already
+        # has, missing here until a real research subtask hit exactly this
+        # (10 tool-call iterations in a row, never once concluding).
+        messages.append(
+            {
+                "role": "user",
+                "content": "You're out of turns. Answer now with your best understanding "
+                "based on everything gathered above, noting any gaps or unconfirmed points "
+                "instead of continuing to search.",
+            }
+        )
+        final = call_chat(messages, model=subtask.model)
+        log_event(
+            type="orchestrator_subtask_call",
+            subtask_id=subtask.id,
+            role=subtask.role,
+            model=final.model,
+            prompt_tokens=final.prompt_tokens,
+            completion_tokens=final.completion_tokens,
+            total_tokens=final.total_tokens,
+            tool_calls=0,
+            cost_usd=estimate_cost(final.model, final.prompt_tokens, final.completion_tokens),
+        )
+        subtask.result = final.content or (
+            f"(stopped after {MAX_SUBTASK_ITERATIONS} iterations without concluding)"
+        )
         subtask.status = "done"
     except Exception as e:
         subtask.status = "error"
