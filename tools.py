@@ -334,7 +334,18 @@ def web_search(query: str) -> str:
         return f"error: web search failed ({e})"
 
     if "anomaly-modal" in response.text:
-        return "error: DuckDuckGo returned a bot-detection challenge, try again later"
+        # retrying web_search itself almost never helps - it's the same
+        # anti-bot wall, not a transient blip - so this steers straight to
+        # the fallback that actually works instead of wasting a turn on a
+        # second web_search call first (confirmed in real use: fetch_url on
+        # an official/specialized site directly gets through every time).
+        return (
+            "error: DuckDuckGo blocked this search with a bot-detection challenge. "
+            "Retrying web_search won't help, it's not transient - use fetch_url "
+            "directly on a specific site likely to have the answer instead "
+            "(an official source, a well-known specialized site for the topic, "
+            "or a Wikipedia page)."
+        )
 
     raw_results = re.findall(
         r'<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
