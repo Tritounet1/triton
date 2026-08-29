@@ -50,7 +50,7 @@ from sessions import (
     save_title,
 )
 from settings import load_monthly_budget, save_model, save_monthly_budget
-from tools import TOOLS, TOOLS_REGISTRY, invoke_tool, is_skipped
+from tools import TOOLS, TOOLS_REGISTRY, enforce_project_sandbox, invoke_tool, is_skipped
 
 
 @asynccontextmanager
@@ -189,83 +189,6 @@ def generate_conversation_title(first_message: str) -> str:
     if len(title) > MAX_TITLE_CHARS:
         title = title[: MAX_TITLE_CHARS - 1].rstrip() + "…"
     return title
-
-
-# path/directory arguments to confine to the active project's folder when
-# the conversation is scoped to one. run_shell (arbitrary command, no
-# single path argument to check) and MCP-sourced tools (unknown schemas)
-# are deliberately not covered here.
-SANDBOXED_PATH_ARGS: dict[str, list[str]] = {
-    "read_file": ["path"],
-    "list_files": ["directory"],
-    "write_file": ["path"],
-    "edit_file": ["path"],
-    "delete_file": ["path"],
-    "move_file": ["source", "destination"],
-    "grep": ["directory"],
-    "glob": ["directory"],
-    "git_status": ["directory"],
-    "git_diff": ["directory", "path"],
-    "git_commit": ["directory", "paths"],
-    "run_tests": ["path"],
-    "start_background_task": ["directory"],
-}
-
-# for these, an omitted argument otherwise defaults to "." (the harness's
-# own working directory, not the project folder) - when scoped to a
-# project, default it to the project folder instead, so a call that omits
-# the argument stays inside the project rather than leaking the harness's
-# own source tree
-DEFAULTABLE_PATH_ARGS = {
-    "list_files",
-    "grep",
-    "glob",
-    "git_status",
-    "git_diff",
-    "git_commit",
-    "start_background_task",
-}
-
-
-def enforce_project_sandbox(
-    name: str, args: dict[str, object], project: Project | None
-) -> str | None:
-    """Returns an error message if a file tool call would touch a path
-    outside the active project's folder, or None if the call is allowed
-    (no project scoped, or this tool isn't in SANDBOXED_PATH_ARGS). Mutates
-    `args` in place to default an omitted directory argument to the
-    project folder for tools in DEFAULTABLE_PATH_ARGS."""
-    if project is None:
-        return None
-
-    arg_names = SANDBOXED_PATH_ARGS.get(name)
-    if arg_names is None:
-        return None
-
-    root = Path(project.folder_path).resolve()
-
-    for arg_name in arg_names:
-        value = args.get(arg_name)
-
-        if not value:
-            if name in DEFAULTABLE_PATH_ARGS and arg_name == "directory":
-                args[arg_name] = str(root)
-            continue
-
-        for raw_path in value if isinstance(value, list) else [value]:
-            if not isinstance(raw_path, str) or not raw_path:
-                continue
-            candidate = Path(raw_path)
-            resolved = (
-                candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
-            )
-            if not resolved.is_relative_to(root):
-                return (
-                    f"error: this conversation is scoped to the project folder {root}, "
-                    f"'{raw_path}' resolves outside of it. Use a path within the project."
-                )
-
-    return None
 
 
 def run_chat_stream(
@@ -787,11 +710,12 @@ def list_subagents() -> list[subagents.SubagentTask]:
 
 class OrchestratorDispatch(BaseModel):
     task: str
+    project_id: str | None = None
 
 
 @app.post("/orchestrator")
 def dispatch_orchestrator(body: OrchestratorDispatch) -> dict[str, str]:
-    return {"run_id": orchestrator.dispatch(body.task)}
+    return {"run_id": orchestrator.dispatch(body.task, body.project_id)}
 
 
 @app.get("/orchestrator")
