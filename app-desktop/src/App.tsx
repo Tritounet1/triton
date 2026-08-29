@@ -4,6 +4,7 @@ import { Avatar } from "@astryxdesign/core/Avatar";
 import { Button } from "@astryxdesign/core/Button";
 import {
     ChatComposer,
+    ChatComposerDrawer,
     ChatLayout,
     ChatMessage,
     ChatMessageBubble,
@@ -51,6 +52,7 @@ import {
     SearchIcon,
     SunIcon,
     TrashIcon,
+    XIcon,
 } from "./icons";
 import { LogsPage } from "./LogsPage";
 import { McpServersPage } from "./McpServersPage";
@@ -68,9 +70,12 @@ const API_BASE = "http://127.0.0.1:8000";
 // notif meme si l'app est en arriere-plan, pour ne pas notifier a chaque
 // petit echange.
 const LONG_RESPONSE_MS = 15000;
+// doit rester alignee avec MAX_ATTACHMENT_BYTES cote serveur (server.py) :
+// une image plus grande est rejetee ici avant meme d'etre envoyee.
+const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 
 type ChatMsg =
-  | { kind: "user"; text: string; time: number }
+  | { kind: "user"; text: string; time: number; images?: string[] }
   | { kind: "assistant"; text: string; time: number; model?: string }
   | {
       kind: "tool";
@@ -88,6 +93,11 @@ interface PendingConfirmation {
   args: Record<string, unknown>;
 }
 
+interface PendingAttachment {
+  name: string;
+  dataUrl: string;
+}
+
 interface Session {
   id: string;
   title: string | null;
@@ -100,12 +110,36 @@ interface Project {
   folder_path: string;
 }
 
+interface ContentPart {
+  type: "text" | "image_url";
+  text?: string;
+  image_url?: { url: string };
+}
+
 interface RawSessionMessage {
   role: "system" | "user" | "assistant" | "tool";
-  content: string | null;
+  content: string | ContentPart[] | null;
   tool_call_id?: string;
   tool_calls?: { id: string; function: { name: string; arguments: string } }[];
   model?: string;
+}
+
+/** Un message utilisateur enregistre peut etre soit une simple chaine, soit
+ * une liste de parts (texte + images) des qu'une piece jointe a ete envoyee
+ * (voir build_user_content cote serveur). */
+function extractUserContent(content: string | ContentPart[]): {
+  text: string;
+  images: string[];
+} {
+  if (typeof content === "string") return { text: content, images: [] };
+  const text = content
+    .filter((p) => p.type === "text")
+    .map((p) => p.text ?? "")
+    .join("\n");
+  const images = content
+    .filter((p) => p.type === "image_url" && p.image_url?.url)
+    .map((p) => p.image_url?.url ?? "");
+  return { text, images };
 }
 
 /** id de session au format 2026-08-28_101500 -> "28/08/2026 10:15" */
@@ -122,7 +156,8 @@ function historyToMessages(raw: RawSessionMessage[]): ChatMsg[] {
 
   for (const m of raw) {
     if (m.role === "user" && m.content) {
-      out.push({ kind: "user", text: m.content, time: now });
+      const { text, images } = extractUserContent(m.content);
+      out.push({ kind: "user", text, time: now, images: images.length ? images : undefined });
     } else if (m.role === "assistant") {
       for (const toolCall of m.tool_calls ?? []) {
         const args = JSON.parse(toolCall.function.arguments || "{}") as Record<
@@ -136,11 +171,16 @@ function historyToMessages(raw: RawSessionMessage[]): ChatMsg[] {
           kind: "tool",
           tool: toolCall.function.name,
           args,
-          result: toolResult?.content ?? "",
+          // le contenu d'un message "tool" (resultat d'un appel d'outil)
+          // est toujours une chaine simple - seul un message "user" peut
+          // contenir une liste de parts (texte + images, voir
+          // extractUserContent), d'ou la garde meme si le type partage est
+          // plus large.
+          result: typeof toolResult?.content === "string" ? toolResult.content : "",
           time: now,
         });
       }
-      if (m.content) {
+      if (typeof m.content === "string" && m.content) {
         out.push({
           kind: "assistant",
           text: m.content,
@@ -269,6 +309,14 @@ function App() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [apiModel, setApiModel] = useState<string | null>(null);
+  // catalogue OpenRouter (id + capacites), recupere une fois au demarrage,
+  // pour savoir si le modele actuel accepte des images (active/desactive le
+  // bouton "joindre" du composer) sans dupliquer cette logique cote serveur.
+  const [modelsCatalog, setModelsCatalog] = useState<{ id: string; supports_images: boolean }[]>(
+    [],
+  );
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [sessionId, setSessionId] = useState<string | null>(() =>
     localStorage.getItem("triton_session_id"),
   );
@@ -341,6 +389,17 @@ function App() {
       localStorage.setItem("triton_theme", next);
       return next;
     });
+  }
+
+  function refreshApiModel() {
+    fetch(`${API_BASE}/health`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { ok: boolean; model: string } | null) => {
+        setApiModel(data?.model ?? null);
+      })
+      .catch(() => {
+        setApiModel(null);
+      });
   }
 
   function loadSessions() {
@@ -493,13 +552,15 @@ function App() {
   }
 
   useEffect(() => {
-    fetch(`${API_BASE}/health`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data: { ok: boolean; model: string } | null) => {
-        setApiModel(data?.model ?? null);
+    refreshApiModel();
+
+    fetch(`${API_BASE}/openrouter/models`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data: { id: string; supports_images: boolean }[]) => {
+        setModelsCatalog(data);
       })
       .catch(() => {
-        setApiModel(null);
+        // API OpenRouter injoignable : le bouton "joindre" reste desactive
       });
 
     loadSessions();
@@ -630,6 +691,35 @@ function App() {
     });
   }
 
+  function handleFilesSelected(fileList: FileList | null) {
+    if (!fileList) return;
+    for (const file of Array.from(fileList)) {
+      if (!file.type.startsWith("image/")) continue;
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            kind: "error",
+            text: `« ${file.name} » dépasse la limite de 8 Mo, ignorée.`,
+            time: Date.now(),
+          },
+        ]);
+        continue;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result;
+        if (typeof dataUrl !== "string") return;
+        setPendingAttachments((prev) => [...prev, { name: file.name, dataUrl }]);
+      };
+      reader.readAsDataURL(file);
+    }
+  }
+
+  function removeAttachment(index: number) {
+    setPendingAttachments((prev) => prev.filter((_, i) => i !== index));
+  }
+
   async function copyToClipboard(text: string, index: number) {
     await navigator.clipboard.writeText(text);
     setCopiedIndex(index);
@@ -640,12 +730,22 @@ function App() {
 
   async function sendMessage(rawText: string) {
     const text = rawText.trim();
-    if (!text || sending) return;
+    if ((!text && pendingAttachments.length === 0) || sending) return;
 
     const startTime = performance.now();
+    const attachments = pendingAttachments;
 
     setInput("");
-    setMessages((prev) => [...prev, { kind: "user", text, time: Date.now() }]);
+    setPendingAttachments([]);
+    setMessages((prev) => [
+      ...prev,
+      {
+        kind: "user",
+        text,
+        time: Date.now(),
+        images: attachments.length ? attachments.map((a) => a.dataUrl) : undefined,
+      },
+    ]);
     setSending(true);
 
     // suivi local plutot que l'etat React sessionId : ce dernier reste sur sa
@@ -692,6 +792,7 @@ function App() {
           session_id: sessionId,
           message: text,
           project_id: activeProjectId,
+          attachments: attachments.map((a) => ({ name: a.name, data_url: a.dataUrl })),
         }),
         signal: controller.signal,
       });
@@ -931,6 +1032,8 @@ function App() {
   });
 
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
+  const supportsImages =
+    modelsCatalog.find((m) => m.id === apiModel)?.supports_images ?? false;
 
   return (
     <Theme theme={neutralTheme} mode={themeMode}>
@@ -1308,6 +1411,7 @@ function App() {
         {view === "model" && (
           <ModelPage
             onBack={() => {
+              refreshApiModel();
               setView("settings");
             }}
           />
@@ -1348,14 +1452,57 @@ function App() {
                   style={
                     { "--_chat-composer-padding": "16px" } as CSSProperties
                   }
+                  drawer={
+                    pendingAttachments.length > 0 ? (
+                      <ChatComposerDrawer count={pendingAttachments.length} label="pièce(s) jointe(s)">
+                        <div className="flex flex-wrap gap-2">
+                          {pendingAttachments.map((a, i) => (
+                            <div key={`${a.name}-${i}`} className="group relative">
+                              <img
+                                src={a.dataUrl}
+                                alt={a.name}
+                                className="h-16 w-16 rounded-md border border-border object-cover"
+                              />
+                              <IconButton
+                                label="Retirer"
+                                icon={<XIcon className="h-3 w-3" />}
+                                variant="primary"
+                                size="sm"
+                                className="absolute -right-1.5 -top-1.5 h-5 w-5 min-w-0 rounded-full p-0"
+                                onClick={() => { removeAttachment(i); }}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </ChatComposerDrawer>
+                    ) : undefined
+                  }
                   footerActions={
-                    <IconButton
-                      label="Joindre (pas encore disponible)"
-                      icon={<PlusIcon />}
-                      variant="ghost"
-                      size="sm"
-                      isDisabled
-                    />
+                    <>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="hidden"
+                        onChange={(e) => {
+                          handleFilesSelected(e.target.files);
+                          e.target.value = "";
+                        }}
+                      />
+                      <IconButton
+                        label={
+                          supportsImages
+                            ? "Joindre une image"
+                            : "Le modèle actuel ne prend pas les images en entrée"
+                        }
+                        icon={<PlusIcon />}
+                        variant="ghost"
+                        size="sm"
+                        isDisabled={!supportsImages}
+                        onClick={() => { fileInputRef.current?.click(); }}
+                      />
+                    </>
                   }
                   sendActions={
                     apiModel ? (
@@ -1385,6 +1532,18 @@ function App() {
                             />
                           }
                         >
+                          {group.msg.images && group.msg.images.length > 0 && (
+                            <div className="mb-2 flex flex-wrap gap-2">
+                              {group.msg.images.map((src, i) => (
+                                <img
+                                  key={i}
+                                  src={src}
+                                  alt=""
+                                  className="max-h-48 rounded-md border border-border object-cover"
+                                />
+                              ))}
+                            </div>
+                          )}
                           {group.msg.text}
                         </ChatMessageBubble>
                       </ChatMessage>

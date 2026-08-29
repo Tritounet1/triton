@@ -69,10 +69,19 @@ app.add_middleware(
 )
 
 
+class Attachment(BaseModel):
+    name: str = ""
+    # a full data URL ("data:image/png;base64,...."), exactly what the
+    # OpenAI/OpenRouter image_url.url field accepts - no server-side
+    # decoding needed, it's forwarded to the model as-is.
+    data_url: str
+
+
 class ChatRequest(BaseModel):
     session_id: str | None = None
     message: str
     project_id: str | None = None
+    attachments: list[Attachment] = []
 
 
 class ConfirmRequest(BaseModel):
@@ -417,6 +426,7 @@ class ModelInfo(TypedDict):
     prompt_price: float
     completion_price: float
     supports_tools: bool
+    supports_images: bool
 
 
 @app.get("/settings/model")
@@ -445,9 +455,10 @@ def set_monthly_budget(body: BudgetUpdate) -> dict[str, float | None]:
 def list_openrouter_models() -> list[ModelInfo]:
     """Proxies OpenRouter's public model catalog (no API key required),
     trimmed to what the desktop app's model picker needs: id/name, context
-    size, price per million tokens (OpenRouter reports per-token), and
-    whether the model supports function calling at all (this harness is
-    unusable with the tool-calling loop otherwise)."""
+    size, price per million tokens (OpenRouter reports per-token), whether
+    the model supports function calling at all (this harness is unusable
+    with the tool-calling loop otherwise), and whether it accepts image
+    input (used to enable/disable the composer's attach button)."""
     try:
         resp = requests.get("https://openrouter.ai/api/v1/models", timeout=15)
         resp.raise_for_status()
@@ -462,6 +473,7 @@ def list_openrouter_models() -> list[ModelInfo]:
             completion_price = float(pricing.get("completion", 0)) * 1_000_000
         except (TypeError, ValueError):
             continue
+        architecture = m.get("architecture") or {}
         models.append(
             {
                 "id": m["id"],
@@ -470,15 +482,52 @@ def list_openrouter_models() -> list[ModelInfo]:
                 "prompt_price": round(prompt_price, 4),
                 "completion_price": round(completion_price, 4),
                 "supports_tools": "tools" in (m.get("supported_parameters") or []),
+                "supports_images": "image" in (architecture.get("input_modalities") or []),
             }
         )
     return models
 
 
+# only images for now: PDFs/other files are handled inconsistently across
+# providers (some want a "file" content part, others don't support them at
+# all), whereas image_url is a stable, widely-supported part of the
+# OpenAI-compatible schema that every multimodal model on OpenRouter accepts.
+MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
+
+
+def validate_attachments(attachments: list[Attachment]) -> None:
+    for a in attachments:
+        if not a.data_url.startswith("data:image/"):
+            raise HTTPException(400, f"attachment {a.name!r} is not a supported image")
+        _, _, b64_payload = a.data_url.partition(",")
+        if len(b64_payload) * 3 // 4 > MAX_ATTACHMENT_BYTES:
+            raise HTTPException(
+                400,
+                f"attachment {a.name!r} exceeds the "
+                f"{MAX_ATTACHMENT_BYTES // (1024 * 1024)}MB limit",
+            )
+
+
+def build_user_content(text: str, attachments: list[Attachment]) -> str | list[dict[str, object]]:
+    if not attachments:
+        return text
+    parts: list[dict[str, object]] = []
+    if text:
+        parts.append({"type": "text", "text": text})
+    parts.extend({"type": "image_url", "image_url": {"url": a.data_url}} for a in attachments)
+    return parts
+
+
 @app.post("/chat")
 def chat(body: ChatRequest) -> StreamingResponse:
+    validate_attachments(body.attachments)
     session_path, messages, is_new = resolve_session(body.session_id, body.project_id)
-    messages.append({"role": "user", "content": body.message})
+    messages.append(
+        cast(
+            ChatCompletionMessageParam,
+            {"role": "user", "content": build_user_content(body.message, body.attachments)},
+        )
+    )
 
     return StreamingResponse(
         run_chat_stream(session_path, messages, first_message=body.message if is_new else None),
