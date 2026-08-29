@@ -24,6 +24,7 @@ import {
 } from "@astryxdesign/core/SideNav";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
+import { Spinner } from "@astryxdesign/core/Spinner";
 import { Theme } from "@astryxdesign/core/theme";
 import { Timestamp } from "@astryxdesign/core/Timestamp";
 import { neutralTheme } from "@astryxdesign/theme-neutral/built";
@@ -1062,6 +1063,16 @@ function App() {
   });
 
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
+  // affiche un message assistant "vide" avec un loader tant que rien n'est
+  // encore arrive pour ce tour (ni texte, ni tool_call) : une fois le
+  // premier evenement traite, le dernier message devient "assistant" ou
+  // "tool" et ce placeholder disparait de lui-meme.
+  const lastMessage = messages[messages.length - 1];
+  const showTypingPlaceholder =
+    sending &&
+    !pendingConfirmation &&
+    lastMessage?.kind !== "assistant" &&
+    lastMessage?.kind !== "tool";
   const currentModelInfo = modelsCatalog.find((m) => m.id === apiModel);
   const supportsImages = currentModelInfo?.supports_images ?? false;
   const supportsFiles = currentModelInfo?.supports_files ?? false;
@@ -1713,6 +1724,24 @@ function App() {
                     </ChatMessage>
                   );
                 })}
+
+                {showTypingPlaceholder && (
+                  <ChatMessage
+                    sender="assistant"
+                    avatar={
+                      <Avatar
+                        name={modelAvatar(apiModel).name}
+                        src={modelAvatar(apiModel).logo}
+                        size="sm"
+                      />
+                    }
+                    name="Triton"
+                  >
+                    <ChatMessageBubble variant="ghost" width="100%">
+                      <Spinner size="sm" shade="subtle" aria-label="Triton réfléchit" />
+                    </ChatMessageBubble>
+                  </ChatMessage>
+                )}
 
                 {pendingConfirmation && (
                   <div className="mx-auto flex max-w-md flex-col items-center gap-3 rounded-lg border border-warning bg-warning-muted px-4 py-3">
