@@ -806,6 +806,16 @@ def stop_background_task_endpoint(task_id: str) -> dict[str, object]:
     return background_tasks.detail(task)
 
 
+@app.delete("/background_tasks/{task_id}")
+def delete_background_task_endpoint(task_id: str) -> dict[str, bool]:
+    if background_tasks.get(task_id) is None:
+        raise HTTPException(404, "background task not found")
+    result = background_tasks.delete(task_id)
+    if result.startswith("error:"):
+        raise HTTPException(409, result)
+    return {"deleted": True}
+
+
 @app.get("/logs")
 def get_logs(limit: int = 500) -> list[dict[str, object]]:
     """Raw events from logs/events.jsonl (model_call / tool_call), most

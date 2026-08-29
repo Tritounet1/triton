@@ -1,7 +1,7 @@
 import { Badge } from "@astryxdesign/core/Badge";
 import { IconButton } from "@astryxdesign/core/IconButton";
 import { Text } from "@astryxdesign/core/Text";
-import { StopIcon, TerminalIcon } from "./icons";
+import { StopIcon, TerminalIcon, XIcon } from "./icons";
 
 export interface BackgroundTask {
   id: string;
@@ -32,12 +32,18 @@ interface BackgroundTasksSectionProps {
   tasks: BackgroundTask[];
   onOpen: (id: string) => void;
   onStop: (id: string) => void;
+  onDelete: (id: string) => void;
 }
 
 /** Taches lancees par le modele (start_background_task, ex. un serveur de
  * dev) : affichees dans le panneau lateral droit de la conversation, un
  * clic ouvre la vue terminal plein ecran (voir TaskView.tsx). */
-export function BackgroundTasksSection({ tasks, onOpen, onStop }: BackgroundTasksSectionProps) {
+export function BackgroundTasksSection({
+  tasks,
+  onOpen,
+  onStop,
+  onDelete,
+}: BackgroundTasksSectionProps) {
   if (tasks.length === 0) return null;
 
   return (
@@ -56,7 +62,7 @@ export function BackgroundTasksSection({ tasks, onOpen, onStop }: BackgroundTask
             {t.name}
           </Text>
           <Badge variant={statusVariant(t.status)} label={statusLabel(t.status)} />
-          {t.status === "running" && (
+          {t.status === "running" ? (
             <IconButton
               label="Arrêter"
               icon={<StopIcon />}
@@ -65,6 +71,17 @@ export function BackgroundTasksSection({ tasks, onOpen, onStop }: BackgroundTask
               onClick={(e) => {
                 e.stopPropagation();
                 onStop(t.id);
+              }}
+            />
+          ) : (
+            <IconButton
+              label="Supprimer"
+              icon={<XIcon />}
+              variant="destructive"
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete(t.id);
               }}
             />
           )}

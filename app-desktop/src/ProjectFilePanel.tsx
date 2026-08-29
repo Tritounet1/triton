@@ -26,6 +26,7 @@ interface ProjectFilePanelProps {
   tasks: BackgroundTask[];
   onOpenTask: (id: string) => void;
   onStopTask: (id: string) => void;
+  onDeleteTask: (id: string) => void;
 }
 
 function toTreeItems(nodes: TreeNode[]): TreeListItemData[] {
@@ -56,6 +57,7 @@ export function ProjectFilePanel({
   tasks,
   onOpenTask,
   onStopTask,
+  onDeleteTask,
 }: ProjectFilePanelProps) {
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [truncated, setTruncated] = useState(false);
@@ -106,7 +108,12 @@ export function ProjectFilePanel({
         />
       </div>
 
-      <BackgroundTasksSection tasks={tasks} onOpen={onOpenTask} onStop={onStopTask} />
+      <BackgroundTasksSection
+        tasks={tasks}
+        onOpen={onOpenTask}
+        onStop={onStopTask}
+        onDelete={onDeleteTask}
+      />
 
       <div className="flex-1 overflow-y-auto px-2 py-2">
         {error && (

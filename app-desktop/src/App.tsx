@@ -668,6 +668,14 @@ function App() {
     });
   }
 
+  function deleteTask(id: string) {
+    setBackgroundTasks((prev) => prev.filter((t) => t.id !== id));
+    fetch(`${API_BASE}/background_tasks/${id}`, { method: "DELETE" }).catch(() => {
+      // API hors ligne : le prochain polling la fera reapparaitre si la
+      // suppression n'a en fait pas eu lieu cote serveur
+    });
+  }
+
   function switchSession(id: string) {
     setView("chat");
     if (id === sessionId || sending) return;
@@ -1794,9 +1802,15 @@ function App() {
                 tasks={backgroundTasks}
                 onOpenTask={openTask}
                 onStopTask={stopTask}
+                onDeleteTask={deleteTask}
               />
             ) : (
-              <BackgroundTasksPanel tasks={backgroundTasks} onOpen={openTask} onStop={stopTask} />
+              <BackgroundTasksPanel
+                tasks={backgroundTasks}
+                onOpen={openTask}
+                onStop={stopTask}
+                onDelete={deleteTask}
+              />
             )}
           </div>
         )}

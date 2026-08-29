@@ -240,6 +240,19 @@ def stop(task_id: str) -> str:
     return f"task {task_id} stopped"
 
 
+def delete(task_id: str) -> str:
+    task = TASKS.get(task_id)
+    if task is None:
+        return f"error: no background task with id {task_id}"
+    if task.status == "running":
+        return "error: task is still running, stop it before deleting it"
+
+    del TASKS[task_id]
+    _persist_state()
+    _log_path(task_id).unlink(missing_ok=True)
+    return f"task {task_id} deleted"
+
+
 def get(task_id: str) -> BackgroundTask | None:
     return TASKS.get(task_id)
 
