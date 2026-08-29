@@ -234,6 +234,12 @@ function App() {
   const [fileRefreshTick, setFileRefreshTick] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
+  // ids des conversations dont le CONTENU (pas le titre, deja filtre
+  // instantanement cote client) correspond a la recherche - remplis avec
+  // un delai via /sessions/search, qui lit les fichiers de session cote
+  // serveur plutot que de rapatrier tout l'historique de chaque
+  // conversation juste pour la filtrer.
+  const [contentMatchIds, setContentMatchIds] = useState<Set<string>>(() => new Set());
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(
     null,
@@ -717,11 +723,37 @@ function App() {
     return () => { document.removeEventListener("keydown", handleKeyDown); };
   }, [sending, cancelMessage]);
 
-  const filteredSessions = sessions.filter(
-    (s) =>
-      s.project_id === null &&
-      (s.title ?? formatSessionLabel(s.id)).toLowerCase().includes(search.toLowerCase()),
-  );
+  // recherche dans le CONTENU des messages (le titre est deja filtre
+  // instantanement cote client dans filteredSessions ci-dessous) : debounce
+  // de 300ms pour ne pas relire tous les fichiers de session a chaque
+  // frappe. setContentMatchIds() reste dans le callback du timeout (jamais
+  // synchrone dans le corps de l'effet), y compris pour la remise a vide.
+  useEffect(() => {
+    const query = search.trim();
+    const timeout = setTimeout(() => {
+      if (!query) {
+        setContentMatchIds(new Set());
+        return;
+      }
+      fetch(`${API_BASE}/sessions/search?q=${encodeURIComponent(query)}`)
+        .then((r) => (r.ok ? r.json() : []))
+        .then((ids: string[]) => { setContentMatchIds(new Set(ids)); })
+        .catch(() => {
+          // API hors ligne : pas de resultats bases sur le contenu, la
+          // recherche par titre (instantanee) continue de fonctionner
+        });
+    }, 300);
+    return () => { clearTimeout(timeout); };
+  }, [search]);
+
+  const filteredSessions = sessions.filter((s) => {
+    if (s.project_id !== null) return false;
+    if (!search) return true;
+    const titleMatches = (s.title ?? formatSessionLabel(s.id))
+      .toLowerCase()
+      .includes(search.toLowerCase());
+    return titleMatches || contentMatchIds.has(s.id);
+  });
 
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
 
@@ -756,9 +788,9 @@ function App() {
                   <TextInput
                     value={search}
                     onChange={setSearch}
-                    placeholder="Rechercher..."
+                    placeholder="Titre ou contenu..."
                     isLabelHidden
-                    label="Rechercher une conversation"
+                    label="Rechercher une conversation, par titre ou par contenu"
                     size="sm"
                     hasAutoFocus
                   />

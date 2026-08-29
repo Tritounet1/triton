@@ -502,6 +502,33 @@ def list_sessions() -> list[dict[str, str | None]]:
     ]
 
 
+@app.get("/sessions/search")
+def search_sessions(q: str) -> list[str]:
+    """Returns ids of sessions whose title or message content contains q
+    (case-insensitive). Reads each session file directly on the server
+    rather than round-tripping every full history to the client just to
+    filter them - titles are already searched client-side instantly, this
+    only needs to cover message content. Declared before
+    /sessions/{session_id} so "search" isn't swallowed as a session id."""
+    query = q.strip().lower()
+    if not query or not SESSIONS_DIR.exists():
+        return []
+
+    matches: list[str] = []
+    for path in SESSIONS_DIR.glob("*.json"):
+        session_id = path.stem
+        try:
+            messages = load_session(path)
+        except (OSError, ValueError):
+            continue
+        for message in messages:
+            content = message.get("content")
+            if isinstance(content, str) and query in content.lower():
+                matches.append(session_id)
+                break
+    return matches
+
+
 @app.get("/sessions/{session_id}")
 def get_session(session_id: str) -> list[dict[str, object]]:
     """Returns the raw message dicts as stored on disk. Typed loosely
