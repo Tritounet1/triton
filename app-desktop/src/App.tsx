@@ -46,6 +46,7 @@ import {
     CheckIcon,
     ChevronRightIcon,
     CopyIcon,
+    CpuIcon,
     FileIcon,
     FolderIcon,
     GearIcon,
@@ -62,6 +63,7 @@ import { McpServersPage } from "./McpServersPage";
 import { modelAvatar } from "./modelFamilies";
 import { ModelPage } from "./ModelPage";
 import { notifyIfBackground } from "./notifications";
+import { OrchestratorPage } from "./OrchestratorPage";
 import { ProjectFilePanel } from "./ProjectFilePanel";
 import { SettingsPage } from "./SettingsPage";
 import { parseSSE } from "./sse";
@@ -402,7 +404,7 @@ function App() {
     localStorage.getItem("triton_theme") === "light" ? "light" : "dark",
   );
   const [view, setView] = useState<
-    "chat" | "settings" | "logs" | "mcp" | "model" | "task"
+    "chat" | "settings" | "logs" | "mcp" | "model" | "task" | "orchestrator"
   >("chat");
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
@@ -1142,6 +1144,31 @@ function App() {
                     hasAutoFocus
                   />
                 )}
+                <div className="flex items-center gap-1">
+                  <Button
+                    label="Retour au mode normal"
+                    variant={view === "orchestrator" ? "ghost" : "secondary"}
+                    size="sm"
+                    onClick={() => {
+                      setView("chat");
+                    }}
+                    className="flex-1 justify-center"
+                  >
+                    Normal
+                  </Button>
+                  <Button
+                    label="Passer en mode multi-agent"
+                    icon={<CpuIcon />}
+                    variant={view === "orchestrator" ? "secondary" : "ghost"}
+                    size="sm"
+                    onClick={() => {
+                      setView("orchestrator");
+                    }}
+                    className="flex-1 justify-center"
+                  >
+                    Multi-agent
+                  </Button>
+                </div>
               </div>
             }
             footer={
@@ -1482,6 +1509,13 @@ function App() {
           <TaskView
             key={activeTaskId}
             taskId={activeTaskId}
+            onBack={() => {
+              setView("chat");
+            }}
+          />
+        )}
+        {view === "orchestrator" && (
+          <OrchestratorPage
             onBack={() => {
               setView("chat");
             }}
