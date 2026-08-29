@@ -9,6 +9,7 @@ task isn't automatically killed when its conversation is deleted.
 
 import contextlib
 import os
+import re
 import signal
 import subprocess
 import threading
@@ -17,6 +18,12 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
+
+# strips ANSI escape sequences (color codes, cursor movement) that most CLI
+# tools (vite, pnpm, ...) emit even when stdout is piped rather than a real
+# TTY: harmless in a real terminal, but rendered as raw garbled bytes in the
+# plain <div> the desktop app uses to display logs.
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
 TaskStatus = Literal["running", "exited", "error", "stopped"]
 
@@ -47,8 +54,9 @@ _log_lock = threading.Lock()
 def _pump_output(task: BackgroundTask) -> None:
     assert task.process is not None and task.process.stdout is not None
     for line in task.process.stdout:
+        clean = ANSI_ESCAPE_RE.sub("", line.rstrip("\n"))
         with _log_lock:
-            task.log_lines.append(line.rstrip("\n"))
+            task.log_lines.append(clean)
     task.process.wait()
     if task.status == "running":
         task.exit_code = task.process.returncode

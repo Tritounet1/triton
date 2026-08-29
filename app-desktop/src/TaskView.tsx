@@ -95,10 +95,13 @@ export function TaskView({ taskId, onBack }: TaskViewProps) {
           </div>
         </div>
         {task?.status === "running" && (
-          <Button label="Arrêter" variant="secondary" size="sm" onClick={stopTask}>
-            <StopIcon className="h-4 w-4" />
-            Arrêter
-          </Button>
+          <Button
+            label="Arrêter"
+            variant="secondary"
+            size="sm"
+            icon={<StopIcon className="h-4 w-4" />}
+            onClick={stopTask}
+          />
         )}
       </div>
 
