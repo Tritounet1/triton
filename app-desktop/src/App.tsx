@@ -44,6 +44,7 @@ import {
     CheckIcon,
     ChevronRightIcon,
     CopyIcon,
+    FileIcon,
     FolderIcon,
     GearIcon,
     MoonIcon,
@@ -74,8 +75,13 @@ const LONG_RESPONSE_MS = 15000;
 // une image plus grande est rejetee ici avant meme d'etre envoyee.
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 
+interface SentFile {
+  name: string;
+  dataUrl: string;
+}
+
 type ChatMsg =
-  | { kind: "user"; text: string; time: number; images?: string[] }
+  | { kind: "user"; text: string; time: number; images?: string[]; files?: SentFile[] }
   | { kind: "assistant"; text: string; time: number; model?: string }
   | {
       kind: "tool";
@@ -111,9 +117,10 @@ interface Project {
 }
 
 interface ContentPart {
-  type: "text" | "image_url";
+  type: "text" | "image_url" | "file";
   text?: string;
   image_url?: { url: string };
+  file?: { filename: string; file_data: string };
 }
 
 interface RawSessionMessage {
@@ -125,13 +132,14 @@ interface RawSessionMessage {
 }
 
 /** Un message utilisateur enregistre peut etre soit une simple chaine, soit
- * une liste de parts (texte + images) des qu'une piece jointe a ete envoyee
- * (voir build_user_content cote serveur). */
+ * une liste de parts (texte + images/fichiers) des qu'une piece jointe a ete
+ * envoyee (voir build_user_content cote serveur). */
 function extractUserContent(content: string | ContentPart[]): {
   text: string;
   images: string[];
+  files: SentFile[];
 } {
-  if (typeof content === "string") return { text: content, images: [] };
+  if (typeof content === "string") return { text: content, images: [], files: [] };
   const text = content
     .filter((p) => p.type === "text")
     .map((p) => p.text ?? "")
@@ -139,7 +147,14 @@ function extractUserContent(content: string | ContentPart[]): {
   const images = content
     .filter((p) => p.type === "image_url" && p.image_url?.url)
     .map((p) => p.image_url?.url ?? "");
-  return { text, images };
+  const files = content
+    .filter((p) => p.type === "file" && p.file?.file_data)
+    .map((p) => ({ name: p.file?.filename ?? "document.pdf", dataUrl: p.file?.file_data ?? "" }));
+  return { text, images, files };
+}
+
+function isPdfDataUrl(dataUrl: string): boolean {
+  return dataUrl.startsWith("data:application/pdf");
 }
 
 /** id de session au format 2026-08-28_101500 -> "28/08/2026 10:15" */
@@ -156,8 +171,14 @@ function historyToMessages(raw: RawSessionMessage[]): ChatMsg[] {
 
   for (const m of raw) {
     if (m.role === "user" && m.content) {
-      const { text, images } = extractUserContent(m.content);
-      out.push({ kind: "user", text, time: now, images: images.length ? images : undefined });
+      const { text, images, files } = extractUserContent(m.content);
+      out.push({
+        kind: "user",
+        text,
+        time: now,
+        images: images.length ? images : undefined,
+        files: files.length ? files : undefined,
+      });
     } else if (m.role === "assistant") {
       for (const toolCall of m.tool_calls ?? []) {
         const args = JSON.parse(toolCall.function.arguments || "{}") as Record<
@@ -310,11 +331,12 @@ function App() {
   const [sending, setSending] = useState(false);
   const [apiModel, setApiModel] = useState<string | null>(null);
   // catalogue OpenRouter (id + capacites), recupere une fois au demarrage,
-  // pour savoir si le modele actuel accepte des images (active/desactive le
-  // bouton "joindre" du composer) sans dupliquer cette logique cote serveur.
-  const [modelsCatalog, setModelsCatalog] = useState<{ id: string; supports_images: boolean }[]>(
-    [],
-  );
+  // pour savoir si le modele actuel accepte des images et/ou des PDF
+  // (active/desactive et filtre le bouton "joindre" du composer) sans
+  // dupliquer cette logique cote serveur.
+  const [modelsCatalog, setModelsCatalog] = useState<
+    { id: string; supports_images: boolean; supports_files: boolean }[]
+  >([]);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [sessionId, setSessionId] = useState<string | null>(() =>
@@ -556,7 +578,7 @@ function App() {
 
     fetch(`${API_BASE}/openrouter/models`)
       .then((r) => (r.ok ? r.json() : []))
-      .then((data: { id: string; supports_images: boolean }[]) => {
+      .then((data: { id: string; supports_images: boolean; supports_files: boolean }[]) => {
         setModelsCatalog(data);
       })
       .catch(() => {
@@ -694,7 +716,11 @@ function App() {
   function handleFilesSelected(fileList: FileList | null) {
     if (!fileList) return;
     for (const file of Array.from(fileList)) {
-      if (!file.type.startsWith("image/")) continue;
+      const isImage = file.type.startsWith("image/");
+      const isPdf = file.type === "application/pdf";
+      if ((isImage && !supportsImages) || (isPdf && !supportsFiles) || (!isImage && !isPdf)) {
+        continue;
+      }
       if (file.size > MAX_ATTACHMENT_BYTES) {
         setMessages((prev) => [
           ...prev,
@@ -735,6 +761,9 @@ function App() {
     const startTime = performance.now();
     const attachments = pendingAttachments;
 
+    const sentImages = attachments.filter((a) => !isPdfDataUrl(a.dataUrl)).map((a) => a.dataUrl);
+    const sentFiles = attachments.filter((a) => isPdfDataUrl(a.dataUrl));
+
     setInput("");
     setPendingAttachments([]);
     setMessages((prev) => [
@@ -743,7 +772,8 @@ function App() {
         kind: "user",
         text,
         time: Date.now(),
-        images: attachments.length ? attachments.map((a) => a.dataUrl) : undefined,
+        images: sentImages.length ? sentImages : undefined,
+        files: sentFiles.length ? sentFiles : undefined,
       },
     ]);
     setSending(true);
@@ -1032,8 +1062,20 @@ function App() {
   });
 
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
-  const supportsImages =
-    modelsCatalog.find((m) => m.id === apiModel)?.supports_images ?? false;
+  const currentModelInfo = modelsCatalog.find((m) => m.id === apiModel);
+  const supportsImages = currentModelInfo?.supports_images ?? false;
+  const supportsFiles = currentModelInfo?.supports_files ?? false;
+  const attachAccept = [supportsImages ? "image/*" : null, supportsFiles ? "application/pdf" : null]
+    .filter((x): x is string => x !== null)
+    .join(",");
+  const attachLabel =
+    supportsImages && supportsFiles
+      ? "Joindre une image ou un PDF"
+      : supportsImages
+        ? "Joindre une image"
+        : supportsFiles
+          ? "Joindre un PDF"
+          : "Le modèle actuel ne prend pas de pièces jointes";
 
   return (
     <Theme theme={neutralTheme} mode={themeMode}>
@@ -1456,23 +1498,43 @@ function App() {
                     pendingAttachments.length > 0 ? (
                       <ChatComposerDrawer count={pendingAttachments.length} label="pièce(s) jointe(s)">
                         <div className="flex flex-wrap gap-2">
-                          {pendingAttachments.map((a, i) => (
-                            <div key={`${a.name}-${i}`} className="group relative">
-                              <img
-                                src={a.dataUrl}
-                                alt={a.name}
-                                className="h-16 w-16 rounded-md border border-border object-cover"
-                              />
-                              <IconButton
-                                label="Retirer"
-                                icon={<XIcon className="h-3 w-3" />}
-                                variant="primary"
-                                size="sm"
-                                className="absolute -right-1.5 -top-1.5 h-5 w-5 min-w-0 rounded-full p-0"
-                                onClick={() => { removeAttachment(i); }}
-                              />
-                            </div>
-                          ))}
+                          {pendingAttachments.map((a, i) =>
+                            isPdfDataUrl(a.dataUrl) ? (
+                              <div
+                                key={`${a.name}-${i}`}
+                                className="relative flex h-16 w-32 items-center gap-1.5 rounded-md border border-border px-2"
+                              >
+                                <FileIcon className="h-4 w-4 shrink-0 text-secondary" />
+                                <Text size="2xs" className="min-w-0 truncate">
+                                  {a.name}
+                                </Text>
+                                <IconButton
+                                  label="Retirer"
+                                  icon={<XIcon className="h-3 w-3" />}
+                                  variant="primary"
+                                  size="sm"
+                                  className="absolute -right-1.5 -top-1.5 h-5 w-5 min-w-0 rounded-full p-0"
+                                  onClick={() => { removeAttachment(i); }}
+                                />
+                              </div>
+                            ) : (
+                              <div key={`${a.name}-${i}`} className="relative">
+                                <img
+                                  src={a.dataUrl}
+                                  alt={a.name}
+                                  className="h-16 w-16 rounded-md border border-border object-cover"
+                                />
+                                <IconButton
+                                  label="Retirer"
+                                  icon={<XIcon className="h-3 w-3" />}
+                                  variant="primary"
+                                  size="sm"
+                                  className="absolute -right-1.5 -top-1.5 h-5 w-5 min-w-0 rounded-full p-0"
+                                  onClick={() => { removeAttachment(i); }}
+                                />
+                              </div>
+                            ),
+                          )}
                         </div>
                       </ChatComposerDrawer>
                     ) : undefined
@@ -1482,7 +1544,7 @@ function App() {
                       <input
                         ref={fileInputRef}
                         type="file"
-                        accept="image/*"
+                        accept={attachAccept}
                         multiple
                         className="hidden"
                         onChange={(e) => {
@@ -1491,15 +1553,11 @@ function App() {
                         }}
                       />
                       <IconButton
-                        label={
-                          supportsImages
-                            ? "Joindre une image"
-                            : "Le modèle actuel ne prend pas les images en entrée"
-                        }
+                        label={attachLabel}
                         icon={<PlusIcon />}
                         variant="ghost"
                         size="sm"
-                        isDisabled={!supportsImages}
+                        isDisabled={!supportsImages && !supportsFiles}
                         onClick={() => { fileInputRef.current?.click(); }}
                       />
                     </>
@@ -1541,6 +1599,19 @@ function App() {
                                   alt=""
                                   className="max-h-48 rounded-md border border-border object-cover"
                                 />
+                              ))}
+                            </div>
+                          )}
+                          {group.msg.files && group.msg.files.length > 0 && (
+                            <div className="mb-2 flex flex-wrap gap-2">
+                              {group.msg.files.map((f, i) => (
+                                <div
+                                  key={i}
+                                  className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1"
+                                >
+                                  <FileIcon className="h-4 w-4 shrink-0 text-secondary" />
+                                  <Text size="2xs">{f.name}</Text>
+                                </div>
                               ))}
                             </div>
                           )}

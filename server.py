@@ -427,6 +427,7 @@ class ModelInfo(TypedDict):
     completion_price: float
     supports_tools: bool
     supports_images: bool
+    supports_files: bool
 
 
 @app.get("/settings/model")
@@ -458,7 +459,8 @@ def list_openrouter_models() -> list[ModelInfo]:
     size, price per million tokens (OpenRouter reports per-token), whether
     the model supports function calling at all (this harness is unusable
     with the tool-calling loop otherwise), and whether it accepts image
-    input (used to enable/disable the composer's attach button)."""
+    and/or PDF input (used to enable/disable the composer's attach
+    button)."""
     try:
         resp = requests.get("https://openrouter.ai/api/v1/models", timeout=15)
         resp.raise_for_status()
@@ -483,22 +485,25 @@ def list_openrouter_models() -> list[ModelInfo]:
                 "completion_price": round(completion_price, 4),
                 "supports_tools": "tools" in (m.get("supported_parameters") or []),
                 "supports_images": "image" in (architecture.get("input_modalities") or []),
+                "supports_files": "file" in (architecture.get("input_modalities") or []),
             }
         )
     return models
 
 
-# only images for now: PDFs/other files are handled inconsistently across
-# providers (some want a "file" content part, others don't support them at
-# all), whereas image_url is a stable, widely-supported part of the
-# OpenAI-compatible schema that every multimodal model on OpenRouter accepts.
+# images and PDFs only: other file types are handled inconsistently across
+# providers (some accept arbitrary documents, most don't), whereas these two
+# map to well-defined OpenAI-compatible content parts (image_url and
+# OpenRouter's file) that every model advertising the matching input
+# modality accepts.
 MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
 
 
 def validate_attachments(attachments: list[Attachment]) -> None:
     for a in attachments:
-        if not a.data_url.startswith("data:image/"):
-            raise HTTPException(400, f"attachment {a.name!r} is not a supported image")
+        is_image_or_pdf = a.data_url.startswith(("data:image/", "data:application/pdf"))
+        if not is_image_or_pdf:
+            raise HTTPException(400, f"attachment {a.name!r} is not a supported image or PDF")
         _, _, b64_payload = a.data_url.partition(",")
         if len(b64_payload) * 3 // 4 > MAX_ATTACHMENT_BYTES:
             raise HTTPException(
@@ -508,13 +513,22 @@ def validate_attachments(attachments: list[Attachment]) -> None:
             )
 
 
+def attachment_content_part(a: Attachment) -> dict[str, object]:
+    if a.data_url.startswith("data:image/"):
+        return {"type": "image_url", "image_url": {"url": a.data_url}}
+    # OpenRouter's own extension to the OpenAI schema for document input,
+    # understood natively by every model that lists "file" in
+    # architecture.input_modalities (no parsing plugin needed there).
+    return {"type": "file", "file": {"filename": a.name or "document.pdf", "file_data": a.data_url}}
+
+
 def build_user_content(text: str, attachments: list[Attachment]) -> str | list[dict[str, object]]:
     if not attachments:
         return text
     parts: list[dict[str, object]] = []
     if text:
         parts.append({"type": "text", "text": text})
-    parts.extend({"type": "image_url", "image_url": {"url": a.data_url}} for a in attachments)
+    parts.extend(attachment_content_part(a) for a in attachments)
     return parts
 
 
