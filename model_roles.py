@@ -15,13 +15,11 @@ Role = str  # "orchestrator" | "conversational" | "code" | "research" | "vision"
 ROLE_MODELS: dict[str, str] = {
     "orchestrator": "anthropic/claude-sonnet-5",
     "conversational": "google/gemini-3.7-flash",
-    "code": "z-ai/glm-5.3-flash",
-    "research": "qwen/qwen3.7-flash",
+    "code": "qwen/qwen3-coder-30b-a3b-instruct",
+    "research": "deepseek/deepseek-v4-flash",
     "vision": "google/gemini-3.7-flash",
 }
 
-# used for a role the planner invents that isn't one of the above (models
-# don't always stick to the exact set they're told to use)
 DEFAULT_ROLE = "research"
 
 
