@@ -5,12 +5,13 @@ import { Item } from "@astryxdesign/core/Item";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { ApiKeySettings } from "./ApiKeySettings";
-import { ChartBarIcon, CpuIcon, KeyIcon, PlugIcon, SearchIcon, XIcon } from "./icons";
+import { ChartBarIcon, CpuIcon, KeyIcon, NetworkIcon, PlugIcon, SearchIcon, XIcon } from "./icons";
 import { LogsSettings } from "./LogsSettings";
 import { McpSettings } from "./McpSettings";
 import { ModelSettings } from "./ModelSettings";
+import { RoleModelsSettings } from "./RoleModelsSettings";
 
-type SettingsCategory = "api_key" | "model" | "mcp" | "logs";
+type SettingsCategory = "api_key" | "model" | "role_models" | "mcp" | "logs";
 
 interface CategoryDef {
   id: SettingsCategory;
@@ -21,6 +22,7 @@ interface CategoryDef {
 const CATEGORIES: CategoryDef[] = [
   { id: "api_key", label: "Clé API", icon: <KeyIcon className="h-4 w-4" /> },
   { id: "model", label: "Modèle", icon: <CpuIcon className="h-4 w-4" /> },
+  { id: "role_models", label: "Rôles multi-agent", icon: <NetworkIcon className="h-4 w-4" /> },
   { id: "mcp", label: "Serveurs MCP", icon: <PlugIcon className="h-4 w-4" /> },
   { id: "logs", label: "Logs & coûts", icon: <ChartBarIcon className="h-4 w-4" /> },
 ];
@@ -103,6 +105,7 @@ export function SettingsModal({ isOpen, onClose, onModelChanged }: SettingsModal
           <div key={category} className="animate-fade-in">
             {category === "api_key" && <ApiKeySettings />}
             {category === "model" && <ModelSettings onModelChanged={onModelChanged} />}
+            {category === "role_models" && <RoleModelsSettings />}
             {category === "mcp" && <McpSettings />}
             {category === "logs" && <LogsSettings />}
           </div>

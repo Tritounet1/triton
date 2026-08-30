@@ -1,14 +1,17 @@
 """Which model handles which role in the multi-agent orchestrator
-(orchestrator.py). This is the one place to touch to swap a model for a
-role - nothing else in the codebase needs to change. All OpenRouter ids for
-now (no multi-provider abstraction yet, see issue #1 - deliberately
-skipped for this first version). A settings UI to edit this without a code
-change is a natural next step, not built yet.
+(orchestrator.py). ROLE_MODELS below is the built-in default for a role;
+the Settings UI's per-role overrides (settings.json's "role_models", see
+settings.py) take priority when set, so swapping a model for a role no
+longer requires a code change. All OpenRouter ids for now (no
+multi-provider abstraction yet, see issue #1 - deliberately skipped for
+this first version).
 
 Picks below favor a strong price/performance ratio for the role rather
 than the single best model available - see PLAN.md's "Vrai multi-agent"
 section for the reasoning and the OpenRouter pricing behind each pick.
 """
+
+from triton.settings import load_role_model_overrides
 
 Role = str  # "orchestrator" | "conversational" | "code" | "research" | "vision"
 
@@ -24,4 +27,5 @@ DEFAULT_ROLE = "research"
 
 
 def model_for_role(role: str) -> str:
-    return ROLE_MODELS.get(role, ROLE_MODELS[DEFAULT_ROLE])
+    default = ROLE_MODELS.get(role, ROLE_MODELS[DEFAULT_ROLE])
+    return load_role_model_overrides().get(role, default)

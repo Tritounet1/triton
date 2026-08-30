@@ -55,3 +55,27 @@ def load_openrouter_api_key() -> str | None:
 
 def save_openrouter_api_key(key: str | None) -> None:
     _save({"openrouter_api_key": key})
+
+
+def load_role_model_overrides() -> dict[str, str]:
+    """Per-role model overrides set through the Settings UI - model_roles.py's
+    hardcoded ROLE_MODELS stays the fallback for any role without one."""
+    overrides = _load().get("role_models")
+    if not isinstance(overrides, dict):
+        return {}
+    return {
+        role: model
+        for role, model in overrides.items()
+        if isinstance(role, str) and isinstance(model, str) and model
+    }
+
+
+def save_role_model_override(role: str, model: str | None) -> None:
+    """`model=None` clears the override, falling back to ROLE_MODELS's
+    default for that role again."""
+    overrides = load_role_model_overrides()
+    if model:
+        overrides[role] = model
+    else:
+        overrides.pop(role, None)
+    _save({"role_models": overrides})

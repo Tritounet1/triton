@@ -26,6 +26,7 @@ from triton.chat_loop import (
     to_tool_call_params,
 )
 from triton.logs import LOGS_FILE, log_event
+from triton.model_roles import ROLE_MODELS
 from triton.projects import (
     Project,
     create_project,
@@ -50,9 +51,11 @@ from triton.sessions import (
 )
 from triton.settings import (
     load_monthly_budget,
+    load_role_model_overrides,
     save_model,
     save_monthly_budget,
     save_openrouter_api_key,
+    save_role_model_override,
 )
 from triton.tools import TOOLS, TOOLS_REGISTRY, enforce_project_sandbox, invoke_tool, is_skipped
 
@@ -452,6 +455,46 @@ def get_api_key_status() -> dict[str, bool]:
 def set_api_key(body: ApiKeyUpdate) -> dict[str, bool]:
     save_openrouter_api_key(body.api_key.strip() or None)
     return {"configured": is_api_key_configured()}
+
+
+class RoleModelInfo(TypedDict):
+    role: str
+    default_model: str
+    model: str
+    is_override: bool
+
+
+class RoleModelUpdate(BaseModel):
+    role: str
+    # None (or omitted) clears the override, falling back to ROLE_MODELS's
+    # default for that role again.
+    model: str | None = None
+
+
+def _role_models_status() -> list[RoleModelInfo]:
+    overrides = load_role_model_overrides()
+    return [
+        {
+            "role": role,
+            "default_model": default,
+            "model": overrides.get(role, default),
+            "is_override": role in overrides,
+        }
+        for role, default in ROLE_MODELS.items()
+    ]
+
+
+@app.get("/settings/role_models")
+def get_role_models() -> list[RoleModelInfo]:
+    return _role_models_status()
+
+
+@app.put("/settings/role_models")
+def set_role_model(body: RoleModelUpdate) -> list[RoleModelInfo]:
+    if body.role not in ROLE_MODELS:
+        raise HTTPException(404, f"unknown role: {body.role}")
+    save_role_model_override(body.role, body.model)
+    return _role_models_status()
 
 
 # short-lived: the catalog itself barely changes minute to minute, but a
