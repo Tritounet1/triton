@@ -2,9 +2,10 @@
 persisted to settings.json so choices survive restarts."""
 
 import json
-from pathlib import Path
 
-SETTINGS_FILE = Path(__file__).parent / "settings.json"
+from triton.paths import ROOT_DIR
+
+SETTINGS_FILE = ROOT_DIR / "settings.json"
 DEFAULT_MODEL = "anthropic/claude-haiku-4.5"
 
 

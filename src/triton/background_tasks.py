@@ -35,6 +35,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
+from triton.paths import ROOT_DIR
+
 # strips ANSI escape sequences (color codes, cursor movement) that most CLI
 # tools (vite, pnpm, ...) emit even when stdout is piped rather than a real
 # TTY: harmless in a real terminal, but rendered as raw garbled bytes in the
@@ -43,7 +45,7 @@ from typing import Literal
 # process to the file with no line-by-line processing on our side.
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
-STATE_DIR = Path(__file__).parent / "background_tasks_state"
+STATE_DIR = ROOT_DIR / "background_tasks_state"
 STATE_FILE = STATE_DIR / "tasks.json"
 
 TaskStatus = Literal["running", "exited", "error", "stopped"]

@@ -15,20 +15,17 @@ from fastapi.responses import StreamingResponse
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
-import background_tasks
-import mcp_client
-import orchestrator
-import subagents
-from api import ChatResult, call_chat, get_model
-from logs import LOGS_FILE, log_event
-from main import (
+from triton import background_tasks, mcp_client, orchestrator, subagents
+from triton.api import ChatResult, call_chat, get_model
+from triton.chat_loop import (
     MAX_ITERATIONS,
     build_system_message,
     compress_history_if_needed,
     timed_stream_chat,
     to_tool_call_params,
 )
-from projects import (
+from triton.logs import LOGS_FILE, log_event
+from triton.projects import (
     Project,
     create_project,
     delete_project,
@@ -36,7 +33,7 @@ from projects import (
     load_projects,
     rename_project,
 )
-from sessions import (
+from triton.sessions import (
     SESSIONS_DIR,
     allow_always,
     clear_session_project,
@@ -50,8 +47,8 @@ from sessions import (
     save_session_project,
     save_title,
 )
-from settings import load_monthly_budget, save_model, save_monthly_budget
-from tools import TOOLS, TOOLS_REGISTRY, enforce_project_sandbox, invoke_tool, is_skipped
+from triton.settings import load_monthly_budget, save_model, save_monthly_budget
+from triton.tools import TOOLS, TOOLS_REGISTRY, enforce_project_sandbox, invoke_tool, is_skipped
 
 
 class _QuietPollingEndpoints(logging.Filter):

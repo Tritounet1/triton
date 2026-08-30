@@ -8,9 +8,9 @@ from urllib.parse import parse_qs, unquote, urlparse
 import requests
 from openai.types.chat import ChatCompletionToolParam
 
-import background_tasks
-import subagents
-from projects import Project
+from triton import background_tasks, subagents
+from triton.paths import ROOT_DIR
+from triton.projects import Project
 
 
 @dataclass
@@ -392,7 +392,7 @@ def todo_write(todos: list[dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
-MEMORY_FILE = Path(__file__).parent / "memory.md"
+MEMORY_FILE = ROOT_DIR / "memory.md"
 
 
 def remember(note: str) -> str:

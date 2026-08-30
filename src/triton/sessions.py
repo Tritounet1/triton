@@ -5,7 +5,9 @@ from typing import cast
 
 from openai.types.chat import ChatCompletionMessageParam
 
-SESSIONS_DIR = Path(__file__).parent / "sessions"
+from triton.paths import ROOT_DIR
+
+SESSIONS_DIR = ROOT_DIR / "sessions"
 
 
 def latest_session_path() -> Path | None:

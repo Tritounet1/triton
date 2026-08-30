@@ -1,8 +1,9 @@
 import datetime
 import json
-from pathlib import Path
 
-LOGS_DIR = Path(__file__).parent / "logs"
+from triton.paths import ROOT_DIR
+
+LOGS_DIR = ROOT_DIR / "logs"
 LOGS_FILE = LOGS_DIR / "events.jsonl"
 
 

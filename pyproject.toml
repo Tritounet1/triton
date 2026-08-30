@@ -14,12 +14,24 @@ dependencies = [
     "uvicorn>=0.52.4",
 ]
 
+[project.scripts]
+# uv run triton-logs-summary (logs_summary.py lives in src/triton/, not at
+# the repo root, unlike main.py/server.py - see PLAN.md's src/ refactor)
+triton-logs-summary = "triton.logs_summary:main"
+
 [dependency-groups]
 dev = [
     "basedpyright>=1.39.10",
     "pre-commit>=4.6.2",
     "ruff>=0.16.5",
 ]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/triton"]
 
 [tool.ruff]
 line-length = 100

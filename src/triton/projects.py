@@ -1,9 +1,10 @@
 import json
 import uuid
 from dataclasses import asdict, dataclass
-from pathlib import Path
 
-PROJECTS_FILE = Path(__file__).parent / "projects.json"
+from triton.paths import ROOT_DIR
+
+PROJECTS_FILE = ROOT_DIR / "projects.json"
 
 
 @dataclass

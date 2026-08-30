@@ -52,7 +52,7 @@ uv run main.py
 To inspect the logs afterward:
 
 ```
-uv run logs_summary.py
+uv run triton-logs-summary
 ```
 
 ## Desktop app
@@ -97,17 +97,29 @@ uv run pre-commit run --all-files
 
 ```
 harness/
-├── api.py                     model calls: call_chat() / stream_chat(), the ChatResult type
-├── tools.py                   tools exposed to the model: read_file, list_files, write_file, edit_file,
-│                               delete_file, move_file, grep, glob, run_shell, run_tests, git_status,
-│                               git_diff, git_commit, fetch_url, web_search, todo_write, remember
-├── sessions.py                conversation persistence (JSON) and their titles
-├── logs.py                    structured logs, one JSON event per line (logs/events.jsonl)
-├── logs_summary.py            CLI summary of the logs (uv run logs_summary.py)
-├── mcp_client.py              connects to configured MCP servers, merges their tools into tools.TOOLS_REGISTRY
-│
 ├── main.py                    ENTRY POINT #1 : interactive CLI (rich + prompt_toolkit)
 ├── server.py                  ENTRY POINT #2 : the same loop over HTTP/SSE, for the desktop app
+│
+├── src/triton/                everything main.py and server.py import from (installed editable, see pyproject.toml)
+│   ├── paths.py                ROOT_DIR: repo root, used by every module below that persists data there
+│   ├── api.py                  model calls: call_chat() / stream_chat(), the ChatResult type
+│   ├── chat_loop.py             the agentic loop's shared core: build_system_message, timed_call_chat /
+│   │                            timed_stream_chat, compress_history_if_needed - everything both entry
+│   │                            points and orchestrator.py need, with no Rich/FastAPI dependency
+│   ├── tools.py                tools exposed to the model: read_file, list_files, write_file, edit_file,
+│   │                            delete_file, move_file, grep, glob, run_shell, run_tests, git_status,
+│   │                            git_diff, git_commit, fetch_url, web_search, todo_write, remember
+│   ├── sessions.py             conversation persistence (JSON) and their titles
+│   ├── projects.py             project folders a conversation can be scoped to
+│   ├── orchestrator.py         multi-agent mode (/multi-agents <task>): planner + parallel subtasks
+│   ├── subagents.py            single-subagent dispatch (check_subagent)
+│   ├── background_tasks.py     long-running processes started by the model (start_background_task)
+│   ├── model_roles.py          which OpenRouter model handles which multi-agent role
+│   ├── settings.py             persisted preferences: selected model, monthly budget
+│   ├── pricing.py              OpenRouter pricing lookup, for cost-per-call estimates
+│   ├── logs.py                 structured logs, one JSON event per line (logs/events.jsonl)
+│   ├── logs_summary.py         CLI summary of the logs (uv run triton-logs-summary)
+│   └── mcp_client.py           connects to configured MCP servers, merges their tools into tools.TOOLS_REGISTRY
 │
 └── app-desktop/               Tauri + React GUI, talks to server.py
     └── src/
@@ -117,12 +129,12 @@ harness/
         └── McpServersPage.tsx add/remove/enable MCP servers through /mcp/servers
 ```
 
-**Two entry points, one loop.** `main.py` and `server.py` both drive the exact same agentic loop, built from the same pieces above (`api.py`, `tools.py`, `sessions.py`, `logs.py`), just through different interfaces:
+**Two entry points, one loop.** `main.py` and `server.py` stay at the repo root (they're what you actually run), and both drive the exact same agentic loop, built from the same `src/triton/` pieces above (`api.py`, `chat_loop.py`, `tools.py`, `sessions.py`, `logs.py`), just through different interfaces:
 
 - `main.py` talks to a human directly in a terminal: synchronous, renders with `rich`, confirms risky tools with a blocking `Confirm.ask()`.
 - `server.py` drives the same loop for the desktop app over HTTP: streams events as Server-Sent Events, and pauses on a tool confirmation with a `threading.Event` instead of blocking on terminal input, since there is no terminal to block on.
 
-To avoid duplicating the loop itself, `server.py` imports directly from `main.py` (`compress_history_if_needed`, `timed_stream_chat`, `to_tool_call_params`). Only the tool-confirmation flow is genuinely rewritten in `server.py`, because a terminal prompt and an HTTP request/response are fundamentally different I/O models, everything else is shared code.
+To avoid duplicating the loop itself, both import the shared core straight from `triton.chat_loop` (`compress_history_if_needed`, `timed_stream_chat`, `to_tool_call_params`, `build_system_message`) instead of either one depending on the other. Only the tool-confirmation flow is genuinely rewritten in `server.py`, because a terminal prompt and an HTTP request/response are fundamentally different I/O models, everything else is shared code.
 
 ### MCP servers
 

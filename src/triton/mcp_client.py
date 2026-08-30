@@ -16,7 +16,6 @@ import json
 import threading
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
 from typing import TypedDict
 
 from mcp import ClientSession, StdioServerParameters
@@ -24,9 +23,10 @@ from mcp.client.stdio import stdio_client
 from mcp.types import TextContent
 from mcp.types import Tool as MCPTool
 
-from tools import TOOLS_REGISTRY, Tool, rebuild_tools_list
+from triton.paths import ROOT_DIR
+from triton.tools import TOOLS_REGISTRY, Tool, rebuild_tools_list
 
-CONFIG_PATH = Path(__file__).parent / "mcp_servers.json"
+CONFIG_PATH = ROOT_DIR / "mcp_servers.json"
 MCP_PREFIX = "mcp__"
 CALL_TIMEOUT = 60
 

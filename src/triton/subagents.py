@@ -26,12 +26,12 @@ from openai.types.chat import (
     ChatCompletionMessageToolCallUnionParam,
 )
 
-from api import call_chat
-from logs import log_event
-from pricing import estimate_cost
+from triton.api import call_chat
+from triton.logs import log_event
+from triton.pricing import estimate_cost
 
 if TYPE_CHECKING:
-    from tools import Tool
+    from triton.tools import Tool
 
 SUBAGENT_MAX_ITERATIONS = 8
 
@@ -105,7 +105,7 @@ def _to_tool_call_params(
 
 
 def _run(task_entry: SubagentTask) -> None:
-    from tools import TOOLS_REGISTRY
+    from triton.tools import TOOLS_REGISTRY
 
     registry: dict[str, Tool] = {
         name: TOOLS_REGISTRY[name] for name in SUBAGENT_TOOL_NAMES if name in TOOLS_REGISTRY

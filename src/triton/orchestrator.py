@@ -37,20 +37,20 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Literal, cast
 
-from api import call_chat
-from logs import log_event
-from main import to_tool_call_params
-from model_roles import model_for_role
-from pricing import estimate_cost
-from projects import Project, get_project
-from sessions import load_session, save_session, session_path
-from subagents import SUBAGENT_TOOL_NAMES
-from tools import enforce_project_sandbox
+from triton.api import call_chat
+from triton.chat_loop import to_tool_call_params
+from triton.logs import log_event
+from triton.model_roles import model_for_role
+from triton.pricing import estimate_cost
+from triton.projects import Project, get_project
+from triton.sessions import load_session, save_session, session_path
+from triton.subagents import SUBAGENT_TOOL_NAMES
+from triton.tools import enforce_project_sandbox
 
 if TYPE_CHECKING:
     from openai.types.chat import ChatCompletionMessageParam
 
-    from tools import Tool
+    from triton.tools import Tool
 
 SubtaskStatus = Literal["pending", "running", "done", "error"]
 RunStatus = Literal["planning", "running", "done", "error"]
@@ -257,7 +257,7 @@ def _parse_plan(raw: str) -> list[dict[str, str]]:
 
 
 def _run_subtask(subtask: Subtask, project: Project | None) -> None:
-    from tools import TOOLS_REGISTRY
+    from triton.tools import TOOLS_REGISTRY
 
     can_write = subtask.role == "code" and project is not None
     tool_names = CODE_WRITE_TOOL_NAMES if can_write else SUBAGENT_TOOL_NAMES
