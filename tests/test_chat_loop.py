@@ -93,3 +93,56 @@ def test_oversized_history_compresses_oldest_turns_only(monkeypatch):
     assert compressed[1]["role"] == "system"
     assert "summary of the old turns" in cast(str, compressed[1]["content"])
     assert compressed[2:] == messages[3:]
+
+
+def test_summarize_redacts_attachments_instead_of_resending_them(monkeypatch):
+    """Regression test: summarizing old turns that included an image/PDF
+    used to re-send that attachment's full base64 data as part of the
+    "please summarize this" prompt - found via a real ~900k-token, ~1-
+    minute compression call for what should have been a cheap, fast
+    summary. The transcript actually sent to the model must carry a
+    placeholder instead of the raw attachment data."""
+    captured: list[list[ChatCompletionMessageParam]] = []
+
+    def _capture(messages: list[ChatCompletionMessageParam], **_kwargs: object) -> ChatResult:
+        captured.append(messages)
+        return ChatResult(
+            content="summary",
+            tool_calls=[],
+            model="test-model",
+            prompt_tokens=1,
+            completion_tokens=1,
+            total_tokens=2,
+        )
+
+    monkeypatch.setattr(chat_loop, "log_event", lambda **_kwargs: None)
+    monkeypatch.setattr(chat_loop, "estimate_cost", lambda *_args: None)
+    monkeypatch.setattr(chat_loop, "call_chat", _capture)
+
+    huge_base64_payload = "A" * 500_000
+    old_messages: list[ChatCompletionMessageParam] = [
+        cast(
+            ChatCompletionMessageParam,
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "here's my CV"},
+                    {
+                        "type": "file",
+                        "file": {
+                            "filename": "cv.pdf",
+                            "file_data": f"data:application/pdf;base64,{huge_base64_payload}",
+                        },
+                    },
+                ],
+            },
+        ),
+    ]
+
+    chat_loop.summarize(old_messages)
+
+    assert len(captured) == 1
+    transcript = cast(str, captured[0][1].get("content"))
+    assert huge_base64_payload not in transcript
+    assert "cv.pdf" in transcript
+    assert "here's my CV" in transcript

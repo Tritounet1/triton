@@ -7,6 +7,7 @@ particular I/O model (no Rich, no FastAPI) so it can be reused as-is."""
 import json
 import time
 from collections.abc import Iterator
+from typing import cast
 
 from openai.types.chat import (
     ChatCompletionMessageParam,
@@ -133,8 +134,42 @@ def turn_start_indices(messages: list[ChatCompletionMessageParam]) -> list[int]:
     return [i for i, m in enumerate(messages) if m["role"] == "user"]
 
 
+def _without_attachments(
+    messages: list[ChatCompletionMessageParam],
+) -> list[ChatCompletionMessageParam]:
+    """Replaces embedded image/file data (data: URIs, easily hundreds of KB
+    to several MB each - see build_user_content in server.py) with a short
+    placeholder. The summary only needs to know an attachment was there,
+    not its actual bytes: without this, summarizing a batch of old turns
+    that happened to include an image/PDF re-sends that attachment in full
+    as part of the "please summarize this" prompt, turning the compression
+    step meant to shrink a conversation into a single call bigger than the
+    thing it's compressing (found via a real ~900k-token, ~1-minute
+    compression call, hours after a PDF was attached, once enough later
+    messages finally pushed the history over MAX_CONTEXT_CHARS)."""
+    redacted: list[ChatCompletionMessageParam] = []
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            redacted.append(message)
+            continue
+        new_parts: list[object] = []
+        for part in content:
+            if not isinstance(part, dict):
+                new_parts.append(part)
+            elif part.get("type") == "image_url":
+                new_parts.append({"type": "text", "text": "[image attachment omitted]"})
+            elif part.get("type") == "file":
+                filename = cast(dict[str, object], part.get("file", {})).get("filename", "document")
+                new_parts.append({"type": "text", "text": f"[file attachment omitted: {filename}]"})
+            else:
+                new_parts.append(part)
+        redacted.append(cast("ChatCompletionMessageParam", {**message, "content": new_parts}))
+    return redacted
+
+
 def summarize(old_messages: list[ChatCompletionMessageParam]) -> str:
-    transcript = json.dumps(old_messages, ensure_ascii=False, indent=2)
+    transcript = json.dumps(_without_attachments(old_messages), ensure_ascii=False, indent=2)
     summary_request: list[ChatCompletionMessageParam] = [
         {
             "role": "system",
