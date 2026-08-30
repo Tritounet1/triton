@@ -1662,7 +1662,6 @@ function App() {
                   isStopShown={sending}
                   placeholder="Écrire un message..."
                   isDisabled={sending || !!pendingConfirmation}
-                  density="compact"
                   elevation="none"
                   input={<ChatComposerInput triggers={composerTriggers} />}
                   style={
