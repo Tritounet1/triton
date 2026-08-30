@@ -61,14 +61,11 @@ import {
     TrashIcon,
     XIcon,
 } from "./icons";
-import { LogsPage } from "./LogsPage";
-import { McpServersPage } from "./McpServersPage";
 import { modelAvatar } from "./modelFamilies";
-import { ModelPage } from "./ModelPage";
 import { notifyIfBackground } from "./notifications";
 import { ProjectFilePanel } from "./ProjectFilePanel";
 import { SearchPage } from "./SearchPage";
-import { SettingsPage } from "./SettingsPage";
+import { SettingsModal } from "./SettingsModal";
 import { parseSSE } from "./sse";
 import { SubagentsPanel } from "./SubagentsPanel";
 import { TaskView } from "./TaskView";
@@ -524,9 +521,8 @@ function App() {
   const [themeMode, setThemeMode] = useState<"light" | "dark">(() =>
     localStorage.getItem("triton_theme") === "light" ? "light" : "dark",
   );
-  const [view, setView] = useState<
-    "chat" | "settings" | "logs" | "mcp" | "model" | "task" | "search"
-  >("chat");
+  const [view, setView] = useState<"chat" | "task" | "search">("chat");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
 
@@ -1353,7 +1349,7 @@ function App() {
                   variant="ghost"
                   size="sm"
                   onClick={() => {
-                    setView("settings");
+                    setSettingsOpen(true);
                   }}
                 />
                 <IconButton
@@ -1666,44 +1662,6 @@ function App() {
         height="fill"
         sideNav={sidebarCollapsed ? undefined : sideNavElement}
       >
-        {view === "settings" && (
-          <SettingsPage
-            onBack={() => {
-              setView("chat");
-            }}
-            onOpenLogs={() => {
-              setView("logs");
-            }}
-            onOpenMcp={() => {
-              setView("mcp");
-            }}
-            onOpenModel={() => {
-              setView("model");
-            }}
-          />
-        )}
-        {view === "logs" && (
-          <LogsPage
-            onBack={() => {
-              setView("settings");
-            }}
-          />
-        )}
-        {view === "mcp" && (
-          <McpServersPage
-            onBack={() => {
-              setView("settings");
-            }}
-          />
-        )}
-        {view === "model" && (
-          <ModelPage
-            onBack={() => {
-              refreshApiModel();
-              setView("settings");
-            }}
-          />
-        )}
         {view === "task" && activeTaskId && (
           <TaskView
             key={activeTaskId}
@@ -2081,6 +2039,14 @@ function App() {
         description={`« ${deletingProject?.name ?? ""} » sera supprimé. Ses conversations ne seront pas effacées, mais ne seront plus rattachées au dossier.`}
         actionLabel="Supprimer"
         onAction={confirmDeleteProject}
+      />
+
+      <SettingsModal
+        isOpen={settingsOpen}
+        onClose={() => {
+          setSettingsOpen(false);
+        }}
+        onModelChanged={refreshApiModel}
       />
     </Theme>
   );

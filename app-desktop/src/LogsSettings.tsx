@@ -7,7 +7,7 @@ import { IconButton } from "@astryxdesign/core/IconButton";
 import { NumberInput } from "@astryxdesign/core/NumberInput";
 import { Table, proportional, pixel, type TableColumn } from "@astryxdesign/core/Table";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
-import { ArrowLeftIcon, ChartBarIcon, RefreshIcon } from "./icons";
+import { RefreshIcon } from "./icons";
 import { formatArgs, formatDuration } from "./format";
 
 const API_BASE = "http://127.0.0.1:8000";
@@ -190,11 +190,7 @@ function DailyBarChart({ days, title, getValue, formatValue }: DailyBarChartProp
   );
 }
 
-interface LogsPageProps {
-  onBack: () => void;
-}
-
-export function LogsPage({ onBack }: LogsPageProps) {
+export function LogsSettings() {
   const [events, setEvents] = useState<LogEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [budget, setBudget] = useState<number | null>(null);
@@ -385,23 +381,11 @@ export function LogsPage({ onBack }: LogsPageProps) {
   const budgetExceeded = budget !== null && currentMonthCost > budget;
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-8">
-      <div className="mb-6 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <IconButton
-            label="Retour"
-            icon={<ArrowLeftIcon />}
-            variant="ghost"
-            size="sm"
-            onClick={onBack}
-          />
-          <div className="flex items-center gap-2">
-            <ChartBarIcon className="h-5 w-5 text-secondary" />
-            <Text size="lg" weight="semibold">
-              Historique des logs
-            </Text>
-          </div>
-        </div>
+    <div>
+      <div className="mb-4 flex items-center justify-between">
+        <Text size="lg" weight="semibold">
+          Logs &amp; coûts
+        </Text>
         <IconButton
           label="Rafraîchir"
           icon={<RefreshIcon />}

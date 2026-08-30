@@ -8,7 +8,7 @@ import { TextInput } from "@astryxdesign/core/TextInput";
 import { TextArea } from "@astryxdesign/core/TextArea";
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
-import { ArrowLeftIcon, PlugIcon, PlusIcon, TrashIcon } from "./icons";
+import { PlusIcon, TrashIcon } from "./icons";
 
 const API_BASE = "http://127.0.0.1:8000";
 
@@ -20,10 +20,6 @@ interface McpServer {
   connected: boolean;
   error: string | null;
   tools: string[];
-}
-
-interface McpServersPageProps {
-  onBack: () => void;
 }
 
 function parseLines(text: string): string[] {
@@ -43,7 +39,7 @@ function parseEnv(text: string): Record<string, string> {
   return env;
 }
 
-export function McpServersPage({ onBack }: McpServersPageProps) {
+export function McpSettings() {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -130,23 +126,11 @@ export function McpServersPage({ onBack }: McpServersPageProps) {
   }
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-8">
-      <div className="mb-6 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <IconButton
-            label="Retour"
-            icon={<ArrowLeftIcon />}
-            variant="ghost"
-            size="sm"
-            onClick={onBack}
-          />
-          <div className="flex items-center gap-2">
-            <PlugIcon className="h-5 w-5 text-secondary" />
-            <Text size="lg" weight="semibold">
-              Serveurs MCP
-            </Text>
-          </div>
-        </div>
+    <div>
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <Text size="lg" weight="semibold">
+          Serveurs MCP
+        </Text>
         <Button
           label="Ajouter un serveur"
           icon={<PlusIcon />}

@@ -2,13 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { Text } from "@astryxdesign/core/Text";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Button } from "@astryxdesign/core/Button";
-import { IconButton } from "@astryxdesign/core/IconButton";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { Switch } from "@astryxdesign/core/Switch";
 import { Avatar } from "@astryxdesign/core/Avatar";
 import { Table, proportional, pixel, type TableColumn } from "@astryxdesign/core/Table";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
-import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CpuIcon, SearchIcon } from "./icons";
+import { CheckIcon, ChevronRightIcon, SearchIcon } from "./icons";
 import { familyKey, familyInfo } from "./modelFamilies";
 
 const API_BASE = "http://127.0.0.1:8000";
@@ -23,8 +22,12 @@ interface ModelInfo {
   supports_tools: boolean;
 }
 
-interface ModelPageProps {
-  onBack: () => void;
+interface ModelSettingsProps {
+  // le modele affiche ailleurs dans l'app (composer, avatar...) est tenu a
+  // jour via son propre etat (apiModel dans App.tsx) - appele des qu'un
+  // changement est enregistre pour que ces autres endroits reagissent tout
+  // de suite, sans attendre que la modale se ferme.
+  onModelChanged: () => void;
 }
 
 // grandes familles en premier (dans cet ordre), puis le reste des familles
@@ -43,7 +46,7 @@ function formatPrice(price: number): string {
   return `$${price < 1 ? price.toFixed(3) : price.toFixed(2)}`;
 }
 
-export function ModelPage({ onBack }: ModelPageProps) {
+export function ModelSettings({ onModelChanged }: ModelSettingsProps) {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [currentModel, setCurrentModel] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -57,7 +60,7 @@ export function ModelPage({ onBack }: ModelPageProps) {
 
   // pas d'appel synchrone a setLoading()/setError() ici (seulement dans les
   // callbacks), pour pouvoir etre utilisee telle quelle dans l'effet de
-  // montage (voir LogsPage.tsx / ProjectFilePanel.tsx).
+  // montage (voir LogsSettings.tsx / ProjectFilePanel.tsx).
   useEffect(() => {
     Promise.all([
       fetch(`${API_BASE}/openrouter/models`).then(
@@ -87,7 +90,10 @@ export function ModelPage({ onBack }: ModelPageProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: id }),
       });
-      if (res.ok) setCurrentModel(id);
+      if (res.ok) {
+        setCurrentModel(id);
+        onModelChanged();
+      }
     } finally {
       setSavingId(null);
     }
@@ -221,23 +227,10 @@ export function ModelPage({ onBack }: ModelPageProps) {
   const totalShown = groups.reduce((sum, [, list]) => sum + list.length, 0);
 
   return (
-    <div className="mx-auto max-w-4xl px-6 py-8">
-      <div className="mb-6 flex items-center gap-3">
-        <IconButton
-          label="Retour"
-          icon={<ArrowLeftIcon />}
-          variant="ghost"
-          size="sm"
-          onClick={onBack}
-        />
-        <div className="flex items-center gap-2">
-          <CpuIcon className="h-5 w-5 text-secondary" />
-          <Text size="lg" weight="semibold">
-            Modèle
-          </Text>
-        </div>
-      </div>
-
+    <div>
+      <Text size="lg" weight="semibold" className="mb-1 block">
+        Modèle
+      </Text>
       <Text size="sm" color="secondary" className="mb-4 block">
         Modèles disponibles via OpenRouter, groupés par fournisseur, avec leur prix par million
         de tokens. Un modèle sans support des outils ne peut pas être sélectionné : la boucle
