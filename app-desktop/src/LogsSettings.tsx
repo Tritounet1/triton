@@ -19,7 +19,9 @@ interface ModelCallEvent {
   model: string;
   prompt_tokens: number;
   completion_tokens: number;
-  total_tokens: number;
+  // absent sur certains logs anciens (le champ a ete ajoute apres coup) -
+  // toujours traite comme 0 plutot que NaN dans les sommes ci-dessous.
+  total_tokens?: number;
   tool_calls: number;
   duration_seconds: number;
   cost_usd?: number;
@@ -33,7 +35,7 @@ interface SubagentModelCallEvent {
   model: string;
   prompt_tokens: number;
   completion_tokens: number;
-  total_tokens: number;
+  total_tokens?: number;
   tool_calls: number;
   cost_usd?: number;
 }
@@ -130,7 +132,7 @@ function useDailyStats(events: CostEvent[]): DayStats[] {
     for (const e of events) {
       const key = toDayKey(e.timestamp);
       const entry = byDay.get(key) ?? { tokens: 0, cost: 0 };
-      entry.tokens += e.total_tokens;
+      entry.tokens += e.total_tokens ?? 0;
       entry.cost += e.cost_usd ?? 0;
       byDay.set(key, entry);
     }
@@ -260,7 +262,7 @@ export function LogsSettings() {
   );
 
   const totalTokens = useMemo(
-    () => costEvents.reduce((sum, e) => sum + e.total_tokens, 0),
+    () => costEvents.reduce((sum, e) => sum + (e.total_tokens ?? 0), 0),
     [costEvents],
   );
   const totalCost = useMemo(
@@ -276,13 +278,6 @@ export function LogsSettings() {
   }, [costEvents]);
 
   const days = useDailyStats(costEvents);
-
-  const topTool = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const t of toolCalls) counts.set(t.tool, (counts.get(t.tool) ?? 0) + 1);
-    const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
-    return sorted[0];
-  }, [toolCalls]);
 
   const modelColumns: TableColumn<ModelCallEvent>[] = [
     {
@@ -303,7 +298,7 @@ export function LogsSettings() {
       width: pixel(160),
       renderCell: (e) => (
         <Text size="sm">
-          {e.total_tokens} ({e.prompt_tokens}+{e.completion_tokens})
+          {e.total_tokens ?? 0} ({e.prompt_tokens}+{e.completion_tokens})
         </Text>
       ),
     },
@@ -411,11 +406,10 @@ export function LogsSettings() {
             />
           )}
 
-          <div className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="mb-8 grid grid-cols-3 gap-3">
             <StatTile label="Appels modèle" value={String(costEvents.length)} />
             <StatTile label="Tokens totaux" value={totalTokens.toLocaleString("fr-FR")} />
             <StatTile label="Coût total" value={formatCost(totalCost)} />
-            <StatTile label="Outil le plus utilisé" value={topTool ? topTool[0] : "-"} />
           </div>
 
           <div className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-2">
