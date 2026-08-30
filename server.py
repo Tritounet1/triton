@@ -12,7 +12,7 @@ from typing import TypedDict, cast
 import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
@@ -692,6 +692,112 @@ def get_session(session_id: str) -> list[dict[str, object]]:
     if not path.exists():
         raise HTTPException(404, "session not found")
     return cast(list[dict[str, object]], load_session(path))
+
+
+def _message_text_and_attachments(content: object) -> tuple[str, list[str]]:
+    """Plain text plus a short description per attachment, for a stored
+    message's content - either a plain string, or a list of parts
+    (text/image_url/file) once build_user_content added an attachment."""
+    if isinstance(content, str):
+        return content, []
+    if not isinstance(content, list):
+        return "", []
+    text_parts: list[str] = []
+    attachments: list[str] = []
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        part_type = part.get("type")
+        if part_type == "text":
+            text_parts.append(str(part.get("text", "")))
+        elif part_type == "image_url":
+            attachments.append("image jointe")
+        elif part_type == "file":
+            file_info = part.get("file")
+            filename = (
+                file_info.get("filename", "document") if isinstance(file_info, dict) else None
+            )
+            attachments.append(f"fichier joint : {filename or 'document'}")
+    return "\n".join(text_parts), attachments
+
+
+def export_session_as_markdown(messages: list[dict[str, object]], title: str) -> str:
+    """Readable transcript for sharing/archiving outside sessions/ (not
+    versioned, lives only on this machine) - one "---" per user turn, tool
+    calls rendered as blockquotes under the assistant reply that made them."""
+    tool_results: dict[str, str] = {}
+    for m in messages:
+        if m.get("role") != "tool":
+            continue
+        call_id, result = m.get("tool_call_id"), m.get("content")
+        if isinstance(call_id, str) and isinstance(result, str):
+            tool_results[call_id] = result
+
+    lines = [f"# {title}", ""]
+    first_turn = True
+    for m in messages:
+        role = m.get("role")
+        if role in ("system", "tool"):
+            continue
+
+        if role == "user":
+            if not first_turn:
+                lines.extend(["---", ""])
+            first_turn = False
+            text, attachments = _message_text_and_attachments(m.get("content"))
+            lines.extend(["**Vous**", ""])
+            if text:
+                lines.extend([text, ""])
+            lines.extend(f"*[{a}]*" for a in attachments)
+            if attachments:
+                lines.append("")
+
+        elif role == "assistant":
+            model = m.get("model")
+            header = f"**Triton** ({model})" if isinstance(model, str) and model else "**Triton**"
+            lines.append(header)
+            lines.append("")
+            content = m.get("content")
+            if isinstance(content, str) and content:
+                lines.extend([content, ""])
+            for tool_call in cast(list[object], m.get("tool_calls") or []):
+                if not isinstance(tool_call, dict):
+                    continue
+                function = tool_call.get("function")
+                if not isinstance(function, dict):
+                    continue
+                name = function.get("name", "?")
+                args = function.get("arguments", "")
+                result = tool_results.get(cast(str, tool_call.get("id", "")), "")
+                lines.append(f"> 🔧 `{name}({args})`")
+                if result:
+                    preview = result if len(result) < 1000 else result[:1000] + "…"
+                    lines.extend(f"> {line}" for line in preview.splitlines())
+                lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+@app.get("/sessions/{session_id}/export")
+def export_session(session_id: str, export_format: str = "markdown") -> Response:
+    path = SESSIONS_DIR / f"{session_id}.json"
+    if not path.exists():
+        raise HTTPException(404, "session not found")
+    messages = cast(list[dict[str, object]], load_session(path))
+    title = load_title(session_id) or session_id
+
+    if export_format == "json":
+        content = json.dumps(messages, ensure_ascii=False, indent=2)
+        media_type, filename = "application/json", f"{session_id}.json"
+    else:
+        content = export_session_as_markdown(messages, title)
+        media_type, filename = "text/markdown", f"{session_id}.md"
+
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.put("/sessions/{session_id}/title")

@@ -16,6 +16,7 @@ import {
     ChatToolCalls,
     type ChatComposerTrigger,
 } from "@astryxdesign/core/Chat";
+import { DropdownMenu } from "@astryxdesign/core/DropdownMenu";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { IconButton } from "@astryxdesign/core/IconButton";
 import { Markdown } from "@astryxdesign/core/Markdown";
@@ -48,6 +49,7 @@ import {
     CheckIcon,
     ChevronRightIcon,
     CopyIcon,
+    DownloadIcon,
     FileIcon,
     FolderIcon,
     GearIcon,
@@ -254,6 +256,61 @@ function formatSessionLabel(id: string): string {
   if (!m) return id;
   const [, y = "", mo = "", d = "", h = "", mi = ""] = m;
   return `${d}/${mo}/${y} ${h}:${mi}`;
+}
+
+// navigue vers l'URL d'export plutot que d'ouvrir une nouvelle
+// fenetre/onglet : la reponse porte deja un en-tete Content-Disposition:
+// attachment (voir server.py), donc n'importe quel mecanisme de navigation
+// declenche un telechargement au lieu de remplacer la page - pas besoin de
+// l'attribut "download" (peu fiable dans une webview Tauri).
+function exportSession(session: Session, format: "markdown" | "json") {
+  const url = `${API_BASE}/sessions/${session.id}/export?export_format=${format}`;
+  const a = document.createElement("a");
+  a.href = url;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+/** Menu "Exporter" pour une conversation (Markdown/JSON), utilise a deux
+ * endroits identiques (sessions d'un projet, section "Conversations") -
+ * extrait pour ne pas dupliquer ce bloc deux fois. Le wrapper stoppe la
+ * propagation du clic : sans ca, ouvrir le menu depuis la ligne d'une
+ * SideNavItem la selectionnerait aussi (voir les IconButton voisins,
+ * Renommer/Supprimer, qui font pareil sur leur propre onClick). */
+function SessionExportMenu({ session }: { session: Session }) {
+  return (
+    <div
+      onClick={(e) => {
+        e.stopPropagation();
+      }}
+    >
+      <DropdownMenu
+        button={{
+          icon: <DownloadIcon />,
+          isIconOnly: true,
+          variant: "ghost",
+          size: "sm",
+          label: "Exporter la conversation",
+        }}
+        hasChevron={false}
+        items={[
+          {
+            label: "Exporter en Markdown",
+            onClick: () => {
+              exportSession(session, "markdown");
+            },
+          },
+          {
+            label: "Exporter en JSON",
+            onClick: () => {
+              exportSession(session, "json");
+            },
+          },
+        ]}
+      />
+    </div>
+  );
 }
 
 function historyToMessages(raw: RawSessionMessage[]): ChatMsg[] {
@@ -1451,6 +1508,7 @@ function App() {
                                       startRename(s);
                                     }}
                                   />
+                                  <SessionExportMenu session={s} />
                                   <IconButton
                                     label="Supprimer"
                                     icon={<TrashIcon />}
@@ -1520,6 +1578,7 @@ function App() {
                             startRename(s);
                           }}
                         />
+                        <SessionExportMenu session={s} />
                         <IconButton
                           label="Supprimer"
                           icon={<TrashIcon />}
