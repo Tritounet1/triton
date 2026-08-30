@@ -4,7 +4,7 @@ from collections import Counter
 from rich.console import Console
 from rich.table import Table
 
-from triton.logs import LOGS_FILE
+from triton.storage.logs import LOGS_FILE
 
 PRICE_PER_MILLION_TOKENS: tuple[float, float] | None = None
 

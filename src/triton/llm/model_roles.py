@@ -11,7 +11,7 @@ than the single best model available - see PLAN.md's "Vrai multi-agent"
 section for the reasoning and the OpenRouter pricing behind each pick.
 """
 
-from triton.settings import load_role_model_overrides
+from triton.storage.settings import load_role_model_overrides
 
 Role = str  # "orchestrator" | "conversational" | "code" | "research" | "vision"
 

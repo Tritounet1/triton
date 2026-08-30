@@ -7,7 +7,8 @@ default again."""
 
 from unittest.mock import patch
 
-from triton import model_roles, settings
+from triton.llm import model_roles
+from triton.storage import settings
 
 
 def test_load_role_model_overrides_ignores_malformed_data():

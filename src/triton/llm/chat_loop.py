@@ -16,10 +16,10 @@ from openai.types.chat import (
     ChatCompletionToolParam,
 )
 
-from triton.api import ChatResult, call_chat, stream_chat
-from triton.logs import log_event
-from triton.pricing import estimate_cost
-from triton.projects import Project
+from triton.llm.api import ChatResult, call_chat, stream_chat
+from triton.llm.pricing import estimate_cost
+from triton.storage.logs import log_event
+from triton.storage.projects import Project
 from triton.tools import load_memory
 
 SYSTEM_PROMPT = "You are a concise and clear assistant."

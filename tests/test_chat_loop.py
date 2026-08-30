@@ -8,8 +8,8 @@ from typing import cast
 
 from openai.types.chat import ChatCompletionMessageParam
 
-from triton import chat_loop
-from triton.api import ChatResult
+from triton.llm import chat_loop
+from triton.llm.api import ChatResult
 
 
 def _user(text: str) -> ChatCompletionMessageParam:

@@ -16,16 +16,16 @@ from rich.prompt import Prompt
 from rich.text import Text
 
 from triton import mcp_client
-from triton.api import ChatResult
-from triton.chat_loop import (
+from triton.llm.api import ChatResult
+from triton.llm.chat_loop import (
     MAX_ITERATIONS,
     build_system_message,
     compress_history_if_needed,
     timed_stream_chat,
     to_tool_call_params,
 )
-from triton.logs import log_event
-from triton.sessions import (
+from triton.storage.logs import log_event
+from triton.storage.sessions import (
     allow_always,
     latest_session_path,
     load_always_allowed,

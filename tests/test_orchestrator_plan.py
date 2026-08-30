@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from triton.orchestrator import (
+from triton.agents.orchestrator import (
     MAX_SUBTASKS,
     _parse_plan,
     _planner_system_prompt,

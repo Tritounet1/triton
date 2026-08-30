@@ -116,44 +116,64 @@ harness/
 ├── server.py                  ENTRY POINT #2 : the same loop over HTTP/SSE, for the desktop app
 │
 ├── src/triton/                everything main.py and server.py import from (installed editable, see pyproject.toml)
-│   ├── paths.py                ROOT_DIR: repo root, used by every module below that persists data there
-│   ├── api.py                  model calls: call_chat() / stream_chat(), the ChatResult type
-│   ├── chat_loop.py             the agentic loop's shared core: build_system_message, timed_call_chat /
-│   │                            timed_stream_chat, compress_history_if_needed - everything both entry
-│   │                            points and orchestrator.py need, with no Rich/FastAPI dependency
-│   ├── tools.py                tools exposed to the model: read_file, list_files, write_file, edit_file,
-│   │                            delete_file, move_file, grep, glob, run_shell, run_tests, git_status,
-│   │                            git_diff, git_commit, fetch_url, web_search, todo_write, remember
-│   ├── sessions.py             conversation persistence (JSON) and their titles
-│   ├── projects.py             project folders a conversation can be scoped to
-│   ├── orchestrator.py         multi-agent mode (/multi-agents <task>): planner + parallel subtasks
-│   ├── subagents.py            single-subagent dispatch (check_subagent)
+│   ├── paths.py                ROOT_DIR: repo root (or the OS app-data dir once packaged, see
+│   │                            packaging/), used by every storage/ module below
 │   ├── background_tasks.py     long-running processes started by the model (start_background_task)
-│   ├── model_roles.py          which OpenRouter model handles which multi-agent role
-│   ├── settings.py             persisted preferences: selected model, monthly budget
-│   ├── pricing.py              OpenRouter pricing lookup, for cost-per-call estimates
-│   ├── logs.py                 structured logs, one JSON event per line (logs/events.jsonl)
+│   ├── mcp_client.py           connects to configured MCP servers, merges their tools into tools.TOOLS_REGISTRY
 │   ├── logs_summary.py         CLI summary of the logs (uv run triton-logs-summary)
-│   └── mcp_client.py           connects to configured MCP servers, merges their tools into tools.TOOLS_REGISTRY
+│   │
+│   ├── llm/                    calling the model, independent of any particular loop or role
+│   │   ├── api.py               call_chat() / stream_chat(), the ChatResult type
+│   │   ├── chat_loop.py         the agentic loop's shared core: build_system_message, timed_call_chat /
+│   │   │                        timed_stream_chat, compress_history_if_needed - everything both entry
+│   │   │                        points and orchestrator.py need, with no Rich/FastAPI dependency
+│   │   ├── model_roles.py       which OpenRouter model handles which multi-agent role
+│   │   └── pricing.py           OpenRouter pricing lookup, for cost-per-call estimates
+│   │
+│   ├── agents/                 multi-step/multi-agent work built on top of llm/
+│   │   ├── orchestrator.py      multi-agent mode (/multi-agents <task>): planner + parallel subtasks
+│   │   └── subagents.py         single-subagent dispatch (check_subagent)
+│   │
+│   ├── storage/                persisted state, all plain JSON files under the repo root
+│   │   ├── sessions.py          conversation persistence (JSON) and their titles
+│   │   ├── projects.py          project folders a conversation can be scoped to
+│   │   ├── settings.py          persisted preferences: selected model, monthly budget, API key
+│   │   └── logs.py              structured logs, one JSON event per line (logs/events.jsonl)
+│   │
+│   └── tools/                  tools exposed to the model, one category per file
+│       ├── _shared.py           the Tool type, invoke_tool, enforce_project_sandbox
+│       ├── filesystem.py        read_file, write_file, edit_file, delete_file, move_file, list_files
+│       ├── search.py            grep, glob
+│       ├── git.py               git_status, git_diff, git_commit
+│       ├── process.py           run_shell, run_tests
+│       ├── web.py               fetch_url, web_search
+│       ├── memory.py            todo_write, remember/load_memory (memory.md)
+│       └── background.py        dispatch_subagent/check_subagent, start/stop/list background tasks -
+│                                thin wrappers, the real logic lives in agents.subagents /
+│                                background_tasks.py
 │
 └── app-desktop/               Tauri + React GUI, talks to server.py
     └── src/
         ├── App.tsx            chat view: sidebar, streaming, tool confirmations
-        ├── SettingsPage.tsx   settings, links to the log viewer and MCP servers page
-        ├── LogsPage.tsx       reads logs.py's events through GET /logs
-        └── McpServersPage.tsx add/remove/enable MCP servers through /mcp/servers
+        ├── SettingsModal.tsx  settings (a modal, not a page): API key, model, multi-agent roles,
+        │                      MCP servers, logs & costs - one category per file alongside it
+        │                      (ApiKeySettings.tsx, ModelSettings.tsx, RoleModelsSettings.tsx,
+        │                      McpSettings.tsx, LogsSettings.tsx)
+        └── NewProjectModal.tsx project creation, same modal pattern
 ```
 
-**Two entry points, one loop.** `main.py` and `server.py` stay at the repo root (they're what you actually run), and both drive the exact same agentic loop, built from the same `src/triton/` pieces above (`api.py`, `chat_loop.py`, `tools.py`, `sessions.py`, `logs.py`), just through different interfaces:
+**Two entry points, one loop.** `main.py` and `server.py` stay at the repo root (they're what you actually run), and both drive the exact same agentic loop, built from the same `src/triton/` pieces above (`llm/api.py`, `llm/chat_loop.py`, `tools/`, `storage/sessions.py`, `storage/logs.py`), just through different interfaces:
 
 - `main.py` talks to a human directly in a terminal: synchronous, renders with `rich`, confirms risky tools with a blocking `Confirm.ask()`.
 - `server.py` drives the same loop for the desktop app over HTTP: streams events as Server-Sent Events, and pauses on a tool confirmation with a `threading.Event` instead of blocking on terminal input, since there is no terminal to block on.
 
-To avoid duplicating the loop itself, both import the shared core straight from `triton.chat_loop` (`compress_history_if_needed`, `timed_stream_chat`, `to_tool_call_params`, `build_system_message`) instead of either one depending on the other. Only the tool-confirmation flow is genuinely rewritten in `server.py`, because a terminal prompt and an HTTP request/response are fundamentally different I/O models, everything else is shared code.
+To avoid duplicating the loop itself, both import the shared core straight from `triton.llm.chat_loop` (`compress_history_if_needed`, `timed_stream_chat`, `to_tool_call_params`, `build_system_message`) instead of either one depending on the other. Only the tool-confirmation flow is genuinely rewritten in `server.py`, because a terminal prompt and an HTTP request/response are fundamentally different I/O models, everything else is shared code.
+
+`tools/` is a package rather than one file specifically so each category (filesystem, search, git, ...) stays small and easy to find a tool in - `from triton.tools import TOOLS_REGISTRY` (and everything else re-exported from `tools/__init__.py`) works exactly the same as when it was a single ~1000-line module, nothing outside the package needs to know it's split up.
 
 ### MCP servers
 
-Instead of hand-writing every tool in `tools.py`, the harness can connect to external [MCP](https://modelcontextprotocol.io) servers and treat their tools the same way as local ones. Same config shape as Claude Desktop: a name, a command, arguments, and environment variables.
+Instead of hand-writing every tool in `tools/`, the harness can connect to external [MCP](https://modelcontextprotocol.io) servers and treat their tools the same way as local ones. Same config shape as Claude Desktop: a name, a command, arguments, and environment variables.
 
 The MCP SDK is async; the rest of the harness (`Tool.fn`) is synchronous. `mcp_client.py` runs a dedicated asyncio event loop in a background thread that keeps every connected server's session open, and each tool's synchronous `fn` submits its call to that loop and blocks for the result (`asyncio.run_coroutine_threadsafe`). Connected tools are merged into `tools.TOOLS_REGISTRY` under a `mcp__<server>__<tool>` key, so `main.py` and `server.py` need zero changes to pick them up. A tool is required to confirm before running (like `write_file` or `run_shell`) unless the server explicitly marks it `readOnlyHint: true`.
 

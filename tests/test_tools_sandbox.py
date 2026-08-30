@@ -3,7 +3,7 @@ scoped conversation and a model that decides to read/write outside the
 folder it was given - see PLAN.md's "Securite" entry for why this deserves
 solid coverage rather than only manual testing."""
 
-from triton.projects import Project
+from triton.storage.projects import Project
 from triton.tools import enforce_project_sandbox
 
 

@@ -16,18 +16,19 @@ from fastapi.responses import Response, StreamingResponse
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
-from triton import background_tasks, mcp_client, orchestrator, subagents
-from triton.api import ChatResult, call_chat, get_model, is_api_key_configured
-from triton.chat_loop import (
+from triton import background_tasks, mcp_client
+from triton.agents import orchestrator, subagents
+from triton.llm.api import ChatResult, call_chat, get_model, is_api_key_configured
+from triton.llm.chat_loop import (
     MAX_ITERATIONS,
     build_system_message,
     compress_history_if_needed,
     timed_stream_chat,
     to_tool_call_params,
 )
-from triton.logs import LOGS_FILE, log_event
-from triton.model_roles import ROLE_MODELS
-from triton.projects import (
+from triton.llm.model_roles import ROLE_MODELS
+from triton.storage.logs import LOGS_FILE, log_event
+from triton.storage.projects import (
     Project,
     create_project,
     delete_project,
@@ -35,7 +36,7 @@ from triton.projects import (
     load_projects,
     rename_project,
 )
-from triton.sessions import (
+from triton.storage.sessions import (
     SESSIONS_DIR,
     allow_always,
     clear_session_project,
@@ -49,7 +50,7 @@ from triton.sessions import (
     save_session_project,
     save_title,
 )
-from triton.settings import (
+from triton.storage.settings import (
     load_monthly_budget,
     load_role_model_overrides,
     save_model,

@@ -13,7 +13,7 @@ from openai.types.chat import (
 from openai.types.chat.chat_completion_message_function_tool_call import Function
 
 from triton.paths import ROOT_DIR
-from triton.settings import load_model, load_openrouter_api_key
+from triton.storage.settings import load_model, load_openrouter_api_key
 
 # explicit path rather than load_dotenv()'s default CWD-upward search: once
 # frozen (PyInstaller), the process's CWD has nothing to do with ROOT_DIR

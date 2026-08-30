@@ -37,14 +37,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Literal, cast
 
-from triton.api import call_chat
-from triton.chat_loop import to_tool_call_params
-from triton.logs import log_event
-from triton.model_roles import model_for_role
-from triton.pricing import estimate_cost
-from triton.projects import Project, get_project
-from triton.sessions import load_session, save_session, session_path
-from triton.subagents import SUBAGENT_TOOL_NAMES
+from triton.agents.subagents import SUBAGENT_TOOL_NAMES
+from triton.llm.api import call_chat
+from triton.llm.chat_loop import to_tool_call_params
+from triton.llm.model_roles import model_for_role
+from triton.llm.pricing import estimate_cost
+from triton.storage.logs import log_event
+from triton.storage.projects import Project, get_project
+from triton.storage.sessions import load_session, save_session, session_path
 from triton.tools import enforce_project_sandbox
 
 if TYPE_CHECKING:

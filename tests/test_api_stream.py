@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 from openai.types.chat import ChatCompletionMessageFunctionToolCall
 
-from triton import api
+from triton.llm import api
 
 
 def _chunk(

@@ -5,11 +5,12 @@ the sub-agent's own reasoning and tool calls stay isolated from the primary
 conversation's context, only its final result comes back (fetched via the
 check_subagent tool, or shown live in the desktop app's sidebar panel).
 
-tools.py imports this module to register the dispatch_subagent/check_subagent
-tools, so this module must not import tools.py at module load time (that
-would be circular) - the one place it needs the tool registry (_run, to
-build the sub-agent's restricted toolset) imports it locally instead,
-deferred until the background thread actually runs.
+triton.tools imports this module (tools/background.py) to register the
+dispatch_subagent/check_subagent tools, so this module must not import
+triton.tools at module load time (that would be circular) - the one place
+it needs the tool registry (_run, to build the sub-agent's restricted
+toolset) imports it locally instead, deferred until the background thread
+actually runs.
 """
 
 import json
@@ -26,9 +27,9 @@ from openai.types.chat import (
     ChatCompletionMessageToolCallUnionParam,
 )
 
-from triton.api import call_chat
-from triton.logs import log_event
-from triton.pricing import estimate_cost
+from triton.llm.api import call_chat
+from triton.llm.pricing import estimate_cost
+from triton.storage.logs import log_event
 
 if TYPE_CHECKING:
     from triton.tools import Tool
@@ -84,6 +85,12 @@ class SubagentTask:
 TASKS: dict[str, SubagentTask] = {}
 
 
+# not reused from triton.llm.chat_loop's to_tool_call_params despite being
+# identical: importing chat_loop here would import triton.tools at module
+# load time too (chat_loop needs load_memory), through this module's own
+# tools/background.py -> agents.subagents chain - the exact cycle this
+# file's own module docstring already calls out avoiding. Small enough to
+# duplicate rather than restructure either side to break that cycle.
 def _to_tool_call_params(
     tool_calls: list[ChatCompletionMessageToolCallUnion],
 ) -> list[ChatCompletionMessageToolCallUnionParam]:
