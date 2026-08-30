@@ -549,14 +549,22 @@ function App() {
       });
   }
 
-  function loadSessions() {
-    fetch(`${API_BASE}/sessions`)
+  // renvoie la liste chargee (en plus de mettre a jour l'etat) pour que le
+  // montage initial puisse en retirer le project_id de la session restauree
+  // depuis localStorage (voir l'effet ci-dessous) - un simple `setSessions`
+  // ne suffit pas la, cet etat ne serait pas encore visible dans la meme
+  // passe de useEffect.
+  function loadSessions(): Promise<Session[]> {
+    return fetch(`${API_BASE}/sessions`)
       .then((r) => (r.ok ? r.json() : []))
       .then((list: Session[]) => {
-        setSessions([...list].reverse());
+        const reversed = [...list].reverse();
+        setSessions(reversed);
+        return reversed;
       })
       .catch(() => {
         // API hors ligne ou requete echouee : la sidebar reste vide, sans casser l'app
+        return [];
       });
   }
 
@@ -629,7 +637,7 @@ function App() {
     if (res.ok) {
       setProjects((await res.json()) as Project[]);
       if (activeProjectId === id) setActiveProjectId(null);
-      loadSessions();
+      void loadSessions();
     }
   }
 
@@ -710,14 +718,21 @@ function App() {
         // API OpenRouter injoignable : le bouton "joindre" reste desactive
       });
 
-    loadSessions();
-    loadProjects();
-
     // uniquement au demarrage, pour une session deja connue (localStorage) ;
     // ne doit pas se redeclencher quand sendMessage() fixe sessionId lui-meme,
     // sinon ca part en course avec le streaming en cours.
     const stored = localStorage.getItem("triton_session_id");
     if (stored) loadHistory(stored);
+
+    // switchSession() derive normalement activeProjectId de la liste des
+    // sessions deja chargee en memoire, mais au demarrage la session
+    // restauree ne passe pas par switchSession - sans ceci, le panneau du
+    // dossier du projet reste invisible tant qu'on n'a pas change de
+    // conversation puis qu'on n'y revient (bug signale par l'utilisateur).
+    void loadSessions().then((list) => {
+      if (stored) setActiveProjectId(list.find((s) => s.id === stored)?.project_id ?? null);
+    });
+    loadProjects();
   }, []);
 
   // relance automatiquement le modele une fois qu'un sous-agent dispatche
@@ -963,7 +978,7 @@ function App() {
         setSessionId(data.session_id);
         localStorage.setItem("triton_session_id", data.session_id);
       }
-      loadSessions();
+      void loadSessions();
 
       await pollMultiAgentRun(data.run_id);
     } catch {
@@ -977,7 +992,7 @@ function App() {
       ]);
     } finally {
       setSending(false);
-      loadSessions();
+      void loadSessions();
     }
   }
 
@@ -1192,7 +1207,7 @@ function App() {
       abortControllerRef.current = null;
       setPendingConfirmation(null);
       setSending(false);
-      loadSessions();
+      void loadSessions();
 
       if (performance.now() - startTime > LONG_RESPONSE_MS) {
         notifyIfBackground(
