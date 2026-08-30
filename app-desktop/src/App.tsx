@@ -133,6 +133,12 @@ interface SentFile {
   dataUrl: string;
 }
 
+interface MultiAgentSubtaskToolCall {
+  tool: string;
+  args: Record<string, unknown>;
+  result: string;
+}
+
 interface MultiAgentSubtask {
   id: string;
   role: string;
@@ -140,6 +146,9 @@ interface MultiAgentSubtask {
   model: string;
   status: "pending" | "running" | "done" | "error";
   result: string | null;
+  // alimente en direct pendant l'execution (voir orchestrator.py) : permet
+  // d'afficher ce qu'une sous-tache a deja fait avant qu'elle ne conclue.
+  tool_calls: MultiAgentSubtaskToolCall[];
 }
 
 interface MultiAgentRun {
@@ -168,6 +177,12 @@ type ChatMsg =
       // sans avoir a l'inferer du texte, contrairement a un vrai appel
       // d'outil deja termine - voir toolCallStatus).
       status?: "pending" | "running" | "complete" | "error";
+      // presents seulement pour une sous-tache multi-agent : sa description
+      // (le "target" de sa propre ligne) et les outils qu'elle a deja
+      // appeles, mis a jour en direct pendant qu'elle tourne (voir
+      // pollMultiAgentRun / multiAgentSubtaskDetail).
+      subtaskDescription?: string;
+      subtaskToolCalls?: MultiAgentSubtaskToolCall[];
     }
   | { kind: "info"; text: string; time: number }
   | { kind: "error"; text: string; time: number };
@@ -401,6 +416,39 @@ function toolResultDetail(t: ToolMsg): ReactNode {
     <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap text-xs">
       {t.result}
     </pre>
+  );
+}
+
+/** Detail d'une sous-tache multi-agent : sa description, puis ses propres
+ * appels d'outils (meme composant ChatToolCalls, imbrique) mis a jour en
+ * direct pendant qu'elle tourne, et enfin son resultat une fois conclue. */
+function multiAgentSubtaskDetail(t: ToolMsg): ReactNode {
+  const calls = t.subtaskToolCalls ?? [];
+  return (
+    <div className="flex flex-col gap-2">
+      {t.subtaskDescription && (
+        <p className="text-xs text-secondary">{t.subtaskDescription}</p>
+      )}
+      {calls.length > 0 && (
+        <ChatToolCalls
+          calls={calls.map((c) => ({
+            name: c.tool,
+            status: toolCallStatus(c.result),
+            target: formatArgs(c.args),
+            resultDetail: (
+              <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap text-xs">
+                {c.result}
+              </pre>
+            ),
+          }))}
+        />
+      )}
+      {t.result && (
+        <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap text-xs">
+          {t.result}
+        </pre>
+      )}
+    </div>
   );
 }
 
@@ -859,10 +907,12 @@ function App() {
                     kind: "tool",
                     id: s.id,
                     tool: s.role,
-                    args: { model: s.model, task: s.description },
+                    args: { model: s.model },
                     result: s.result ?? "",
                     time: Date.now(),
                     status: s.status === "done" ? "complete" : s.status,
+                    subtaskDescription: s.description,
+                    subtaskToolCalls: s.tool_calls,
                   };
                   const idx = next.findIndex((m) => m.kind === "tool" && m.id === s.id);
                   if (idx >= 0) next[idx] = entry;
@@ -1854,12 +1904,24 @@ function App() {
                         block.kind === "tools" ? (
                           <ChatToolCalls
                             key={bi}
-                            calls={block.items.map((t) => ({
-                              name: t.tool,
-                              status: t.status ?? toolCallStatus(t.result),
-                              target: formatArgs(t.args),
-                              resultDetail: toolResultDetail(t),
-                            }))}
+                            calls={block.items.map((t) => {
+                              const isSubtask = t.subtaskToolCalls !== undefined;
+                              const status = t.status ?? toolCallStatus(t.result);
+                              const callCount = t.subtaskToolCalls?.length ?? 0;
+                              return {
+                                name: t.tool,
+                                status,
+                                node: isSubtask && typeof t.args.model === "string" ? t.args.model : undefined,
+                                target: isSubtask ? t.subtaskDescription : formatArgs(t.args),
+                                stats:
+                                  isSubtask && status === "running" && callCount > 0
+                                    ? `${callCount} outil${callCount > 1 ? "s" : ""}`
+                                    : undefined,
+                                resultDetail: isSubtask
+                                  ? multiAgentSubtaskDetail(t)
+                                  : toolResultDetail(t),
+                              };
+                            })}
                           />
                         ) : (
                           <ChatMessageBubble

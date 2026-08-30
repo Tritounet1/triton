@@ -143,6 +143,13 @@ SYNTHESIS_SYSTEM_PROMPT = (
 
 
 @dataclass
+class SubtaskToolCall:
+    tool: str
+    args: dict[str, object]
+    result: str
+
+
+@dataclass
 class Subtask:
     id: str
     role: str
@@ -150,6 +157,11 @@ class Subtask:
     model: str
     status: SubtaskStatus = "pending"
     result: str | None = None
+    # appended to live, as each tool call actually happens (see
+    # _run_subtask) - GET /orchestrator/{run_id} exposes this directly, so
+    # the desktop app can show what a subtask has done so far while it's
+    # still running, not just its result once it's done.
+    tool_calls: list["SubtaskToolCall"] = field(default_factory=list)
 
 
 @dataclass
@@ -334,6 +346,7 @@ def _run_subtask(subtask: Subtask, project: Project | None) -> None:
                     result_preview=result[:300],
                     result_chars=len(result),
                 )
+                subtask.tool_calls.append(SubtaskToolCall(tool=name, args=args, result=result))
                 messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": result})
 
         # ran out of iterations without a plain-text conclusion: force one
