@@ -32,7 +32,6 @@ import { Theme } from "@astryxdesign/core/theme";
 import { Timestamp } from "@astryxdesign/core/Timestamp";
 import { createStaticSource, type SearchableItem } from "@astryxdesign/core/Typeahead";
 import { neutralTheme } from "@astryxdesign/theme-neutral/built";
-import { open as openFolderDialog } from "@tauri-apps/plugin-dialog";
 import {
     useCallback,
     useEffect,
@@ -62,6 +61,7 @@ import {
     XIcon,
 } from "./icons";
 import { modelAvatar } from "./modelFamilies";
+import { NewProjectModal } from "./NewProjectModal";
 import { notifyIfBackground } from "./notifications";
 import { ProjectFilePanel } from "./ProjectFilePanel";
 import { SearchPage } from "./SearchPage";
@@ -476,10 +476,6 @@ function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [showProjectForm, setShowProjectForm] = useState(false);
-  const [newProjectName, setNewProjectName] = useState("");
-  const [newProjectFolder, setNewProjectFolder] = useState("");
-  const [creatingProject, setCreatingProject] = useState(false);
-  const [projectFormError, setProjectFormError] = useState<string | null>(null);
   const [deletingProject, setDeletingProject] = useState<Project | null>(null);
   const [collapsedProjectIds, setCollapsedProjectIds] = useState<Set<string>>(
     () => new Set(),
@@ -573,55 +569,6 @@ function App() {
       .catch(() => {
         // API hors ligne ou requete echouee : la liste de projets reste vide
       });
-  }
-
-  async function pickProjectFolder() {
-    const folder = await openFolderDialog({ directory: true, multiple: false });
-    if (typeof folder === "string") setNewProjectFolder(folder);
-  }
-
-  function resetProjectForm() {
-    setNewProjectName("");
-    setNewProjectFolder("");
-    setProjectFormError(null);
-    setShowProjectForm(false);
-  }
-
-  async function submitNewProject() {
-    if (!newProjectName.trim() || !newProjectFolder.trim()) {
-      setProjectFormError("le nom et le dossier sont obligatoires.");
-      return;
-    }
-    setCreatingProject(true);
-    setProjectFormError(null);
-
-    try {
-      const res = await fetch(`${API_BASE}/projects`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: newProjectName.trim(),
-          folder_path: newProjectFolder.trim(),
-        }),
-      });
-
-      if (!res.ok) {
-        const body = (await res.json().catch(() => null)) as {
-          detail?: string;
-        } | null;
-        setProjectFormError(body?.detail ?? `erreur ${res.status}`);
-        return;
-      }
-
-      setProjects((await res.json()) as Project[]);
-      resetProjectForm();
-    } catch {
-      setProjectFormError(
-        "impossible de contacter l'API Triton (127.0.0.1:8000).",
-      );
-    } finally {
-      setCreatingProject(false);
-    }
   }
 
   async function confirmDeleteProject() {
@@ -1375,57 +1322,12 @@ function App() {
                   variant="ghost"
                   size="sm"
                   onClick={() => {
-                    setShowProjectForm((v) => !v);
+                    setShowProjectForm(true);
                   }}
                 />
               }
             >
-              {showProjectForm && (
-                <div className="flex flex-col gap-2 px-2 py-1">
-                  <TextInput
-                    value={newProjectName}
-                    onChange={setNewProjectName}
-                    placeholder="Nom du projet"
-                    isLabelHidden
-                    label="Nom du projet"
-                    size="sm"
-                    hasAutoFocus
-                  />
-                  <Button
-                    label={newProjectFolder || "Choisir un dossier..."}
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => {
-                      void pickProjectFolder();
-                    }}
-                    className="justify-start truncate"
-                  />
-                  {projectFormError && (
-                    <Text size="2xs" className="text-error">
-                      {projectFormError}
-                    </Text>
-                  )}
-                  <div className="flex gap-1">
-                    <Button
-                      label="Créer"
-                      variant="primary"
-                      size="sm"
-                      isLoading={creatingProject}
-                      onClick={() => {
-                        void submitNewProject();
-                      }}
-                      className="flex-1"
-                    />
-                    <Button
-                      label="Annuler"
-                      variant="ghost"
-                      size="sm"
-                      onClick={resetProjectForm}
-                    />
-                  </div>
-                </div>
-              )}
-              {projects.length === 0 && !showProjectForm && (
+              {projects.length === 0 && (
                 <Text size="2xs" color="secondary" className="block px-2 py-1">
                   Aucun projet.
                 </Text>
@@ -2051,6 +1953,14 @@ function App() {
           setSettingsOpen(false);
         }}
         onModelChanged={refreshApiModel}
+      />
+
+      <NewProjectModal
+        isOpen={showProjectForm}
+        onClose={() => {
+          setShowProjectForm(false);
+        }}
+        onCreated={setProjects}
       />
     </Theme>
   );
