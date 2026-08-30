@@ -73,12 +73,14 @@ pnpm install
 pnpm tauri dev
 ```
 
-## Linting
+## Linting and tests
 
 Both halves of the project are linted strictly, wired together with [pre-commit](https://pre-commit.com) so nothing gets committed with warnings:
 
-- Python: [ruff](https://docs.astral.sh/ruff/) (lint + format) and [basedpyright](https://docs.basedpyright.com/) (`standard` type-checking mode)
+- Python: [ruff](https://docs.astral.sh/ruff/) (lint + format), [basedpyright](https://docs.basedpyright.com/) (`standard` type-checking mode), and a `tests/` pytest suite covering the pure logic (no network call) - history compression, the project sandbox, the multi-agent planner's JSON parsing, `format_args` - including a couple of straight regression tests for bugs found the hard way (`finish_reason` truncation, a `.format()` crash on literal JSON braces)
 - `app-desktop/`: [ESLint](https://eslint.org/) (`typescript-eslint`'s `strictTypeChecked` + `stylisticTypeChecked`, `eslint-plugin-react-hooks`) with `--max-warnings=0`, plus `tsc --noEmit`
+
+Run the Python tests directly with `uv run pytest`.
 
 First-time setup after cloning:
 

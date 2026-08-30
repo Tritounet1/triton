@@ -19,6 +19,13 @@ repos:
         types: [python]
         pass_filenames: false
 
+      - id: pytest
+        name: pytest (pure-logic regression suite)
+        entry: uv run pytest -q
+        language: system
+        types: [python]
+        pass_filenames: false
+
       - id: eslint
         name: eslint (app-desktop, strict, no warnings)
         entry: bash -c 'cd app-desktop && pnpm exec eslint . --max-warnings=0'

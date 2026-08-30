@@ -23,8 +23,16 @@ triton-logs-summary = "triton.logs_summary:main"
 dev = [
     "basedpyright>=1.39.10",
     "pre-commit>=4.6.2",
+    "pytest>=8.4.2",
     "ruff>=0.16.5",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# main.py stays at the repo root (see PLAN.md's src/ refactor) rather than
+# in the installed triton package, so it needs the repo root on sys.path
+# to be importable as a plain "main" module from tests/.
+pythonpath = ["."]
 
 [build-system]
 requires = ["hatchling"]
