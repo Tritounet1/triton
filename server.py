@@ -16,7 +16,7 @@ from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
 from triton import background_tasks, mcp_client, orchestrator, subagents
-from triton.api import ChatResult, call_chat, get_model
+from triton.api import ChatResult, call_chat, get_model, is_api_key_configured
 from triton.chat_loop import (
     MAX_ITERATIONS,
     build_system_message,
@@ -47,7 +47,12 @@ from triton.sessions import (
     save_session_project,
     save_title,
 )
-from triton.settings import load_monthly_budget, save_model, save_monthly_budget
+from triton.settings import (
+    load_monthly_budget,
+    save_model,
+    save_monthly_budget,
+    save_openrouter_api_key,
+)
 from triton.tools import TOOLS, TOOLS_REGISTRY, enforce_project_sandbox, invoke_tool, is_skipped
 
 
@@ -218,6 +223,16 @@ def run_chat_stream(
 ) -> Iterator[str]:
     session_id = session_path.stem
     yield sse("session", {"session_id": session_id})
+
+    if not is_api_key_configured():
+        yield sse(
+            "error",
+            {
+                "message": "Aucune clé API OpenRouter configurée. Ouvre les Paramètres "
+                "(icône en bas de la barre latérale) pour en ajouter une.",
+            },
+        )
+        return
 
     project_id = load_session_project(session_id)
     project = get_project(project_id) if project_id else None
@@ -418,6 +433,24 @@ def get_monthly_budget() -> dict[str, float | None]:
 def set_monthly_budget(body: BudgetUpdate) -> dict[str, float | None]:
     save_monthly_budget(body.monthly_budget_usd)
     return {"monthly_budget_usd": body.monthly_budget_usd}
+
+
+class ApiKeyUpdate(BaseModel):
+    api_key: str
+
+
+@app.get("/settings/api_key")
+def get_api_key_status() -> dict[str, bool]:
+    # never echoes the key itself back, only whether one is configured -
+    # the Settings UI shows a blank password field either way, never the
+    # real value once saved.
+    return {"configured": is_api_key_configured()}
+
+
+@app.put("/settings/api_key")
+def set_api_key(body: ApiKeyUpdate) -> dict[str, bool]:
+    save_openrouter_api_key(body.api_key.strip() or None)
+    return {"configured": is_api_key_configured()}
 
 
 @app.get("/openrouter/models")

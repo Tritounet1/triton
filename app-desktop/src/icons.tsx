@@ -287,3 +287,18 @@ export function FileIcon({ className = base }: IconProps) {
     </svg>
   );
 }
+
+export function KeyIcon({ className = base }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <circle cx="8" cy="15" r="4" stroke="currentColor" strokeWidth="2" />
+      <path
+        d="m10.8 12.2 8.7-8.7M15 8l2.5-2.5M18 5l2 2"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}

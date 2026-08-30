@@ -42,7 +42,7 @@ def test_normal_response_collects_content_and_finish_reason(monkeypatch):
         _chunk(content=", world"),
         _chunk(finish_reason="stop", usage=_usage(10, 5, 15)),
     ]
-    monkeypatch.setattr(api, "client", _fake_stream(chunks))
+    monkeypatch.setattr(api, "_client", lambda: _fake_stream(chunks))
 
     events = list(api.stream_chat([{"role": "user", "content": "hi"}]))
     text_events = [e for e in events if isinstance(e, str)]
@@ -60,7 +60,7 @@ def test_truncated_response_reports_length_with_no_content(monkeypatch):
     token budget with nothing visible produced yet."""
     monkeypatch.setattr(api, "get_model", lambda: "test-model")
     chunks = [_chunk(finish_reason="length", usage=_usage(8000, 100, 8100))]
-    monkeypatch.setattr(api, "client", _fake_stream(chunks))
+    monkeypatch.setattr(api, "_client", lambda: _fake_stream(chunks))
 
     events = list(api.stream_chat([{"role": "user", "content": "hi"}]))
     result = events[-1]
@@ -83,7 +83,7 @@ def test_tool_call_deltas_are_reassembled_across_chunks(monkeypatch):
         _chunk(tool_call_delta=[first_delta]),
         _chunk(tool_call_delta=[second_delta], finish_reason="tool_calls"),
     ]
-    monkeypatch.setattr(api, "client", _fake_stream(chunks))
+    monkeypatch.setattr(api, "_client", lambda: _fake_stream(chunks))
 
     events = list(api.stream_chat([{"role": "user", "content": "hi"}], tools=[]))
     result = events[-1]

@@ -4,12 +4,13 @@ import { IconButton } from "@astryxdesign/core/IconButton";
 import { Item } from "@astryxdesign/core/Item";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
-import { ChartBarIcon, CpuIcon, PlugIcon, SearchIcon, XIcon } from "./icons";
+import { ApiKeySettings } from "./ApiKeySettings";
+import { ChartBarIcon, CpuIcon, KeyIcon, PlugIcon, SearchIcon, XIcon } from "./icons";
 import { LogsSettings } from "./LogsSettings";
 import { McpSettings } from "./McpSettings";
 import { ModelSettings } from "./ModelSettings";
 
-type SettingsCategory = "model" | "mcp" | "logs";
+type SettingsCategory = "api_key" | "model" | "mcp" | "logs";
 
 interface CategoryDef {
   id: SettingsCategory;
@@ -18,6 +19,7 @@ interface CategoryDef {
 }
 
 const CATEGORIES: CategoryDef[] = [
+  { id: "api_key", label: "Clé API", icon: <KeyIcon className="h-4 w-4" /> },
   { id: "model", label: "Modèle", icon: <CpuIcon className="h-4 w-4" /> },
   { id: "mcp", label: "Serveurs MCP", icon: <PlugIcon className="h-4 w-4" /> },
   { id: "logs", label: "Logs & coûts", icon: <ChartBarIcon className="h-4 w-4" /> },
@@ -39,7 +41,7 @@ interface SettingsModalProps {
  * (Dialog purpose="info"), remplace SettingsPage/LogsPage/McpServersPage/
  * ModelPage. */
 export function SettingsModal({ isOpen, onClose, onModelChanged }: SettingsModalProps) {
-  const [category, setCategory] = useState<SettingsCategory>("model");
+  const [category, setCategory] = useState<SettingsCategory>("api_key");
   const [search, setSearch] = useState("");
 
   const filtered = CATEGORIES.filter((c) =>
@@ -99,6 +101,7 @@ export function SettingsModal({ isOpen, onClose, onModelChanged }: SettingsModal
             className="absolute right-4 top-4"
           />
           <div key={category} className="animate-fade-in">
+            {category === "api_key" && <ApiKeySettings />}
             {category === "model" && <ModelSettings onModelChanged={onModelChanged} />}
             {category === "mcp" && <McpSettings />}
             {category === "logs" && <LogsSettings />}

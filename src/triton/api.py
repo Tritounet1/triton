@@ -13,26 +13,40 @@ from openai.types.chat import (
 from openai.types.chat.chat_completion_message_function_tool_call import Function
 
 from triton.paths import ROOT_DIR
-from triton.settings import load_model
+from triton.settings import load_model, load_openrouter_api_key
 
 # explicit path rather than load_dotenv()'s default CWD-upward search: once
 # frozen (PyInstaller), the process's CWD has nothing to do with ROOT_DIR
 # (see paths.py), so the default search would silently find nothing.
 _ = load_dotenv(ROOT_DIR / ".env")
 
-open_router_api_key = os.getenv("OPEN_ROUTER_API_KEY")
 
-# the OpenAI SDK raises at construction time if api_key is None (only an
-# OPENAI_API_KEY env var satisfies it otherwise) - a placeholder here
-# defers that failure to the first real call, which already surfaces as a
-# normal error through the existing chat error handling, instead of
-# crashing the whole process before it can even serve a health check. This
-# is the actual state of a fresh install before the user configures a key
-# (see paths.py/ROOT_DIR: no .env exists yet in a fresh app data dir).
-client = OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=open_router_api_key or "not-configured",
-)
+def _effective_api_key() -> str | None:
+    """The Settings UI's value (settings.json) takes priority when set, so
+    entering a key there takes effect immediately, no restart needed -
+    falls back to the OPEN_ROUTER_API_KEY env var (.env) for the existing
+    dev/CLI setup."""
+    return load_openrouter_api_key() or os.getenv("OPEN_ROUTER_API_KEY")
+
+
+def is_api_key_configured() -> bool:
+    return _effective_api_key() is not None
+
+
+def _client() -> OpenAI:
+    # built fresh on every call (like get_model()) rather than once at
+    # import time, so a key entered through the Settings UI takes effect
+    # on the very next call. The OpenAI SDK raises at construction time if
+    # api_key is None - the placeholder defers that failure to the actual
+    # request instead, which already surfaces as a normal error through
+    # the existing chat error handling (is_api_key_configured() is what
+    # run_chat_stream checks upfront to show a clearer message before ever
+    # getting here).
+    return OpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=_effective_api_key() or "not-configured",
+    )
+
 
 # 1024 was too low for tool calls carrying a full file as their "content"
 # argument (e.g. write_file on an HTML page with inline CSS): the completion
@@ -82,14 +96,14 @@ def call_chat(
     does."""
     model = model or get_model()
     if tools:
-        resp = client.chat.completions.create(
+        resp = _client().chat.completions.create(
             model=model,
             messages=messages,
             tools=tools,
             max_tokens=MAX_TOKENS,
         )
     else:
-        resp = client.chat.completions.create(
+        resp = _client().chat.completions.create(
             model=model,
             messages=messages,
             max_tokens=MAX_TOKENS,
@@ -118,7 +132,7 @@ def stream_chat(
     there's no point displaying them partially)."""
     model = get_model()
     if tools:
-        stream = client.chat.completions.create(
+        stream = _client().chat.completions.create(
             model=model,
             messages=messages,
             tools=tools,
@@ -127,7 +141,7 @@ def stream_chat(
             stream_options={"include_usage": True},
         )
     else:
-        stream = client.chat.completions.create(
+        stream = _client().chat.completions.create(
             model=model,
             messages=messages,
             max_tokens=MAX_TOKENS,

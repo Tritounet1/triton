@@ -43,3 +43,15 @@ def load_monthly_budget() -> float | None:
 
 def save_monthly_budget(budget: float | None) -> None:
     _save({"monthly_budget_usd": budget})
+
+
+def load_openrouter_api_key() -> str | None:
+    """The key entered through the Settings UI, if any - api.py falls back
+    to the OPEN_ROUTER_API_KEY env var (.env) when this is unset, so the
+    existing dev/CLI setup keeps working untouched."""
+    key = _load().get("openrouter_api_key")
+    return key if isinstance(key, str) and key.strip() else None
+
+
+def save_openrouter_api_key(key: str | None) -> None:
+    _save({"openrouter_api_key": key})
