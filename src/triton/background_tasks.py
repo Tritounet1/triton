@@ -79,7 +79,7 @@ def _log_path(task_id: str) -> Path:
 
 
 def _persist_state() -> None:
-    STATE_DIR.mkdir(exist_ok=True)
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
     entries = [
         {
             "id": t.id,
@@ -174,7 +174,7 @@ def start(session_id: str, command: str, name: str = "", directory: str = ".") -
     process exiting rather than being torn down with it."""
     label = name.strip() or command
     task_id = uuid.uuid4().hex[:8]
-    STATE_DIR.mkdir(exist_ok=True)
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
 
     with _log_path(task_id).open("wb") as log_file:
         try:

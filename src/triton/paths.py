@@ -20,3 +20,11 @@ def _compute_root_dir() -> Path:
 
 
 ROOT_DIR = _compute_root_dir()
+# every other module in this package assumes ROOT_DIR itself already
+# exists when creating a subdirectory (mkdir(exist_ok=True), no
+# parents=True) or writing a file directly under it (settings.json,
+# projects.json, ...) - true in dev mode (it's the repo root) but not for
+# a frozen build's fresh per-user app data dir on a first launch, where
+# nothing has created it yet. Guaranteeing it here once covers every
+# consumer instead of patching each call site's assumption individually.
+ROOT_DIR.mkdir(parents=True, exist_ok=True)

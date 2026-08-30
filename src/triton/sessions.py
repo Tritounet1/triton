@@ -21,7 +21,7 @@ def latest_session_path() -> Path | None:
 def new_session_path() -> Path:
     """Creates a session id based on the date, to allow one day handling
     multiple separate conversations rather than a single global memory."""
-    SESSIONS_DIR.mkdir(exist_ok=True)
+    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
     return SESSIONS_DIR / f"{timestamp}.json"
 
@@ -50,7 +50,7 @@ def load_title(session_id: str) -> str | None:
 
 
 def save_title(session_id: str, title: str) -> None:
-    SESSIONS_DIR.mkdir(exist_ok=True)
+    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     title_path(session_id).write_text(title.strip())
 
 
@@ -72,7 +72,7 @@ def load_always_allowed(session_id: str) -> set[str]:
 def allow_always(session_id: str, tool_name: str) -> None:
     names = load_always_allowed(session_id)
     names.add(tool_name)
-    SESSIONS_DIR.mkdir(exist_ok=True)
+    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     permissions_path(session_id).write_text(json.dumps(sorted(names), ensure_ascii=False, indent=2))
 
 
@@ -91,7 +91,7 @@ def load_session_project(session_id: str) -> str | None:
 
 
 def save_session_project(session_id: str, project_id: str) -> None:
-    SESSIONS_DIR.mkdir(exist_ok=True)
+    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     project_path(session_id).write_text(project_id.strip())
 
 
