@@ -12,15 +12,26 @@ from openai.types.chat import (
 )
 from openai.types.chat.chat_completion_message_function_tool_call import Function
 
+from triton.paths import ROOT_DIR
 from triton.settings import load_model
 
-_ = load_dotenv()
+# explicit path rather than load_dotenv()'s default CWD-upward search: once
+# frozen (PyInstaller), the process's CWD has nothing to do with ROOT_DIR
+# (see paths.py), so the default search would silently find nothing.
+_ = load_dotenv(ROOT_DIR / ".env")
 
 open_router_api_key = os.getenv("OPEN_ROUTER_API_KEY")
 
+# the OpenAI SDK raises at construction time if api_key is None (only an
+# OPENAI_API_KEY env var satisfies it otherwise) - a placeholder here
+# defers that failure to the first real call, which already surfaces as a
+# normal error through the existing chat error handling, instead of
+# crashing the whole process before it can even serve a health check. This
+# is the actual state of a fresh install before the user configures a key
+# (see paths.py/ROOT_DIR: no .env exists yet in a fresh app data dir).
 client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
-    api_key=open_router_api_key,
+    api_key=open_router_api_key or "not-configured",
 )
 
 # 1024 was too low for tool calls carrying a full file as their "content"

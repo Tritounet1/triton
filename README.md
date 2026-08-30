@@ -73,7 +73,20 @@ pnpm install
 pnpm tauri dev
 ```
 
-## Linting and tests
+### Packaging a standalone build
+
+`pnpm tauri build` alone only bundles the frontend - the API still has to be started separately (`uv run server.py`), which is fine in dev but not for a real double-click app on a machine with no Python/uv installed. For that, `server.py` gets frozen into a standalone executable with [PyInstaller](https://pyinstaller.org) and bundled as a [Tauri sidecar](https://v2.tauri.app/develop/sidecar/): the desktop app spawns it automatically on launch and kills it on quit (release builds only - `pnpm tauri dev` still expects the separate `uv run server.py` process, so the two don't fight over port 8000).
+
+```
+./packaging/build_server.sh   # freezes server.py, must run on the target OS (no cross-compiling)
+cd app-desktop
+pnpm tauri build
+```
+
+Two things to know about this:
+
+- **Where data lives once packaged**: a frozen build can't sensibly use "the repo root" for `sessions/`, `logs/`, `.env`, etc. (see `src/triton/paths.py`) - it uses the OS's standard per-user app data directory instead (`~/Library/Application Support/Triton` on macOS, `%APPDATA%/Triton` on Windows). On first launch there's no `.env` there yet; copy one over (with `OPEN_ROUTER_API_KEY` set) before expecting real model calls to work - there's no in-app onboarding for this yet.
+- **Windows**: only built and tested on macOS (`aarch64-apple-darwin`) so far. `packaging/build_server.sh` should work the same way in principle on Windows (PyInstaller and Tauri both support it), but hasn't been verified - and a few of the harness's tools (`run_shell`, and the model's own habit of writing bash-style commands) assume a POSIX shell, which Windows' `cmd.exe` isn't.
 
 Both halves of the project are linted strictly, wired together with [pre-commit](https://pre-commit.com) so nothing gets committed with warnings:
 

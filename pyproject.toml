@@ -7,6 +7,7 @@ dependencies = [
     "fastapi>=0.141.1",
     "mcp>=2.1.1",
     "openai>=3.5.0",
+    "platformdirs>=4.5.0",
     "prompt-toolkit>=3.0.53",
     "python-dotenv>=1.2.3",
     "requests>=2.34.2",
@@ -23,6 +24,7 @@ triton-logs-summary = "triton.logs_summary:main"
 dev = [
     "basedpyright>=1.39.10",
     "pre-commit>=4.6.2",
+    "pyinstaller>=6.16.0",
     "pytest>=8.4.2",
     "ruff>=0.16.5",
 ]
