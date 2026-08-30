@@ -1785,7 +1785,7 @@ function App() {
                 {groupMessages(messages).map((group, gi) => {
                   if (group.type === "user") {
                     return (
-                      <ChatMessage key={gi} sender="user">
+                      <ChatMessage key={gi} sender="user" className="animate-fade-in">
                         <ChatMessageBubble
                           metadata={
                             <ChatMessageMetadata
@@ -1832,7 +1832,7 @@ function App() {
 
                   if (group.type === "system") {
                     return (
-                      <ChatSystemMessage key={gi}>
+                      <ChatSystemMessage key={gi} className="animate-fade-in">
                         {group.msg.kind === "error" ? (
                           <span className="text-error">{group.msg.text}</span>
                         ) : (
@@ -1864,6 +1864,7 @@ function App() {
                     <ChatMessage
                       key={gi}
                       sender="assistant"
+                      className="animate-fade-in"
                       avatar={
                         <Avatar
                           name={messageAvatar.name}
@@ -1877,6 +1878,7 @@ function App() {
                         block.kind === "tools" ? (
                           <ChatToolCalls
                             key={bi}
+                            className="animate-fade-in"
                             calls={block.items.map((t) => {
                               const isSubtask = t.subtaskToolCalls !== undefined;
                               const status = t.status ?? toolCallStatus(t.result);
@@ -1901,6 +1903,7 @@ function App() {
                             key={bi}
                             variant="ghost"
                             width="100%"
+                            className="animate-fade-in"
                           >
                             <Markdown>{block.msg.text}</Markdown>
                           </ChatMessageBubble>
@@ -1938,6 +1941,7 @@ function App() {
                 {showTypingPlaceholder && (
                   <ChatMessage
                     sender="assistant"
+                    className="animate-fade-in"
                     avatar={
                       <Avatar
                         name={modelAvatar(apiModel).name}

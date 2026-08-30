@@ -98,9 +98,11 @@ export function SettingsModal({ isOpen, onClose, onModelChanged }: SettingsModal
             onClick={onClose}
             className="absolute right-4 top-4"
           />
-          {category === "model" && <ModelSettings onModelChanged={onModelChanged} />}
-          {category === "mcp" && <McpSettings />}
-          {category === "logs" && <LogsSettings />}
+          <div key={category} className="animate-fade-in">
+            {category === "model" && <ModelSettings onModelChanged={onModelChanged} />}
+            {category === "mcp" && <McpSettings />}
+            {category === "logs" && <LogsSettings />}
+          </div>
         </div>
       </div>
     </Dialog>
