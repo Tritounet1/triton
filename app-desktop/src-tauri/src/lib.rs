@@ -14,6 +14,48 @@ use tauri_plugin_shell::ShellExt;
 #[cfg(not(debug_assertions))]
 struct SidecarState(Mutex<Option<CommandChild>>);
 
+/// True if something is already answering on 127.0.0.1:8000. A previous
+/// run's sidecar can outlive its parent if the app was force-quit/crashed
+/// (SIGKILL bypasses the RunEvent::Exit cleanup below - no way around that
+/// from inside the app), which would otherwise make every future launch
+/// fail to bind with no obvious cause. Skipping our own spawn in that case
+/// means the app just reuses whatever's already serving it instead of
+/// erroring - correct whether that's a leftover sidecar or a dev-mode
+/// `uv run uvicorn` someone forgot was running.
+#[cfg(not(debug_assertions))]
+fn port_8000_is_already_serving() -> bool {
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::Duration;
+
+    let addr: SocketAddr = ([127, 0, 0, 1], 8000).into();
+    TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok()
+}
+
+/// Terminates the sidecar, working around a real gap found by testing:
+/// CommandChild::kill() always sends SIGKILL, which a PyInstaller onefile
+/// build can't do anything with - the tracked PID is only its bootloader
+/// (it extracts to a temp dir and runs the real interpreter as its own
+/// child process), and SIGKILL gives it no chance to forward the signal
+/// before dying, leaving that child running and the port held forever.
+/// SIGTERM is different: the bootloader does forward it, so send that
+/// first and give it a moment before falling back to the hard kill (in
+/// case it's not a PyInstaller onefile binary, or it didn't exit in time).
+#[cfg(not(debug_assertions))]
+fn terminate_sidecar(child: CommandChild) {
+    #[cfg(unix)]
+    {
+        let pid = child.pid();
+        // SAFETY: pid came straight from the child we just spawned/are
+        // holding a handle to; SIGTERM on a possibly-already-exited pid
+        // just returns ESRCH, nothing unsafe about that outcome.
+        unsafe {
+            libc::kill(pid as libc::pid_t, libc::SIGTERM);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    let _ = child.kill();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -30,6 +72,15 @@ pub fn run() {
             // dev process babysitting the API) needs this.
             #[cfg(not(debug_assertions))]
             {
+                if port_8000_is_already_serving() {
+                    eprintln!(
+                        "[triton-server] something is already listening on 127.0.0.1:8000 \
+                         (a leftover sidecar, or a dev server) - reusing it instead of \
+                         spawning a new one"
+                    );
+                    return Ok(());
+                }
+
                 let (mut rx, child) = match _app.shell().sidecar("triton-server") {
                     Ok(cmd) => match cmd.spawn() {
                         Ok(spawned) => spawned,
@@ -81,7 +132,7 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 if let Some(state) = app_handle.try_state::<SidecarState>() {
                     if let Some(child) = state.0.lock().unwrap().take() {
-                        let _ = child.kill();
+                        terminate_sidecar(child);
                     }
                 }
             }
