@@ -1,6 +1,7 @@
 import json
 import logging
 import threading
+import time
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
@@ -453,6 +454,17 @@ def set_api_key(body: ApiKeyUpdate) -> dict[str, bool]:
     return {"configured": is_api_key_configured()}
 
 
+# short-lived: the catalog itself barely changes minute to minute, but a
+# short TTL still means the desktop app's own startup (modelsCatalog in
+# App.tsx) and every time Settings > Modele is opened don't each cost a
+# fresh round-trip to OpenRouter - see pricing.py's get_price() for the
+# same cache-with-TTL shape, kept separate since that one only needs
+# prompt/completion price per model, not this endpoint's fuller shape.
+_MODELS_CACHE_TTL_SECONDS = 300
+_models_cache: list[ModelInfo] | None = None
+_models_cache_time = 0.0
+
+
 @app.get("/openrouter/models")
 def list_openrouter_models() -> list[ModelInfo]:
     """Proxies OpenRouter's public model catalog (no API key required),
@@ -462,10 +474,20 @@ def list_openrouter_models() -> list[ModelInfo]:
     with the tool-calling loop otherwise), and whether it accepts image
     and/or PDF input (used to enable/disable the composer's attach
     button)."""
+    global _models_cache, _models_cache_time
+
+    cache_age = time.monotonic() - _models_cache_time
+    if _models_cache is not None and cache_age < _MODELS_CACHE_TTL_SECONDS:
+        return _models_cache
+
     try:
         resp = requests.get("https://openrouter.ai/api/v1/models", timeout=15)
         resp.raise_for_status()
     except requests.RequestException as e:
+        if _models_cache is not None:
+            # OpenRouter hiccup: serve the last known catalog rather than
+            # break the model picker over a transient network error.
+            return _models_cache
         raise HTTPException(502, f"could not reach OpenRouter ({e})") from e
 
     models: list[ModelInfo] = []
@@ -489,6 +511,8 @@ def list_openrouter_models() -> list[ModelInfo]:
                 "supports_files": "file" in (architecture.get("input_modalities") or []),
             }
         )
+    _models_cache = models
+    _models_cache_time = time.monotonic()
     return models
 
 
