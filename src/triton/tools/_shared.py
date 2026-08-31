@@ -50,11 +50,20 @@ def invoke_tool(tool: Tool, name: str, args: dict[str, object], session_id: str)
 
 # path/directory arguments to confine to the active project's folder when
 # a conversation (server.py) or a multi-agent subtask (orchestrator.py) is
-# scoped to one. run_shell (arbitrary command, no single path argument to
-# check) and MCP-sourced tools (unknown schemas) are deliberately not
+# scoped to one. MCP-sourced tools (unknown schemas) are deliberately not
 # covered here. Lives here rather than in server.py so orchestrator.py can
 # import it too without an import cycle (server.py already imports
 # orchestrator.py).
+#
+# run_shell/run_tests only get a `directory` check, not a command-content
+# one: this confines their *working directory* to the project (so a
+# relative path in the command resolves where it should, and this was
+# actually a bug before - subprocess.run's default cwd is the harness's
+# own process directory, not the project's), but a command that
+# deliberately does `cd .. && rm -rf` still escapes, same as it would in
+# a real terminal. There's no practical way to make arbitrary shell text
+# itself un-escapable without a real sandbox (container/chroot), which is
+# out of scope here.
 SANDBOXED_PATH_ARGS: dict[str, list[str]] = {
     "read_file": ["path"],
     "list_files": ["directory"],
@@ -67,7 +76,8 @@ SANDBOXED_PATH_ARGS: dict[str, list[str]] = {
     "git_status": ["directory"],
     "git_diff": ["directory", "path"],
     "git_commit": ["directory", "paths"],
-    "run_tests": ["path"],
+    "run_shell": ["directory"],
+    "run_tests": ["path", "directory"],
     "start_background_task": ["directory"],
 }
 
@@ -83,6 +93,8 @@ DEFAULTABLE_PATH_ARGS = {
     "git_status",
     "git_diff",
     "git_commit",
+    "run_shell",
+    "run_tests",
     "start_background_task",
 }
 

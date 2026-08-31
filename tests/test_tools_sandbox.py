@@ -19,9 +19,33 @@ def test_no_project_scoped_allows_any_path():
 
 def test_tool_not_in_sandboxed_list_is_unaffected(tmp_path):
     project = _project(tmp_path)
-    # run_shell has no single path argument to check - deliberately absent
-    # from SANDBOXED_PATH_ARGS (see tools.py's comment)
-    assert enforce_project_sandbox("run_shell", {"command": "rm -rf /"}, project) is None
+    assert enforce_project_sandbox("web_search", {"query": "anything"}, project) is None
+
+
+def test_run_shell_directory_defaults_to_project_root(tmp_path):
+    project = _project(tmp_path)
+    args: dict[str, object] = {"command": "ls"}
+    assert enforce_project_sandbox("run_shell", args, project) is None
+    assert args["directory"] == str((tmp_path / "myproject").resolve())
+
+
+def test_run_shell_directory_outside_project_is_rejected(tmp_path):
+    project = _project(tmp_path)
+    args: dict[str, object] = {"command": "ls", "directory": str(tmp_path)}
+    error = enforce_project_sandbox("run_shell", args, project)
+    assert error is not None
+
+
+def test_run_tests_path_and_directory_both_checked(tmp_path):
+    project = _project(tmp_path)
+    root = tmp_path / "myproject"
+
+    args: dict[str, object] = {"path": str(root / "tests")}
+    assert enforce_project_sandbox("run_tests", args, project) is None
+    assert args["directory"] == str(root.resolve())
+
+    bad_path = enforce_project_sandbox("run_tests", {"path": str(tmp_path / "tests")}, project)
+    assert bad_path is not None
 
 
 def test_path_inside_project_is_allowed(tmp_path):

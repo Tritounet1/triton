@@ -15,6 +15,10 @@ exactly as it did before.
 - background.py dispatch_subagent/check_subagent, start/stop/list
                  background tasks - thin wrappers, the real logic lives in
                  triton.agents.subagents / triton.background_tasks
+- snapshot.py   the write-tool safety net (ensure_snapshot/restore_snapshot) -
+                 not a tool category itself (registers nothing in
+                 TOOLS_REGISTRY), called around write_file/edit_file/
+                 delete_file/move_file from server.py and orchestrator.py
 """
 
 from openai.types.chat import ChatCompletionToolParam
@@ -31,6 +35,13 @@ from triton.tools._shared import (
     is_skipped,
 )
 from triton.tools.memory import load_memory
+from triton.tools.snapshot import (
+    WRITE_TOOL_NAMES,
+    RestoreError,
+    discard_snapshot,
+    ensure_snapshot,
+    restore_snapshot,
+)
 
 __all__ = [
     "DEFAULTABLE_PATH_ARGS",
@@ -39,12 +50,17 @@ __all__ = [
     "SKIP_DIR_NAMES",
     "TOOLS",
     "TOOLS_REGISTRY",
+    "WRITE_TOOL_NAMES",
+    "RestoreError",
     "Tool",
+    "discard_snapshot",
     "enforce_project_sandbox",
+    "ensure_snapshot",
     "invoke_tool",
     "is_skipped",
     "load_memory",
     "rebuild_tools_list",
+    "restore_snapshot",
 ]
 
 TOOLS_REGISTRY: dict[str, Tool] = {

@@ -45,7 +45,7 @@ from triton.llm.pricing import estimate_cost
 from triton.storage.logs import log_event
 from triton.storage.projects import Project, get_project
 from triton.storage.sessions import load_session, save_session, session_path
-from triton.tools import enforce_project_sandbox
+from triton.tools import WRITE_TOOL_NAMES, enforce_project_sandbox, ensure_snapshot
 
 if TYPE_CHECKING:
     from openai.types.chat import ChatCompletionMessageParam
@@ -256,7 +256,7 @@ def _parse_plan(raw: str) -> list[dict[str, str]]:
     return subtasks
 
 
-def _run_subtask(subtask: Subtask, project: Project | None) -> None:
+def _run_subtask(subtask: Subtask, project: Project | None, session_id: str | None) -> None:
     from triton.tools import TOOLS_REGISTRY
 
     can_write = subtask.role == "code" and project is not None
@@ -334,6 +334,12 @@ def _run_subtask(subtask: Subtask, project: Project | None) -> None:
                         if tool is None:
                             result = f"unknown tool: {name}"
                         else:
+                            if name in WRITE_TOOL_NAMES and session_id is not None:
+                                # this role runs fully unsupervised (see the
+                                # module docstring) - the snapshot taken
+                                # here is the only safety net a "code"
+                                # subtask's writes get at all
+                                ensure_snapshot(project, session_id)
                             try:
                                 result = tool.fn(**args)
                             except TypeError as e:
@@ -429,7 +435,8 @@ def _run(run: OrchestratorRun) -> None:
     run.status = "running"
 
     threads = [
-        threading.Thread(target=_run_subtask, args=(s, project), daemon=True) for s in run.subtasks
+        threading.Thread(target=_run_subtask, args=(s, project, run.session_id), daemon=True)
+        for s in run.subtasks
     ]
     for t in threads:
         t.start()

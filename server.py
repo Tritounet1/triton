@@ -58,7 +58,19 @@ from triton.storage.settings import (
     save_openrouter_api_key,
     save_role_model_override,
 )
-from triton.tools import TOOLS, TOOLS_REGISTRY, enforce_project_sandbox, invoke_tool, is_skipped
+from triton.storage.snapshots import get_snapshot
+from triton.tools import (
+    TOOLS,
+    TOOLS_REGISTRY,
+    WRITE_TOOL_NAMES,
+    RestoreError,
+    discard_snapshot,
+    enforce_project_sandbox,
+    ensure_snapshot,
+    invoke_tool,
+    is_skipped,
+    restore_snapshot,
+)
 
 
 class _QuietPollingEndpoints(logging.Filter):
@@ -297,6 +309,14 @@ def run_chat_stream(
                 else:
                     sandbox_error = enforce_project_sandbox(name, args, project)
                     tool = TOOLS_REGISTRY.get(name)
+
+                    if sandbox_error is None and tool is not None and name in WRITE_TOOL_NAMES:
+                        # snapshot before the write actually runs, not after
+                        # approval below - taking it is harmless even if this
+                        # particular call ends up denied, and it guarantees
+                        # the safety net is in place before any write from
+                        # this session could have landed (see tools/snapshot.py)
+                        ensure_snapshot(project, session_id)
 
                     if sandbox_error is not None:
                         result = sandbox_error
@@ -814,6 +834,46 @@ def rename_session(session_id: str, body: RenameRequest) -> dict[str, bool]:
 def remove_session(session_id: str) -> dict[str, bool]:
     if not delete_session(session_id):
         raise HTTPException(404, "session not found")
+    discard_snapshot(session_id)
+    return {"ok": True}
+
+
+class SnapshotInfo(BaseModel):
+    kind: str
+    created_at: str
+
+
+@app.get("/sessions/{session_id}/snapshot")
+def get_session_snapshot(session_id: str) -> SnapshotInfo:
+    """Whether this session's project folder was auto-snapshotted before
+    its first write (see tools/snapshot.py) - the desktop app uses this to
+    decide whether to offer a "restore" action at all."""
+    snapshot = get_snapshot(session_id)
+    if snapshot is None:
+        raise HTTPException(404, "no snapshot for this session")
+    return SnapshotInfo(kind=snapshot.kind, created_at=snapshot.created_at)
+
+
+@app.post("/sessions/{session_id}/snapshot/restore")
+def restore_session_snapshot(session_id: str) -> dict[str, bool]:
+    """Undoes every write this session's tools made to its project folder,
+    bringing it back to the state ensure_snapshot captured before the
+    first one. Destructive (see tools/snapshot.py's restore_snapshot) -
+    the desktop app is expected to confirm with the user before calling
+    this, the same way it does for any other irreversible action."""
+    snapshot = get_snapshot(session_id)
+    if snapshot is None:
+        raise HTTPException(404, "no snapshot for this session")
+
+    project = get_project(snapshot.project_id)
+    if project is None:
+        raise HTTPException(404, "the project this snapshot belongs to no longer exists")
+
+    try:
+        restore_snapshot(project, snapshot)
+    except RestoreError as e:
+        raise HTTPException(500, f"restore failed: {e}") from e
+
     return {"ok": True}
 
 

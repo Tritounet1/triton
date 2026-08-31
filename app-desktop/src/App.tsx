@@ -1982,6 +1982,7 @@ function App() {
                 projectName={activeProject.name}
                 folderPath={activeProject.folder_path}
                 refreshSignal={fileRefreshTick}
+                sessionId={sessionId}
                 tasks={backgroundTasks}
                 onOpenTask={openTask}
                 onStopTask={stopTask}

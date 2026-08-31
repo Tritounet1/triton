@@ -6,6 +6,7 @@ import { IconButton } from "@astryxdesign/core/IconButton";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { BackgroundTasksSection, type BackgroundTask } from "./BackgroundTasksSection";
 import { isViewableFile, type OpenFile } from "./fileViewer";
+import { SnapshotSection } from "./SnapshotSection";
 import {
   FileIcon,
   FolderIcon,
@@ -31,6 +32,9 @@ interface ProjectFilePanelProps {
   /** Change ce numero pour forcer un rechargement de l'arbre (ex. apres un
    * appel d'outil qui a pu creer/supprimer un fichier). */
   refreshSignal: number;
+  /** Session active, pour proposer une restauration du filet de securite -
+   * null hors conversation (ex. juste apres avoir choisi le projet). */
+  sessionId: string | null;
   tasks: BackgroundTask[];
   onOpenTask: (id: string) => void;
   onStopTask: (id: string) => void;
@@ -86,6 +90,7 @@ export function ProjectFilePanel({
   projectName,
   folderPath,
   refreshSignal,
+  sessionId,
   tasks,
   onOpenTask,
   onStopTask,
@@ -146,6 +151,14 @@ export function ProjectFilePanel({
         onOpen={onOpenTask}
         onStop={onStopTask}
         onDelete={onDeleteTask}
+      />
+
+      <SnapshotSection
+        sessionId={sessionId}
+        onRestored={() => {
+          setLoading(true);
+          loadTree();
+        }}
       />
 
       <div className="flex-1 overflow-y-auto px-2 py-2">
