@@ -99,18 +99,38 @@ def clear_session_project(session_id: str) -> None:
     project_path(session_id).unlink(missing_ok=True)
 
 
+def pinned_path(session_id: str) -> Path:
+    return SESSIONS_DIR / f"{session_id}.pinned"
+
+
+def is_pinned(session_id: str) -> bool:
+    """A conversation is pinned purely by this marker file's presence - no
+    content to read, like a boolean flag stored as a filesystem fact
+    rather than a line inside it."""
+    return pinned_path(session_id).exists()
+
+
+def set_pinned(session_id: str, pinned: bool) -> None:
+    if pinned:
+        SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+        pinned_path(session_id).touch()
+    else:
+        pinned_path(session_id).unlink(missing_ok=True)
+
+
 def session_path(session_id: str) -> Path:
     return SESSIONS_DIR / f"{session_id}.json"
 
 
 def delete_session(session_id: str) -> bool:
     """Deletes a conversation (history + title + permissions + project
-    link). Returns False if it didn't exist."""
+    link + pin). Returns False if it didn't exist."""
     path = session_path(session_id)
     if not path.exists():
         return False
     path.unlink()
     title_path(session_id).unlink(missing_ok=True)
     permissions_path(session_id).unlink(missing_ok=True)
+    pinned_path(session_id).unlink(missing_ok=True)
     clear_session_project(session_id)
     return True

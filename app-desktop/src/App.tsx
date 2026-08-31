@@ -55,6 +55,7 @@ import {
     GearIcon,
     MoonIcon,
     PencilIcon,
+    PinIcon,
     PlusIcon,
     SearchIcon,
     SidebarIcon,
@@ -82,6 +83,12 @@ const LONG_RESPONSE_MS = 15000;
 // doit rester alignee avec MAX_ATTACHMENT_BYTES cote serveur (server.py) :
 // une image plus grande est rejetee ici avant meme d'etre envoyee.
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+// un fichier texte n'est jamais envoye comme piece jointe binaire (voir
+// PendingTextAttachment plus bas) : son contenu est colle tel quel dans le
+// texte du message a l'envoi, donc dans le contexte du modele - une limite
+// bien plus basse que celle des images/PDF est necessaire.
+const MAX_TEXT_ATTACHMENT_BYTES = 200 * 1024;
+const TEXT_ATTACHMENT_EXTENSIONS = [".txt", ".md", ".markdown", ".csv", ".json", ".log", ".yaml", ".yml"];
 // declenche le mode multi-agent (orchestrator.py) directement depuis le
 // chat normal, plutot qu'un mode/page a part : "/multi-agents <tache>"
 // dans le composer habituel.
@@ -199,10 +206,21 @@ interface PendingAttachment {
   dataUrl: string;
 }
 
+/** Fichier texte (txt/md/csv/json/...) en attente d'envoi : contrairement a
+ * PendingAttachment (image/PDF), jamais transmis en piece jointe binaire au
+ * serveur - son contenu est colle directement dans le texte du message a
+ * l'envoi (voir sendMessage), donc lisible par n'importe quel modele sans
+ * exiger de modalite "vision"/"file". */
+interface PendingTextAttachment {
+  name: string;
+  content: string;
+}
+
 interface Session {
   id: string;
   title: string | null;
   project_id: string | null;
+  pinned: boolean;
 }
 
 interface Project {
@@ -437,26 +455,72 @@ function EditFileDiff({
 }) {
   return (
     <div className="max-h-64 overflow-y-auto rounded-lg font-mono text-xs">
-      {oldString.split("\n").map((line, i) => (
-        <div
-          key={`old-${i}`}
-          className="whitespace-pre bg-error-muted px-2 py-0.5 text-error"
-        >
-          <span className="select-none opacity-60">- </span>
-          {line}
-        </div>
-      ))}
-      {newString.split("\n").map((line, i) => (
-        <div
-          key={`new-${i}`}
-          className="whitespace-pre bg-success-muted px-2 py-0.5 text-success"
-        >
-          <span className="select-none opacity-60">+ </span>
-          {line}
-        </div>
-      ))}
+      {oldString !== "" &&
+        oldString.split("\n").map((line, i) => (
+          <div
+            key={`old-${i}`}
+            className="whitespace-pre bg-error-muted px-2 py-0.5 text-error"
+          >
+            <span className="select-none opacity-60">- </span>
+            {line}
+          </div>
+        ))}
+      {newString !== "" &&
+        newString.split("\n").map((line, i) => (
+          <div
+            key={`new-${i}`}
+            className="whitespace-pre bg-success-muted px-2 py-0.5 text-success"
+          >
+            <span className="select-none opacity-60">+ </span>
+            {line}
+          </div>
+        ))}
     </div>
   );
+}
+
+/** Meme rendu que EditFileDiff (tout l'ancien bloc en rouge, tout le
+ * nouveau en vert), mais pour un write_file : "l'ancien" n'est pas dans
+ * les arguments de l'appel (juste `content`, le nouveau contenu), donc on
+ * va chercher l'etat actuel du fichier via l'endpoint deja utilise par le
+ * visualiseur de fichiers (voir FileViewerPanel.tsx) - un fichier
+ * inexistant (404, nouvelle creation) n'affiche alors que le bloc vert. */
+function WriteFileDiff({
+  projectId,
+  path,
+  newContent,
+}: {
+  projectId: string;
+  path: string;
+  newContent: string;
+}) {
+  const [oldContent, setOldContent] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  // pas de reset synchrone de `loaded` ici (interdit dans un effet - voir
+  // McpSettings.tsx pour le meme garde-fou) : chaque confirmation write_file
+  // est sequentielle (pendingConfirmation repasse par null entre deux),
+  // donc ce composant remonte a chaque fois plutot que de reutiliser son
+  // etat entre deux appels differents.
+  useEffect(() => {
+    fetch(`${API_BASE}/projects/${projectId}/file?path=${encodeURIComponent(path)}`)
+      .then((r) => (r.ok ? r.text() : null))
+      .then((text) => {
+        setOldContent(text);
+      })
+      .catch(() => {
+        setOldContent(null);
+      })
+      .finally(() => {
+        setLoaded(true);
+      });
+  }, [projectId, path]);
+
+  if (!loaded) {
+    return <Spinner size="sm" shade="subtle" aria-label="Chargement du contenu actuel" />;
+  }
+
+  return <EditFileDiff oldString={oldContent ?? ""} newString={newContent} />;
 }
 
 function toolResultDetail(t: ToolMsg): ReactNode {
@@ -521,6 +585,9 @@ function App() {
     { id: string; supports_images: boolean; supports_files: boolean }[]
   >([]);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const [pendingTextAttachments, setPendingTextAttachments] = useState<PendingTextAttachment[]>(
+    [],
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [sessionId, setSessionId] = useState<string | null>(() =>
     localStorage.getItem("triton_session_id"),
@@ -663,6 +730,18 @@ function App() {
       body: JSON.stringify({ title }),
     });
     setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, title } : s)));
+  }
+
+  async function togglePin(session: Session) {
+    const pinned = !session.pinned;
+    // optimiste : la sidebar re-trie immediatement, pas d'attente du
+    // round-trip pour un simple booleen peu risque de rater
+    setSessions((prev) => prev.map((s) => (s.id === session.id ? { ...s, pinned } : s)));
+    await fetch(`${API_BASE}/sessions/${session.id}/pin`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pinned }),
+    });
   }
 
   function startRenameProject(project: Project) {
@@ -834,7 +913,11 @@ function App() {
     loadHistory(id);
   }
 
-  function startNewSession() {
+  // useCallback (plutot qu'une simple fonction, comme switchSession /
+  // startProjectSession) : referencee dans les dependances du raccourci
+  // clavier global cmd/ctrl+N plus bas, qui n'a besoin de se rattacher que
+  // lorsque `sending` change, pas a chaque rendu.
+  const startNewSession = useCallback(() => {
     setView("chat");
     if (sending) return;
     setSessionId(null);
@@ -844,7 +927,7 @@ function App() {
     pendingSubagentIdsRef.current.clear();
     setBackgroundTasks([]);
     setOpenFile(null);
-  }
+  }, [sending]);
 
   function startProjectSession(projectId: string) {
     setView("chat");
@@ -870,9 +953,33 @@ function App() {
     });
   }
 
+  function isTextAttachmentFile(file: File): boolean {
+    if (file.type.startsWith("text/")) return true;
+    const lower = file.name.toLowerCase();
+    return TEXT_ATTACHMENT_EXTENSIONS.some((ext) => lower.endsWith(ext));
+  }
+
   function handleFilesSelected(fileList: FileList | null) {
     if (!fileList) return;
     for (const file of Array.from(fileList)) {
+      if (isTextAttachmentFile(file)) {
+        if (file.size > MAX_TEXT_ATTACHMENT_BYTES) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              kind: "error",
+              text: `« ${file.name} » dépasse la limite de ${MAX_TEXT_ATTACHMENT_BYTES / 1024} Ko pour un fichier texte, ignorée.`,
+              time: Date.now(),
+            },
+          ]);
+          continue;
+        }
+        void file.text().then((content) => {
+          setPendingTextAttachments((prev) => [...prev, { name: file.name, content }]);
+        });
+        continue;
+      }
+
       const isImage = file.type.startsWith("image/");
       const isPdf = file.type === "application/pdf";
       if ((isImage && !supportsImages) || (isPdf && !supportsFiles) || (!isImage && !isPdf)) {
@@ -901,6 +1008,10 @@ function App() {
 
   function removeAttachment(index: number) {
     setPendingAttachments((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function removeTextAttachment(index: number) {
+    setPendingTextAttachments((prev) => prev.filter((_, i) => i !== index));
   }
 
   async function copyToClipboard(text: string, index: number) {
@@ -1007,7 +1118,12 @@ function App() {
 
   async function sendMessage(rawText: string) {
     const text = rawText.trim();
-    if ((!text && pendingAttachments.length === 0) || sending) return;
+    if (
+      (!text && pendingAttachments.length === 0 && pendingTextAttachments.length === 0) ||
+      sending
+    ) {
+      return;
+    }
 
     if (text.toLowerCase().startsWith(MULTI_AGENT_PREFIX)) {
       await dispatchMultiAgent(text);
@@ -1016,17 +1132,30 @@ function App() {
 
     const startTime = performance.now();
     const attachments = pendingAttachments;
+    const textAttachments = pendingTextAttachments;
 
     const sentImages = attachments.filter((a) => !isPdfDataUrl(a.dataUrl)).map((a) => a.dataUrl);
     const sentFiles = attachments.filter((a) => isPdfDataUrl(a.dataUrl));
 
+    // les fichiers texte n'existent pas comme piece jointe pour le serveur
+    // (voir PendingTextAttachment) : leur contenu est colle tel quel dans le
+    // texte du message, avant meme d'etre affiche - donc identique a la
+    // relecture depuis l'historique, pas de reconstruction speciale requise.
+    const outgoingText = [
+      text,
+      ...textAttachments.map((a) => `--- ${a.name} ---\n\`\`\`\n${a.content}\n\`\`\``),
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+
     setInput("");
     setPendingAttachments([]);
+    setPendingTextAttachments([]);
     setMessages((prev) => [
       ...prev,
       {
         kind: "user",
-        text,
+        text: outgoingText,
         time: Date.now(),
         images: sentImages.length ? sentImages : undefined,
         files: sentFiles.length ? sentFiles : undefined,
@@ -1076,7 +1205,7 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           session_id: sessionId,
-          message: text,
+          message: outgoingText,
           project_id: activeProjectId,
           attachments: attachments.map((a) => ({ name: a.name, data_url: a.dataUrl })),
         }),
@@ -1103,7 +1232,7 @@ function App() {
             setSessions((prev) =>
               prev.some((s) => s.id === id)
                 ? prev.map((s) => (s.id === id ? { ...s, title } : s))
-                : [{ id, title, project_id: activeProjectId }, ...prev],
+                : [{ id, title, project_id: activeProjectId, pinned: false }, ...prev],
             );
             break;
           }
@@ -1281,9 +1410,33 @@ function App() {
     };
   }, [sending, cancelMessage]);
 
+  // raccourcis globaux, actifs partout dans l'app (pas seulement pendant une
+  // reponse en cours, contrairement a echap ci-dessus) : cmd/ctrl+K pour la
+  // recherche, cmd/ctrl+N pour une nouvelle conversation.
+  useEffect(() => {
+    function handleGlobalShortcuts(e: KeyboardEvent) {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setView("search");
+      } else if (e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        startNewSession();
+      }
+    }
+    document.addEventListener("keydown", handleGlobalShortcuts);
+    return () => {
+      document.removeEventListener("keydown", handleGlobalShortcuts);
+    };
+  }, [startNewSession]);
+
   // liste des conversations hors projet, telle qu'affichee dans la sidebar
   // (la recherche par titre/contenu est sa propre page - voir SearchPage.tsx)
-  const topLevelSessions = sessions.filter((s) => s.project_id === null);
+  // - epinglees d'abord, tri stable donc l'ordre naturel (le plus recent en
+  // tete, deja garanti par loadSessions) est preserve au sein de chaque groupe.
+  const topLevelSessions = sessions
+    .filter((s) => s.project_id === null)
+    .sort((a, b) => Number(b.pinned) - Number(a.pinned));
 
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
   // affiche un message assistant "vide" avec un loader tant que rien n'est
@@ -1299,17 +1452,25 @@ function App() {
   const currentModelInfo = modelsCatalog.find((m) => m.id === apiModel);
   const supportsImages = currentModelInfo?.supports_images ?? false;
   const supportsFiles = currentModelInfo?.supports_files ?? false;
-  const attachAccept = [supportsImages ? "image/*" : null, supportsFiles ? "application/pdf" : null]
+  // les fichiers texte (accept toujours inclus) sont colles dans le texte
+  // du message plutot qu'envoyes comme piece jointe binaire (voir
+  // PendingTextAttachment) - n'importe quel modele les comprend, donc pas
+  // besoin de verifier supportsImages/supportsFiles pour eux.
+  const attachAccept = [
+    supportsImages ? "image/*" : null,
+    supportsFiles ? "application/pdf" : null,
+    TEXT_ATTACHMENT_EXTENSIONS.join(","),
+  ]
     .filter((x): x is string => x !== null)
     .join(",");
   const attachLabel =
     supportsImages && supportsFiles
-      ? "Joindre une image ou un PDF"
+      ? "Joindre une image, un PDF ou un fichier texte"
       : supportsImages
-        ? "Joindre une image"
+        ? "Joindre une image ou un fichier texte"
         : supportsFiles
-          ? "Joindre un PDF"
-          : "Le modèle actuel ne prend pas de pièces jointes";
+          ? "Joindre un PDF ou un fichier texte"
+          : "Joindre un fichier texte";
 
   const sideNavElement = (
           <SideNav
@@ -1474,6 +1635,7 @@ function App() {
                     {!isCollapsed &&
                       sessions
                         .filter((s) => s.project_id === p.id)
+                        .sort((a, b) => Number(b.pinned) - Number(a.pinned))
                         .map((s) =>
                           editingSessionId === s.id ? (
                             <div key={s.id} className="py-1 pl-4">
@@ -1507,6 +1669,16 @@ function App() {
                               className="pl-4"
                               endContent={
                                 <div className="flex items-center gap-0.5">
+                                  <IconButton
+                                    label={s.pinned ? "Désépingler" : "Épingler"}
+                                    icon={<PinIcon filled={s.pinned} />}
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      void togglePin(s);
+                                    }}
+                                  />
                                   <IconButton
                                     label="Renommer"
                                     icon={<PencilIcon />}
@@ -1577,6 +1749,16 @@ function App() {
                     }}
                     endContent={
                       <div className="flex items-center gap-0.5">
+                        <IconButton
+                          label={s.pinned ? "Désépingler" : "Épingler"}
+                          icon={<PinIcon filled={s.pinned} />}
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void togglePin(s);
+                          }}
+                        />
                         <IconButton
                           label="Renommer"
                           icon={<PencilIcon />}
@@ -1677,8 +1859,11 @@ function App() {
                     { "--_chat-composer-padding": "24px" } as CSSProperties
                   }
                   drawer={
-                    pendingAttachments.length > 0 ? (
-                      <ChatComposerDrawer count={pendingAttachments.length} label="pièce(s) jointe(s)">
+                    pendingAttachments.length > 0 || pendingTextAttachments.length > 0 ? (
+                      <ChatComposerDrawer
+                        count={pendingAttachments.length + pendingTextAttachments.length}
+                        label="pièce(s) jointe(s)"
+                      >
                         <div className="flex flex-wrap gap-2">
                           {pendingAttachments.map((a, i) =>
                             isPdfDataUrl(a.dataUrl) ? (
@@ -1717,6 +1902,25 @@ function App() {
                               </div>
                             ),
                           )}
+                          {pendingTextAttachments.map((a, i) => (
+                            <div
+                              key={`${a.name}-${i}`}
+                              className="relative flex h-16 w-32 items-center gap-1.5 rounded-md border border-border px-2"
+                            >
+                              <FileIcon className="h-4 w-4 shrink-0 text-secondary" />
+                              <Text size="2xs" className="min-w-0 truncate">
+                                {a.name}
+                              </Text>
+                              <IconButton
+                                label="Retirer"
+                                icon={<XIcon className="h-3 w-3" />}
+                                variant="primary"
+                                size="sm"
+                                className="absolute -right-1.5 -top-1.5 h-5 w-5 min-w-0 rounded-full p-0"
+                                onClick={() => { removeTextAttachment(i); }}
+                              />
+                            </div>
+                          ))}
                         </div>
                       </ChatComposerDrawer>
                     ) : undefined
@@ -1927,11 +2131,29 @@ function App() {
                 )}
 
                 {pendingConfirmation && (
-                  <div className="mx-auto flex max-w-md flex-col items-center gap-3 rounded-lg border border-warning bg-warning-muted px-4 py-3">
+                  <div className="mx-auto flex max-w-2xl flex-col items-center gap-3 rounded-lg border border-warning bg-warning-muted px-4 py-3">
                     <Text weight="medium" className="text-center">
                       autoriser {pendingConfirmation.tool}(
                       {formatArgs(pendingConfirmation.args)}) ?
                     </Text>
+                    {pendingConfirmation.tool === "edit_file" &&
+                      typeof pendingConfirmation.args.old_string === "string" &&
+                      typeof pendingConfirmation.args.new_string === "string" && (
+                        <EditFileDiff
+                          oldString={pendingConfirmation.args.old_string}
+                          newString={pendingConfirmation.args.new_string}
+                        />
+                      )}
+                    {pendingConfirmation.tool === "write_file" &&
+                      activeProject &&
+                      typeof pendingConfirmation.args.path === "string" &&
+                      typeof pendingConfirmation.args.content === "string" && (
+                        <WriteFileDiff
+                          projectId={activeProject.id}
+                          path={pendingConfirmation.args.path}
+                          newContent={pendingConfirmation.args.content}
+                        />
+                      )}
                     <div className="flex flex-wrap justify-center gap-2">
                       <Button
                         label="autoriser"

@@ -333,6 +333,22 @@ export function DownloadIcon({ className = base }: IconProps) {
   );
 }
 
+/** Punaise pour epingler/desepingler une conversation - `filled` distingue
+ * l'etat epingle (rempli) du bouton d'action non epingle (juste le contour). */
+export function PinIcon({ className = base, filled = false }: IconProps & { filled?: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <path
+        d="M9 4h6l-.75 6.5L18 14v2h-5.25V21l-.75 1-.75-1v-5H6v-2l3.75-3.5L9 4Z"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinejoin="round"
+        fill={filled ? "currentColor" : "none"}
+      />
+    </svg>
+  );
+}
+
 // icones "type de fichier" (badge colore, style IDE) plutot que le FileIcon
 // generique au contour simple - voir fileTypeIcon() dans ProjectFilePanel.tsx
 // pour le mapping extension -> icone.

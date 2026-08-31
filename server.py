@@ -41,6 +41,7 @@ from triton.storage.sessions import (
     allow_always,
     clear_session_project,
     delete_session,
+    is_pinned,
     load_always_allowed,
     load_session,
     load_session_project,
@@ -49,6 +50,7 @@ from triton.storage.sessions import (
     save_session,
     save_session_project,
     save_title,
+    set_pinned,
 )
 from triton.storage.settings import (
     load_monthly_budget,
@@ -661,7 +663,7 @@ def cancel_chat(body: CancelRequest) -> dict[str, bool]:
 
 
 @app.get("/sessions")
-def list_sessions() -> list[dict[str, str | None]]:
+def list_sessions() -> list[dict[str, str | bool | None]]:
     if not SESSIONS_DIR.exists():
         return []
     ids = sorted(p.stem for p in SESSIONS_DIR.glob("*.json"))
@@ -670,9 +672,23 @@ def list_sessions() -> list[dict[str, str | None]]:
             "id": session_id,
             "title": load_title(session_id),
             "project_id": load_session_project(session_id),
+            "pinned": is_pinned(session_id),
         }
         for session_id in ids
     ]
+
+
+class PinRequest(BaseModel):
+    pinned: bool
+
+
+@app.put("/sessions/{session_id}/pin")
+def pin_session(session_id: str, body: PinRequest) -> dict[str, bool]:
+    path = SESSIONS_DIR / f"{session_id}.json"
+    if not path.exists():
+        raise HTTPException(404, "session not found")
+    set_pinned(session_id, body.pinned)
+    return {"ok": True}
 
 
 @app.get("/sessions/search")
