@@ -1,9 +1,12 @@
-import { useEffect, useState } from "react";
 import { IconButton } from "@astryxdesign/core/IconButton";
 import { Markdown } from "@astryxdesign/core/Markdown";
-import { SegmentedControl, SegmentedControlItem } from "@astryxdesign/core/SegmentedControl";
+import {
+  SegmentedControl,
+  SegmentedControlItem,
+} from "@astryxdesign/core/SegmentedControl";
 import { Spinner } from "@astryxdesign/core/Spinner";
 import { Text } from "@astryxdesign/core/Text";
+import { useEffect, useState } from "react";
 import { fileKind, type OpenFile } from "./fileViewer";
 import { HtmlFileIcon, MarkdownFileIcon, PdfFileIcon, XIcon } from "./icons";
 
@@ -41,7 +44,9 @@ export function FileViewerPanel({ file, onClose }: FileViewerPanelProps) {
     if (kind === "pdf") return;
 
     fetch(fileUrl)
-      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
+      .then((r) =>
+        r.ok ? r.text() : Promise.reject(new Error(String(r.status))),
+      )
       .then((text) => {
         setContent(text);
       })
@@ -68,7 +73,7 @@ export function FileViewerPanel({ file, onClose }: FileViewerPanelProps) {
     );
 
   return (
-    <div className="flex h-full w-[28rem] shrink-0 flex-col border-l border-border">
+    <div className="flex h-full w-[46rem] shrink-0 flex-col border-l border-border">
       <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
         <div className="flex min-w-0 items-center gap-2">
           {icon}
@@ -90,13 +95,23 @@ export function FileViewerPanel({ file, onClose }: FileViewerPanelProps) {
               <SegmentedControlItem label="Code" value="code" />
             </SegmentedControl>
           )}
-          <IconButton label="Fermer" icon={<XIcon />} variant="ghost" size="sm" onClick={onClose} />
+          <IconButton
+            label="Fermer"
+            icon={<XIcon />}
+            variant="ghost"
+            size="sm"
+            onClick={onClose}
+          />
         </div>
       </div>
 
       <div className="min-h-0 flex-1">
         {kind === "pdf" && (
-          <embed src={fileUrl} type="application/pdf" className="h-full w-full" />
+          <embed
+            src={fileUrl}
+            type="application/pdf"
+            className="h-full w-full"
+          />
         )}
 
         {kind !== "pdf" && loading && (
