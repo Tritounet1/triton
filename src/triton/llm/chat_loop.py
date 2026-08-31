@@ -102,11 +102,19 @@ def timed_call_chat(
 def timed_stream_chat(
     messages: list[ChatCompletionMessageParam],
     tools: list[ChatCompletionToolParam] | None = None,
+    model: str | None = None,
+    session_id: str | None = None,
 ) -> Iterator[str | ChatResult]:
     """Streaming version of timed_call_chat: relays text chunks as they
-    arrive, and logs the call once the final ChatResult is received."""
+    arrive, and logs the call once the final ChatResult is received.
+    `model` overrides the currently selected model for this call only
+    (see stream_chat). `session_id`, logged alongside every other field
+    here, is what the /cost command's GET /sessions/{id}/cost endpoint
+    filters model_call events by - omit it (as every caller except
+    server.py's run_chat_stream does) and this call is simply left out of
+    any per-conversation cost total."""
     start = time.perf_counter()
-    for event in stream_chat(messages, tools=tools):
+    for event in stream_chat(messages, tools=tools, model=model):
         if isinstance(event, str):
             yield event
             continue
@@ -114,6 +122,7 @@ def timed_stream_chat(
         duration = time.perf_counter() - start
         log_event(
             type="model_call",
+            session_id=session_id,
             model=event.model,
             prompt_tokens=event.prompt_tokens,
             completion_tokens=event.completion_tokens,

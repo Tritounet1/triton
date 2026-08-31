@@ -94,16 +94,39 @@ const TEXT_ATTACHMENT_EXTENSIONS = [".txt", ".md", ".markdown", ".csv", ".json",
 // dans le composer habituel.
 const MULTI_AGENT_PREFIX = "/multi-agents ";
 const MULTI_AGENT_POLL_INTERVAL_MS = 1500;
+const MODEL_COMMAND_PREFIX = "/model ";
+const COST_COMMAND = "/cost";
+const UNDO_COMMAND = "/undo";
 
 // menu declenche par "/" dans le composer (style Notion/Discord), via le
-// mecanisme de trigger deja fourni par ChatComposerInput - une seule
-// commande pour l'instant, mais fait pour en accueillir d'autres.
+// mecanisme de trigger deja fourni par ChatComposerInput.
 const SLASH_COMMANDS: SearchableItem<{ description: string }>[] = [
   {
     id: "multi-agents",
     label: "multi-agents",
     auxiliaryData: {
       description: "Répartit la tâche entre plusieurs agents spécialisés (recherche, code, rédaction...)",
+    },
+  },
+  {
+    id: "model",
+    label: "model",
+    auxiliaryData: {
+      description: "Change le modèle de cette conversation (ex. /model gpt-5)",
+    },
+  },
+  {
+    id: "cost",
+    label: "cost",
+    auxiliaryData: {
+      description: "Affiche le coût et les tokens utilisés dans cette conversation",
+    },
+  },
+  {
+    id: "undo",
+    label: "undo",
+    auxiliaryData: {
+      description: "Restaure le dossier du projet à l'état d'avant cette session (filet de sécurité)",
     },
   },
 ];
@@ -577,12 +600,17 @@ function App() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [apiModel, setApiModel] = useState<string | null>(null);
+  // modele propre a la conversation en cours, mis via la commande /model
+  // (PUT /sessions/{id}/model) - prend le pas sur apiModel (le defaut
+  // global) tant qu'il est defini. null = pas de surcharge, la conversation
+  // suit le modele global comme avant l'existence de cette commande.
+  const [sessionModelOverride, setSessionModelOverride] = useState<string | null>(null);
   // catalogue OpenRouter (id + capacites), recupere une fois au demarrage,
   // pour savoir si le modele actuel accepte des images et/ou des PDF
   // (active/desactive et filtre le bouton "joindre" du composer) sans
   // dupliquer cette logique cote serveur.
   const [modelsCatalog, setModelsCatalog] = useState<
-    { id: string; supports_images: boolean; supports_files: boolean }[]
+    { id: string; name: string; supports_images: boolean; supports_files: boolean }[]
   >([]);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [pendingTextAttachments, setPendingTextAttachments] = useState<PendingTextAttachment[]>(
@@ -603,6 +631,11 @@ function App() {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [showProjectForm, setShowProjectForm] = useState(false);
   const [deletingProject, setDeletingProject] = useState<Project | null>(null);
+  // confirmation pour la commande /undo (voir handleUndoCommand) - meme
+  // AlertDialog que les suppressions ci-dessus, action destructrice donc
+  // pas de raccourci sans confirmation meme depuis le composer.
+  const [undoConfirmOpen, setUndoConfirmOpen] = useState(false);
+  const [undoing, setUndoing] = useState(false);
   const [collapsedProjectIds, setCollapsedProjectIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -796,9 +829,13 @@ function App() {
 
     fetch(`${API_BASE}/openrouter/models`)
       .then((r) => (r.ok ? r.json() : []))
-      .then((data: { id: string; supports_images: boolean; supports_files: boolean }[]) => {
-        setModelsCatalog(data);
-      })
+      .then(
+        (
+          data: { id: string; name: string; supports_images: boolean; supports_files: boolean }[],
+        ) => {
+          setModelsCatalog(data);
+        },
+      )
       .catch(() => {
         // API OpenRouter injoignable : le bouton "joindre" reste desactive
       });
@@ -881,6 +918,26 @@ function App() {
     };
   }, [sessionId]);
 
+  // surcharge de modele de la conversation en cours (voir /model) : pas de
+  // reset synchrone a null ici (interdit dans un effet - voir
+  // McpSettings.tsx pour le meme garde-fou), donc au changement de
+  // sessionId un ancien override peut brievement rester affiche le temps
+  // que la requete reponde - meme compromis deja accepte par
+  // SnapshotSection.tsx. Le reset explicite a lieu dans switchSession/
+  // startNewSession/startProjectSession (des gestionnaires d'evenements,
+  // pas un effet, donc un setState synchrone y est sans probleme).
+  useEffect(() => {
+    if (!sessionId) return;
+    fetch(`${API_BASE}/sessions/${sessionId}/model`)
+      .then((r) => (r.ok ? r.json() : { model: null }))
+      .then((data: { model: string | null }) => {
+        setSessionModelOverride(data.model);
+      })
+      .catch(() => {
+        setSessionModelOverride(null);
+      });
+  }, [sessionId]);
+
   function openTask(id: string) {
     setActiveTaskId(id);
     setView("task");
@@ -910,6 +967,7 @@ function App() {
     pendingSubagentIdsRef.current.clear();
     setBackgroundTasks([]);
     setOpenFile(null);
+    setSessionModelOverride(null);
     loadHistory(id);
   }
 
@@ -927,6 +985,7 @@ function App() {
     pendingSubagentIdsRef.current.clear();
     setBackgroundTasks([]);
     setOpenFile(null);
+    setSessionModelOverride(null);
   }, [sending]);
 
   function startProjectSession(projectId: string) {
@@ -939,6 +998,7 @@ function App() {
     pendingSubagentIdsRef.current.clear();
     setBackgroundTasks([]);
     setOpenFile(null);
+    setSessionModelOverride(null);
   }
 
   function toggleProjectCollapsed(projectId: string) {
@@ -1116,6 +1176,181 @@ function App() {
     }
   }
 
+  /** /cost : resume rapide du cout/tokens de la conversation en cours,
+   * purement local - pas de round-trip par le modele, juste un GET sur
+   * l'endpoint que timed_stream_chat alimente a chaque tour (voir
+   * chat_loop.py). */
+  async function handleCostCommand() {
+    setInput("");
+    setMessages((prev) => [...prev, { kind: "user", text: COST_COMMAND, time: Date.now() }]);
+
+    if (!sessionId) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          kind: "error",
+          text: "Aucune conversation active pour l'instant - envoie d'abord un message.",
+          time: Date.now(),
+        },
+      ]);
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/sessions/${sessionId}/cost`);
+      if (!res.ok) throw new Error(String(res.status));
+      const data = (await res.json()) as {
+        calls: number;
+        prompt_tokens: number;
+        completion_tokens: number;
+        total_tokens: number;
+        cost_usd: number;
+      };
+      const fmt = (n: number) => n.toLocaleString("fr-FR");
+      setMessages((prev) => [
+        ...prev,
+        {
+          kind: "info",
+          text:
+            `${data.calls} appel(s) modèle · ${fmt(data.total_tokens)} tokens ` +
+            `(${fmt(data.prompt_tokens)} entrée / ${fmt(data.completion_tokens)} sortie) · ` +
+            `~$${data.cost_usd.toFixed(4)}`,
+          time: Date.now(),
+        },
+      ]);
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        {
+          kind: "error",
+          text: "impossible de récupérer le coût de cette conversation.",
+          time: Date.now(),
+        },
+      ]);
+    }
+  }
+
+  /** /model <requete> : cherche dans le catalogue OpenRouter deja charge
+   * (modelsCatalog) un modele dont l'id ou le nom contient la requete, et
+   * en fait la surcharge de CETTE conversation (PUT /sessions/{id}/model) -
+   * pas besoin de taper l'id exact ("gpt-5" suffit a trouver
+   * "openai/gpt-5"). */
+  async function handleModelCommand(rawCommand: string) {
+    const query = rawCommand.slice(MODEL_COMMAND_PREFIX.length).trim();
+    setInput("");
+    setMessages((prev) => [...prev, { kind: "user", text: rawCommand, time: Date.now() }]);
+
+    if (!sessionId) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          kind: "error",
+          text: "Aucune conversation active pour l'instant - envoie d'abord un message.",
+          time: Date.now(),
+        },
+      ]);
+      return;
+    }
+    if (!query) {
+      setMessages((prev) => [
+        ...prev,
+        { kind: "error", text: "Précise un modèle, ex. /model gpt-5", time: Date.now() },
+      ]);
+      return;
+    }
+
+    const q = query.toLowerCase();
+    const matches = modelsCatalog.filter(
+      (m) => m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q),
+    );
+    if (matches.length === 0) {
+      setMessages((prev) => [
+        ...prev,
+        { kind: "error", text: `Aucun modèle ne correspond à « ${query} ».`, time: Date.now() },
+      ]);
+      return;
+    }
+
+    const chosen = matches[0];
+    if (!chosen) return;
+    await fetch(`${API_BASE}/sessions/${sessionId}/model`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: chosen.id }),
+    });
+    setSessionModelOverride(chosen.id);
+    const note =
+      matches.length > 1 ? ` (${matches.length} correspondances, la plus proche a été prise)` : "";
+    setMessages((prev) => [
+      ...prev,
+      {
+        kind: "info",
+        text: `Modèle de cette conversation changé pour ${chosen.name}${note}.`,
+        time: Date.now(),
+      },
+    ]);
+  }
+
+  /** /undo : declenche la restauration du filet de securite (voir
+   * SnapshotSection.tsx pour le meme mecanisme via le panneau fichiers) -
+   * verifie d'abord qu'un instantane existe pour ne pas ouvrir une
+   * confirmation pour rien, puis demande confirmation avant de restaurer
+   * (action irreversible, meme depuis une commande). */
+  async function handleUndoCommand() {
+    setInput("");
+    setMessages((prev) => [...prev, { kind: "user", text: UNDO_COMMAND, time: Date.now() }]);
+
+    if (!sessionId) {
+      setMessages((prev) => [
+        ...prev,
+        { kind: "error", text: "Aucune conversation active pour l'instant.", time: Date.now() },
+      ]);
+      return;
+    }
+
+    const res = await fetch(`${API_BASE}/sessions/${sessionId}/snapshot`);
+    if (!res.ok) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          kind: "info",
+          text: "Aucun filet de sécurité pour cette conversation : aucune écriture n'a encore eu lieu.",
+          time: Date.now(),
+        },
+      ]);
+      return;
+    }
+    setUndoConfirmOpen(true);
+  }
+
+  async function confirmUndo() {
+    if (!sessionId) return;
+    setUndoing(true);
+    try {
+      const res = await fetch(`${API_BASE}/sessions/${sessionId}/snapshot/restore`, {
+        method: "POST",
+      });
+      setMessages((prev) => [
+        ...prev,
+        res.ok
+          ? {
+              kind: "info",
+              text: "Filet de sécurité restauré : le dossier du projet est revenu à l'état d'avant cette session.",
+              time: Date.now(),
+            }
+          : {
+              kind: "error",
+              text: "La restauration a échoué.",
+              time: Date.now(),
+            },
+      ]);
+      setFileRefreshTick((t) => t + 1);
+    } finally {
+      setUndoing(false);
+      setUndoConfirmOpen(false);
+    }
+  }
+
   async function sendMessage(rawText: string) {
     const text = rawText.trim();
     if (
@@ -1127,6 +1362,18 @@ function App() {
 
     if (text.toLowerCase().startsWith(MULTI_AGENT_PREFIX)) {
       await dispatchMultiAgent(text);
+      return;
+    }
+    if (text === COST_COMMAND) {
+      await handleCostCommand();
+      return;
+    }
+    if (text.toLowerCase().startsWith(MODEL_COMMAND_PREFIX)) {
+      await handleModelCommand(text);
+      return;
+    }
+    if (text === UNDO_COMMAND) {
+      await handleUndoCommand();
       return;
     }
 
@@ -1449,7 +1696,11 @@ function App() {
     !pendingConfirmation &&
     lastMessage?.kind !== "assistant" &&
     lastMessage?.kind !== "tool";
-  const currentModelInfo = modelsCatalog.find((m) => m.id === apiModel);
+  // le modele de CETTE conversation, une fois la surcharge /model prise en
+  // compte - c'est celui-ci qui doit determiner l'affichage (badge, avatar,
+  // capacites de piece jointe), pas le defaut global apiModel seul.
+  const effectiveModel = sessionModelOverride ?? apiModel;
+  const currentModelInfo = modelsCatalog.find((m) => m.id === effectiveModel);
   const supportsImages = currentModelInfo?.supports_images ?? false;
   const supportsFiles = currentModelInfo?.supports_files ?? false;
   // les fichiers texte (accept toujours inclus) sont colles dans le texte
@@ -1949,7 +2200,7 @@ function App() {
                     </>
                   }
                   sendActions={
-                    apiModel ? <Badge variant="neutral" label={apiModel} /> : undefined
+                    effectiveModel ? <Badge variant="neutral" label={effectiveModel} /> : undefined
                   }
                 />
               }
@@ -2117,8 +2368,8 @@ function App() {
                     className="animate-fade-in"
                     avatar={
                       <Avatar
-                        name={modelAvatar(apiModel).name}
-                        src={modelAvatar(apiModel).logo}
+                        name={modelAvatar(effectiveModel).name}
+                        src={modelAvatar(effectiveModel).logo}
                         size="sm"
                       />
                     }
@@ -2244,6 +2495,20 @@ function App() {
         description={`« ${deletingProject?.name ?? ""} » sera supprimé. Ses conversations ne seront pas effacées, mais ne seront plus rattachées au dossier.`}
         actionLabel="Supprimer"
         onAction={confirmDeleteProject}
+      />
+
+      <AlertDialog
+        isOpen={undoConfirmOpen}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) setUndoConfirmOpen(false);
+        }}
+        title="Restaurer l'état d'avant cette session ?"
+        description="Annule tous les fichiers créés, modifiés ou supprimés par cette conversation dans le dossier du projet, en revenant à l'état capturé juste avant sa première écriture. Cette action est irréversible."
+        actionLabel="Restaurer"
+        isActionLoading={undoing}
+        onAction={() => {
+          void confirmUndo();
+        }}
       />
 
       <SettingsModal

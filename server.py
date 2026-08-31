@@ -44,10 +44,12 @@ from triton.storage.sessions import (
     is_pinned,
     load_always_allowed,
     load_session,
+    load_session_model,
     load_session_project,
     load_title,
     new_session_path,
     save_session,
+    save_session_model,
     save_session_project,
     save_title,
     set_pinned,
@@ -255,6 +257,7 @@ def run_chat_stream(
 
     project_id = load_session_project(session_id)
     project = get_project(project_id) if project_id else None
+    session_model = load_session_model(session_id)
 
     if first_message is not None:
         title = generate_conversation_title(first_message)
@@ -278,7 +281,9 @@ def run_chat_stream(
         content_parts: list[str] = []
         reply: ChatResult | None = None
 
-        for event in timed_stream_chat(messages, tools=TOOLS):
+        for event in timed_stream_chat(
+            messages, tools=TOOLS, model=session_model, session_id=session_id
+        ):
             if isinstance(event, str):
                 content_parts.append(event)
                 yield sse("token", {"text": event})
@@ -689,6 +694,63 @@ def pin_session(session_id: str, body: PinRequest) -> dict[str, bool]:
         raise HTTPException(404, "session not found")
     set_pinned(session_id, body.pinned)
     return {"ok": True}
+
+
+class ModelRequest(BaseModel):
+    model: str
+
+
+@app.get("/sessions/{session_id}/model")
+def get_session_model(session_id: str) -> dict[str, str | None]:
+    """The /model command's override for this conversation, if any (see
+    load_session_model) - None means it's using the global default
+    (GET /settings/model), like every conversation before this existed."""
+    return {"model": load_session_model(session_id)}
+
+
+@app.put("/sessions/{session_id}/model")
+def set_session_model(session_id: str, body: ModelRequest) -> dict[str, str]:
+    path = SESSIONS_DIR / f"{session_id}.json"
+    if not path.exists():
+        raise HTTPException(404, "session not found")
+    save_session_model(session_id, body.model)
+    return {"model": body.model}
+
+
+class SessionCost(BaseModel):
+    calls: int
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    cost_usd: float
+
+
+@app.get("/sessions/{session_id}/cost")
+def get_session_cost(session_id: str) -> SessionCost:
+    """Sums every model_call log event tagged with this session_id (see
+    timed_stream_chat) - the /cost command's data source. A conversation
+    that only ever ran before this field existed sums to zero, not an
+    error: there's nothing to attribute those older calls to."""
+    calls = prompt_tokens = completion_tokens = 0
+    cost_usd = 0.0
+    if LOGS_FILE.exists():
+        for line in LOGS_FILE.read_text().splitlines():
+            if not line.strip():
+                continue
+            event = json.loads(line)
+            if event.get("type") != "model_call" or event.get("session_id") != session_id:
+                continue
+            calls += 1
+            prompt_tokens += event.get("prompt_tokens") or 0
+            completion_tokens += event.get("completion_tokens") or 0
+            cost_usd += event.get("cost_usd") or 0
+    return SessionCost(
+        calls=calls,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        cost_usd=round(cost_usd, 6),
+    )
 
 
 @app.get("/sessions/search")

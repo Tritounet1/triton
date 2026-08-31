@@ -71,6 +71,31 @@ def test_truncated_response_reports_length_with_no_content(monkeypatch):
     assert result.finish_reason == "length"
 
 
+def test_explicit_model_overrides_get_model(monkeypatch):
+    """Used by server.py for a conversation with a per-session override
+    set via the /model command - get_model() (the global default) must
+    not be consulted at all when an explicit model is passed."""
+    monkeypatch.setattr(
+        api, "get_model", lambda: (_ for _ in ()).throw(AssertionError("should not be called"))
+    )
+    captured_kwargs = {}
+
+    def fake_create(**kwargs):
+        captured_kwargs.update(kwargs)
+        return iter([_chunk(finish_reason="stop", usage=_usage(1, 1, 2))])
+
+    monkeypatch.setattr(
+        api,
+        "_client",
+        lambda: SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))
+        ),
+    )
+
+    list(api.stream_chat([{"role": "user", "content": "hi"}], model="override/model"))
+    assert captured_kwargs["model"] == "override/model"
+
+
 def test_tool_call_deltas_are_reassembled_across_chunks(monkeypatch):
     monkeypatch.setattr(api, "get_model", lambda: "test-model")
     first_delta = SimpleNamespace(

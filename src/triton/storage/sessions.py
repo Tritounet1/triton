@@ -118,13 +118,34 @@ def set_pinned(session_id: str, pinned: bool) -> None:
         pinned_path(session_id).unlink(missing_ok=True)
 
 
+def model_path(session_id: str) -> Path:
+    return SESSIONS_DIR / f"{session_id}.model.txt"
+
+
+def load_session_model(session_id: str) -> str | None:
+    """Model override for THIS conversation only (set via the /model
+    command - see server.py's PUT /sessions/{id}/model), taking priority
+    over the global default (settings.json) for every turn in this
+    session. Stored separately from the history, like the title/project:
+    a conversation with no override has no such file."""
+    path = model_path(session_id)
+    if not path.exists():
+        return None
+    return path.read_text().strip() or None
+
+
+def save_session_model(session_id: str, model: str) -> None:
+    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    model_path(session_id).write_text(model.strip())
+
+
 def session_path(session_id: str) -> Path:
     return SESSIONS_DIR / f"{session_id}.json"
 
 
 def delete_session(session_id: str) -> bool:
     """Deletes a conversation (history + title + permissions + project
-    link + pin). Returns False if it didn't exist."""
+    link + pin + model override). Returns False if it didn't exist."""
     path = session_path(session_id)
     if not path.exists():
         return False
@@ -132,5 +153,6 @@ def delete_session(session_id: str) -> bool:
     title_path(session_id).unlink(missing_ok=True)
     permissions_path(session_id).unlink(missing_ok=True)
     pinned_path(session_id).unlink(missing_ok=True)
+    model_path(session_id).unlink(missing_ok=True)
     clear_session_project(session_id)
     return True

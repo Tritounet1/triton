@@ -12,6 +12,18 @@ from triton.llm import chat_loop
 from triton.llm.api import ChatResult
 
 
+def _result(**overrides) -> ChatResult:
+    defaults = {
+        "content": "hi",
+        "tool_calls": [],
+        "model": "test-model",
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "total_tokens": 15,
+    }
+    return ChatResult(**{**defaults, **overrides})
+
+
 def _user(text: str) -> ChatCompletionMessageParam:
     return cast(ChatCompletionMessageParam, {"role": "user", "content": text})
 
@@ -146,3 +158,45 @@ def test_summarize_redacts_attachments_instead_of_resending_them(monkeypatch):
     assert huge_base64_payload not in transcript
     assert "cv.pdf" in transcript
     assert "here's my CV" in transcript
+
+
+def test_timed_stream_chat_forwards_model_and_logs_session_id(monkeypatch):
+    """Both new to timed_stream_chat for the /model and /cost commands:
+    `model` must reach stream_chat (the per-session override), and
+    `session_id` must reach the logged event (what GET
+    /sessions/{id}/cost later filters model_call events by)."""
+    captured_stream_kwargs = {}
+
+    def fake_stream_chat(messages, tools=None, model=None):
+        captured_stream_kwargs["model"] = model
+        yield _result(model=model or "default-model")
+
+    captured_events = []
+    monkeypatch.setattr(chat_loop, "stream_chat", fake_stream_chat)
+    monkeypatch.setattr(chat_loop, "log_event", lambda **kwargs: captured_events.append(kwargs))
+
+    list(
+        chat_loop.timed_stream_chat([_user("hi")], model="override/model", session_id="session-123")
+    )
+
+    assert captured_stream_kwargs["model"] == "override/model"
+    assert len(captured_events) == 1
+    assert captured_events[0]["session_id"] == "session-123"
+    assert captured_events[0]["model"] == "override/model"
+
+
+def test_timed_stream_chat_defaults_model_and_session_id_to_none(monkeypatch):
+    captured_stream_kwargs = {}
+
+    def fake_stream_chat(messages, tools=None, model=None):
+        captured_stream_kwargs["model"] = model
+        yield _result()
+
+    captured_events = []
+    monkeypatch.setattr(chat_loop, "stream_chat", fake_stream_chat)
+    monkeypatch.setattr(chat_loop, "log_event", lambda **kwargs: captured_events.append(kwargs))
+
+    list(chat_loop.timed_stream_chat([_user("hi")]))
+
+    assert captured_stream_kwargs["model"] is None
+    assert captured_events[0]["session_id"] is None

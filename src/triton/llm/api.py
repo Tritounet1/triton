@@ -125,12 +125,16 @@ def call_chat(
 def stream_chat(
     messages: list[ChatCompletionMessageParam],
     tools: list[ChatCompletionToolParam] | None = None,
+    model: str | None = None,
 ) -> Iterator[str | ChatResult]:
     """Calls the model with streaming: yields each chunk of text as it
     arrives, then the full ChatResult once the response is complete (tool
     calls are never streamed chunk by chunk, just reconstructed silently,
-    there's no point displaying them partially)."""
-    model = get_model()
+    there's no point displaying them partially). `model` overrides the
+    currently selected model for this call only - same convention as
+    call_chat, used by server.py for a conversation with a per-session
+    override set via the /model command."""
+    model = model or get_model()
     if tools:
         stream = _client().chat.completions.create(
             model=model,
