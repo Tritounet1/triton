@@ -65,6 +65,8 @@ import {
 import { modelAvatar } from "./modelFamilies";
 import { NewProjectModal } from "./NewProjectModal";
 import { notifyIfBackground } from "./notifications";
+import { type OpenFile } from "./fileViewer";
+import { FileViewerPanel } from "./FileViewerPanel";
 import { ProjectFilePanel } from "./ProjectFilePanel";
 import { SearchPage } from "./SearchPage";
 import { SettingsModal } from "./SettingsModal";
@@ -538,6 +540,10 @@ function App() {
     () => new Set(),
   );
   const [fileRefreshTick, setFileRefreshTick] = useState(0);
+  // fichier ouvert dans le visualiseur (PDF/HTML/Markdown) : remplace
+  // ProjectFilePanel dans le meme emplacement tant qu'il est ouvert (voir
+  // FileViewerPanel.tsx).
+  const [openFile, setOpenFile] = useState<OpenFile | null>(null);
   // sidebar repliable a la Claude desktop : repliee, elle disparait
   // entierement (pas un simple rail d'icones) ; passer la souris sur le
   // bord gauche la montre en survol temporaire (sidebarPeeking), il faut
@@ -824,6 +830,7 @@ function App() {
     setActiveProjectId(sessions.find((s) => s.id === id)?.project_id ?? null);
     pendingSubagentIdsRef.current.clear();
     setBackgroundTasks([]);
+    setOpenFile(null);
     loadHistory(id);
   }
 
@@ -836,6 +843,7 @@ function App() {
     setActiveProjectId(null);
     pendingSubagentIdsRef.current.clear();
     setBackgroundTasks([]);
+    setOpenFile(null);
   }
 
   function startProjectSession(projectId: string) {
@@ -847,6 +855,7 @@ function App() {
     setActiveProjectId(projectId);
     pendingSubagentIdsRef.current.clear();
     setBackgroundTasks([]);
+    setOpenFile(null);
   }
 
   function toggleProjectCollapsed(projectId: string) {
@@ -1959,7 +1968,15 @@ function App() {
                 )}
               </ChatMessageList>
             </ChatLayout>
-            {activeProject ? (
+            {activeProject && openFile ? (
+              <FileViewerPanel
+                key={`${openFile.projectId}:${openFile.path}`}
+                file={openFile}
+                onClose={() => {
+                  setOpenFile(null);
+                }}
+              />
+            ) : activeProject ? (
               <ProjectFilePanel
                 projectId={activeProject.id}
                 projectName={activeProject.name}
@@ -1969,6 +1986,7 @@ function App() {
                 onOpenTask={openTask}
                 onStopTask={stopTask}
                 onDeleteTask={deleteTask}
+                onOpenFile={setOpenFile}
               />
             ) : (
               <BackgroundTasksPanel

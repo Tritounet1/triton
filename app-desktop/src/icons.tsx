@@ -332,3 +332,55 @@ export function DownloadIcon({ className = base }: IconProps) {
     </svg>
   );
 }
+
+// icones "type de fichier" (badge colore, style IDE) plutot que le FileIcon
+// generique au contour simple - voir fileTypeIcon() dans ProjectFilePanel.tsx
+// pour le mapping extension -> icone.
+function FileTypeBadge({
+  className = base,
+  color,
+  label,
+}: IconProps & { color: string; label: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <path
+        d="M6 3h8l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z"
+        fill={color}
+        fillOpacity="0.18"
+        stroke={color}
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M14 3v5h5"
+        fill="none"
+        stroke={color}
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+      <text
+        x="12"
+        y="17.5"
+        textAnchor="middle"
+        fontSize="6.5"
+        fontWeight="700"
+        fill={color}
+        fontFamily="system-ui, sans-serif"
+      >
+        {label}
+      </text>
+    </svg>
+  );
+}
+
+export function PdfFileIcon({ className = base }: IconProps) {
+  return <FileTypeBadge className={className} color="#e5484d" label="PDF" />;
+}
+
+export function HtmlFileIcon({ className = base }: IconProps) {
+  return <FileTypeBadge className={className} color="#f76b15" label="</>" />;
+}
+
+export function MarkdownFileIcon({ className = base }: IconProps) {
+  return <FileTypeBadge className={className} color="#5b8def" label="MD" />;
+}

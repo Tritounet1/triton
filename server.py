@@ -12,7 +12,7 @@ from typing import TypedDict, cast
 import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
@@ -928,6 +928,28 @@ def get_project_tree(project_id: str) -> dict[str, object]:
     budget = [MAX_TREE_ENTRIES]
     tree = _build_tree(root, budget)
     return {"tree": tree, "truncated": budget[0] <= 0}
+
+
+@app.get("/projects/{project_id}/file")
+def get_project_file(project_id: str, path: str) -> FileResponse:
+    """Serves one file's raw bytes for the desktop app's in-app viewer
+    (PDF/HTML/Markdown preview - see ProjectFilePanel.tsx/FileViewerPanel.tsx),
+    as an alternative to opening it with the OS's default app. `path` must
+    resolve inside the project's folder - the same containment check
+    enforce_project_sandbox uses for tool calls, applied here by hand since
+    this endpoint takes a single free-form path, not a tool call's args."""
+    project = get_project(project_id)
+    if project is None:
+        raise HTTPException(404, "project not found")
+
+    root = Path(project.folder_path).resolve()
+    target = Path(path).resolve()
+    if not target.is_relative_to(root):
+        raise HTTPException(403, "path resolves outside the project folder")
+    if not target.is_file():
+        raise HTTPException(404, "file not found")
+
+    return FileResponse(target)
 
 
 @app.get("/subagents")

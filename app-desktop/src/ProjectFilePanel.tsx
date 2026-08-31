@@ -5,7 +5,15 @@ import { Text } from "@astryxdesign/core/Text";
 import { IconButton } from "@astryxdesign/core/IconButton";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { BackgroundTasksSection, type BackgroundTask } from "./BackgroundTasksSection";
-import { FileIcon, FolderIcon, RefreshIcon } from "./icons";
+import { isViewableFile, type OpenFile } from "./fileViewer";
+import {
+  FileIcon,
+  FolderIcon,
+  HtmlFileIcon,
+  MarkdownFileIcon,
+  PdfFileIcon,
+  RefreshIcon,
+} from "./icons";
 
 const API_BASE = "http://127.0.0.1:8000";
 
@@ -27,23 +35,47 @@ interface ProjectFilePanelProps {
   onOpenTask: (id: string) => void;
   onStopTask: (id: string) => void;
   onDeleteTask: (id: string) => void;
+  onOpenFile: (file: OpenFile) => void;
 }
 
-function toTreeItems(nodes: TreeNode[]): TreeListItemData[] {
+/** Icone "type de fichier" style IDE pour les extensions qu'on sait
+ * ouvrir dans l'app elle-meme (voir isViewableFile) - une icone generique
+ * pour tout le reste, a etendre au fur et a mesure. */
+function fileTypeIcon(name: string): React.ReactNode {
+  const lower = name.toLowerCase();
+  if (lower.endsWith(".pdf")) return <PdfFileIcon className="h-4 w-4" />;
+  if (lower.endsWith(".html") || lower.endsWith(".htm")) {
+    return <HtmlFileIcon className="h-4 w-4" />;
+  }
+  if (lower.endsWith(".md") || lower.endsWith(".markdown")) {
+    return <MarkdownFileIcon className="h-4 w-4" />;
+  }
+  return <FileIcon className="h-4 w-4 text-secondary" />;
+}
+
+function toTreeItems(
+  nodes: TreeNode[],
+  projectId: string,
+  onOpenFile: (file: OpenFile) => void,
+): TreeListItemData[] {
   return nodes.map((node) => ({
     id: node.path,
     label: node.name,
     startContent: node.is_dir ? (
       <FolderIcon className="h-4 w-4 text-secondary" />
     ) : (
-      <FileIcon className="h-4 w-4 text-secondary" />
+      fileTypeIcon(node.name)
     ),
-    children: node.children ? toTreeItems(node.children) : undefined,
+    children: node.children ? toTreeItems(node.children, projectId, onOpenFile) : undefined,
     onClick: node.is_dir
       ? undefined
       : () => {
-          // ouvre avec l'application par defaut du systeme (IDE, visionneuse...),
-          // jamais dans le harness lui-meme
+          if (isViewableFile(node.name)) {
+            onOpenFile({ projectId, path: node.path, name: node.name });
+            return;
+          }
+          // pas de visualiseur pour ce type : ouvre avec l'application par
+          // defaut du systeme (IDE, visionneuse...) comme avant
           void openPath(node.path);
         },
   }));
@@ -58,6 +90,7 @@ export function ProjectFilePanel({
   onOpenTask,
   onStopTask,
   onDeleteTask,
+  onOpenFile,
 }: ProjectFilePanelProps) {
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [truncated, setTruncated] = useState(false);
@@ -124,7 +157,9 @@ export function ProjectFilePanel({
         {!error && !loading && tree.length === 0 && (
           <EmptyState title="Dossier vide" description="Ce projet ne contient aucun fichier." />
         )}
-        {!error && tree.length > 0 && <TreeList items={toTreeItems(tree)} density="compact" />}
+        {!error && tree.length > 0 && (
+          <TreeList items={toTreeItems(tree, projectId, onOpenFile)} density="compact" />
+        )}
         {truncated && (
           <Text size="2xs" color="secondary" className="block px-2 py-2">
             Certains fichiers ne sont pas affichés (dossier trop volumineux).
