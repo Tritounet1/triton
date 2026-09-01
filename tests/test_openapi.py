@@ -1,9 +1,11 @@
 """The API is meant to be usable on its own (curl, scripts) via the
-auto-generated Swagger UI at /docs, without the desktop app or CLI - see
-server.py's OPENAPI_TAGS. These pin down the two ways that could quietly
-rot: a new route landing with no tag (back to one flat untagged list), or
-a tag typo that doesn't match any declared OPENAPI_TAGS entry (Swagger UI
-would still render it, just outside every documented group)."""
+auto-generated docs at /docs, without the desktop app or CLI - see
+server.py's OPENAPI_TAGS. /docs serves Scalar (get_scalar_api_reference),
+not FastAPI's own default Swagger UI (disabled via docs_url=None) - these
+pin down that swap alongside the two ways the tagging could quietly rot:
+a new route landing with no tag (back to one flat untagged list), or a
+tag typo that doesn't match any declared OPENAPI_TAGS entry (still
+renders, just outside every documented group)."""
 
 from fastapi.testclient import TestClient
 
@@ -18,6 +20,21 @@ def test_docs_and_openapi_schema_are_served():
     client = _client()
     assert client.get("/docs").status_code == 200
     assert client.get("/openapi.json").status_code == 200
+
+
+def test_docs_serves_scalar_not_swagger_ui():
+    r = _client().get("/docs")
+    assert "@scalar/api-reference" in r.text
+    assert "swagger-ui" not in r.text.lower()
+
+
+def test_redoc_still_served_as_a_lighter_alternative():
+    assert _client().get("/redoc").status_code == 200
+
+
+def test_openapi_schema_is_the_latest_3_1_version():
+    schema = _client().get("/openapi.json").json()
+    assert schema["openapi"] == "3.1.0"
 
 
 def test_root_redirects_to_docs():

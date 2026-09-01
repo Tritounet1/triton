@@ -12,9 +12,16 @@ from typing import TypedDict, cast
 import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
+from scalar_fastapi import get_scalar_api_reference
 
 from triton import background_tasks, mcp_client
 from triton.agents import orchestrator, subagents
@@ -144,6 +151,9 @@ app = FastAPI(
     version="0.1.0",
     openapi_tags=OPENAPI_TAGS,
     lifespan=lifespan,
+    # Swagger UI's own default /docs is replaced below (Scalar instead) -
+    # disable it here so the two don't collide on the same path.
+    docs_url=None,
 )
 
 app.add_middleware(
@@ -465,6 +475,22 @@ def root() -> RedirectResponse:
     be someone looking for the docs than expecting a 404 - send them
     there instead."""
     return RedirectResponse("/docs")
+
+
+@app.get("/docs", include_in_schema=False)
+def scalar_docs() -> HTMLResponse:
+    """Scalar instead of FastAPI's default Swagger UI at /docs (disabled
+    via docs_url=None above) - same OpenAPI schema (/openapi.json,
+    unaffected), a nicer-looking, more legible page around it. Loads its
+    JS from a CDN (jsdelivr) by default, same as Swagger UI's own assets
+    normally would - both need network access to render, this isn't a new
+    requirement. /redoc (FastAPI's own, untouched) stays as a lighter,
+    read-only alternative."""
+    return get_scalar_api_reference(
+        openapi_url=app.openapi_url,
+        title=app.title,
+        dark_mode=True,
+    )
 
 
 @app.get("/health", tags=["Health"])
