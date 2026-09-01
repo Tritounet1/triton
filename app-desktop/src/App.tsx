@@ -54,6 +54,7 @@ import {
     FolderIcon,
     GearIcon,
     MoonIcon,
+    MoreIcon,
     PencilIcon,
     PinIcon,
     PlusIcon,
@@ -315,13 +316,23 @@ function exportSession(session: Session, format: "markdown" | "json") {
   document.body.removeChild(a);
 }
 
-/** Menu "Exporter" pour une conversation (Markdown/JSON), utilise a deux
- * endroits identiques (sessions d'un projet, section "Conversations") -
- * extrait pour ne pas dupliquer ce bloc deux fois. Le wrapper stoppe la
- * propagation du clic : sans ca, ouvrir le menu depuis la ligne d'une
- * SideNavItem la selectionnerait aussi (voir les IconButton voisins,
- * Renommer/Supprimer, qui font pareil sur leur propre onClick). */
-function SessionExportMenu({ session }: { session: Session }) {
+/** Bouton "..." unique par conversation (remplace les 4 IconButton
+ * distincts d'avant : renommer/exporter/epingler/supprimer), utilise aux
+ * deux endroits identiques (sessions d'un projet, section
+ * "Conversations") - extrait pour ne pas dupliquer ce bloc deux fois. Le
+ * wrapper stoppe la propagation du clic : sans ca, ouvrir le menu depuis
+ * la ligne d'une SideNavItem la selectionnerait aussi. */
+function SessionActionsMenu({
+  session,
+  onRename,
+  onTogglePin,
+  onDelete,
+}: {
+  session: Session;
+  onRename: () => void;
+  onTogglePin: () => void;
+  onDelete: () => void;
+}) {
   return (
     <div
       onClick={(e) => {
@@ -330,25 +341,86 @@ function SessionExportMenu({ session }: { session: Session }) {
     >
       <DropdownMenu
         button={{
-          icon: <DownloadIcon />,
+          icon: <MoreIcon />,
           isIconOnly: true,
           variant: "ghost",
           size: "sm",
-          label: "Exporter la conversation",
+          label: "Actions",
         }}
         hasChevron={false}
         items={[
+          { label: "Renommer", icon: <PencilIcon />, onClick: onRename },
           {
             label: "Exporter en Markdown",
+            icon: <DownloadIcon />,
             onClick: () => {
               exportSession(session, "markdown");
             },
           },
           {
             label: "Exporter en JSON",
+            icon: <DownloadIcon />,
             onClick: () => {
               exportSession(session, "json");
             },
+          },
+          {
+            label: session.pinned ? "Désépingler" : "Épingler",
+            icon: <PinIcon filled={session.pinned} />,
+            onClick: onTogglePin,
+          },
+          { type: "divider" },
+          {
+            label: "Supprimer",
+            icon: <TrashIcon />,
+            variant: "destructive",
+            onClick: onDelete,
+          },
+        ]}
+      />
+    </div>
+  );
+}
+
+/** Meme principe que SessionActionsMenu, pour la ligne d'un projet
+ * (nouvelle conversation / renommer / supprimer). */
+function ProjectActionsMenu({
+  onNewConversation,
+  onRename,
+  onDelete,
+}: {
+  onNewConversation: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div
+      onClick={(e) => {
+        e.stopPropagation();
+      }}
+    >
+      <DropdownMenu
+        button={{
+          icon: <MoreIcon />,
+          isIconOnly: true,
+          variant: "ghost",
+          size: "sm",
+          label: "Actions du projet",
+        }}
+        hasChevron={false}
+        items={[
+          {
+            label: "Nouvelle conversation",
+            icon: <PlusIcon />,
+            onClick: onNewConversation,
+          },
+          { label: "Renommer", icon: <PencilIcon />, onClick: onRename },
+          { type: "divider" },
+          {
+            label: "Supprimer",
+            icon: <TrashIcon />,
+            variant: "destructive",
+            onClick: onDelete,
           },
         ]}
       />
@@ -1846,33 +1918,14 @@ function App() {
                         }}
                         endContent={
                           <div className="flex items-center gap-0.5">
-                            <IconButton
-                              label="Nouvelle conversation dans ce projet"
-                              icon={<PlusIcon />}
-                              variant="ghost"
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation();
+                            <ProjectActionsMenu
+                              onNewConversation={() => {
                                 startProjectSession(p.id);
                               }}
-                            />
-                            <IconButton
-                              label="Renommer le projet"
-                              icon={<PencilIcon />}
-                              variant="ghost"
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation();
+                              onRename={() => {
                                 startRenameProject(p);
                               }}
-                            />
-                            <IconButton
-                              label="Supprimer le projet"
-                              icon={<TrashIcon />}
-                              variant="ghost"
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation();
+                              onDelete={() => {
                                 setDeletingProject(p);
                               }}
                             />
@@ -1919,39 +1972,18 @@ function App() {
                               }}
                               className="pl-4"
                               endContent={
-                                <div className="flex items-center gap-0.5">
-                                  <IconButton
-                                    label={s.pinned ? "Désépingler" : "Épingler"}
-                                    icon={<PinIcon filled={s.pinned} />}
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      void togglePin(s);
-                                    }}
-                                  />
-                                  <IconButton
-                                    label="Renommer"
-                                    icon={<PencilIcon />}
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      startRename(s);
-                                    }}
-                                  />
-                                  <SessionExportMenu session={s} />
-                                  <IconButton
-                                    label="Supprimer"
-                                    icon={<TrashIcon />}
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setDeletingSession(s);
-                                    }}
-                                  />
-                                </div>
+                                <SessionActionsMenu
+                                  session={s}
+                                  onRename={() => {
+                                    startRename(s);
+                                  }}
+                                  onTogglePin={() => {
+                                    void togglePin(s);
+                                  }}
+                                  onDelete={() => {
+                                    setDeletingSession(s);
+                                  }}
+                                />
                               }
                             />
                           ),
@@ -1999,39 +2031,18 @@ function App() {
                       switchSession(s.id);
                     }}
                     endContent={
-                      <div className="flex items-center gap-0.5">
-                        <IconButton
-                          label={s.pinned ? "Désépingler" : "Épingler"}
-                          icon={<PinIcon filled={s.pinned} />}
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void togglePin(s);
-                          }}
-                        />
-                        <IconButton
-                          label="Renommer"
-                          icon={<PencilIcon />}
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            startRename(s);
-                          }}
-                        />
-                        <SessionExportMenu session={s} />
-                        <IconButton
-                          label="Supprimer"
-                          icon={<TrashIcon />}
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setDeletingSession(s);
-                          }}
-                        />
-                      </div>
+                      <SessionActionsMenu
+                        session={s}
+                        onRename={() => {
+                          startRename(s);
+                        }}
+                        onTogglePin={() => {
+                          void togglePin(s);
+                        }}
+                        onDelete={() => {
+                          setDeletingSession(s);
+                        }}
+                      />
                     }
                   />
                 ),
