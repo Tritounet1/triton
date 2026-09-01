@@ -11,7 +11,10 @@ exactly as it did before.
 - git.py        status/diff/commit
 - process.py    run_shell, run_tests
 - web.py        fetch_url, web_search
-- memory.py     todo_write (in-process), remember/load_memory (memory.md)
+- memory.py     todo_write (in-process), remember (writes only - see
+                 storage/sessions.py, storage/projects.py, storage/memory.py
+                 for the three memory tiers it writes to and
+                 llm/chat_loop.py's build_system_message for reading them back)
 - background.py dispatch_subagent/check_subagent, start/stop/list
                  background tasks - thin wrappers, the real logic lives in
                  triton.agents.subagents / triton.background_tasks
@@ -34,7 +37,6 @@ from triton.tools._shared import (
     invoke_tool,
     is_skipped,
 )
-from triton.tools.memory import load_memory
 from triton.tools.snapshot import (
     WRITE_TOOL_NAMES,
     RestoreError,
@@ -58,7 +60,6 @@ __all__ = [
     "ensure_snapshot",
     "invoke_tool",
     "is_skipped",
-    "load_memory",
     "rebuild_tools_list",
     "restore_snapshot",
 ]

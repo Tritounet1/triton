@@ -139,13 +139,35 @@ def save_session_model(session_id: str, model: str) -> None:
     model_path(session_id).write_text(model.strip())
 
 
+def memory_path(session_id: str) -> Path:
+    return SESSIONS_DIR / f"{session_id}.memory.md"
+
+
+def load_session_memory(session_id: str) -> str:
+    """Facts remembered (via the remember tool) in THIS conversation only -
+    only used for a conversation with no project, where there's no wider
+    scope to share them with (see storage/projects.py's project-scoped
+    equivalent, and storage/memory.py's third, global tier)."""
+    path = memory_path(session_id)
+    if not path.exists():
+        return ""
+    return path.read_text().strip()
+
+
+def append_session_memory(session_id: str, note: str) -> None:
+    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    with memory_path(session_id).open("a", encoding="utf-8") as f:
+        f.write(f"- {note.strip()}\n")
+
+
 def session_path(session_id: str) -> Path:
     return SESSIONS_DIR / f"{session_id}.json"
 
 
 def delete_session(session_id: str) -> bool:
     """Deletes a conversation (history + title + permissions + project
-    link + pin + model override). Returns False if it didn't exist."""
+    link + pin + model override + memory). Returns False if it didn't
+    exist."""
     path = session_path(session_id)
     if not path.exists():
         return False
@@ -154,5 +176,6 @@ def delete_session(session_id: str) -> bool:
     permissions_path(session_id).unlink(missing_ok=True)
     pinned_path(session_id).unlink(missing_ok=True)
     model_path(session_id).unlink(missing_ok=True)
+    memory_path(session_id).unlink(missing_ok=True)
     clear_session_project(session_id)
     return True

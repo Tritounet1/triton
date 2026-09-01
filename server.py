@@ -199,7 +199,7 @@ def resolve_session(
     project = get_project(project_id) if project_id else None
     if project is not None:
         save_session_project(path.stem, project.id)
-    return path, [build_system_message(project)], True
+    return path, [build_system_message(path.stem, project)], True
 
 
 def sse(event: str, data: dict[str, object]) -> str:

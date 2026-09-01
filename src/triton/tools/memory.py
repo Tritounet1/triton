@@ -1,10 +1,15 @@
 """Two kinds of memory: todo_write's task list (in-process only, cleared on
-restart - a scratchpad for the current conversation) and remember's
-memory.md (persisted to disk, carried into every future conversation's
-system prompt via load_memory - see llm/chat_loop.py's
-build_system_message)."""
+restart - a scratchpad for the current conversation) and remember, which
+writes to one of two scoped, persisted files depending on the calling
+conversation - see storage/sessions.py's per-session memory and
+storage/projects.py's per-project memory (a project's conversations share
+one file; a project-less conversation's memory is its own). Both, plus a
+third global tier (storage/memory.py), are read back into the system
+prompt by llm/chat_loop.py's build_system_message - never here, this
+module only writes."""
 
-from triton.paths import ROOT_DIR
+from triton.storage.projects import append_project_memory
+from triton.storage.sessions import append_session_memory, load_session_project
 from triton.tools._shared import Tool
 
 _TODOS: list[dict[str, str]] = []
@@ -22,25 +27,20 @@ def todo_write(todos: list[dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
-MEMORY_FILE = ROOT_DIR / "memory.md"
-
-
-def remember(note: str) -> str:
+def remember(note: str, session_id: str) -> str:
+    """Writes to the project's shared memory if this conversation belongs
+    to one (so every other conversation in that project sees it too, now
+    and later), otherwise to this conversation's own memory alone - see
+    the module docstring for why there's no single memory.md anymore."""
+    project_id = load_session_project(session_id)
     try:
-        with MEMORY_FILE.open("a", encoding="utf-8") as f:
-            f.write(f"- {note.strip()}\n")
+        if project_id:
+            append_project_memory(project_id, note)
+        else:
+            append_session_memory(session_id, note)
     except OSError as e:
         return f"error: could not write to memory ({e})"
     return f"remembered: {note.strip()}"
-
-
-def load_memory() -> str:
-    """Returns the saved memory content, or an empty string if none exists.
-    Used by main.py/server.py to prime the system prompt with facts learned
-    in previous conversations, so the model doesn't need to be told again."""
-    if not MEMORY_FILE.exists():
-        return ""
-    return MEMORY_FILE.read_text().strip()
 
 
 REGISTRY: dict[str, Tool] = {
@@ -83,7 +83,9 @@ REGISTRY: dict[str, Tool] = {
             "function": {
                 "name": "remember",
                 "description": "Saves a short fact or note to persistent memory, so it's "
-                "available in future conversations without needing to be repeated.",
+                "available without needing to be repeated - shared with every other "
+                "conversation in the same project if this one belongs to one, otherwise "
+                "private to this conversation alone.",
                 "parameters": {
                     "type": "object",
                     "properties": {

@@ -26,7 +26,7 @@ class Tool:
 # (e.g. to scope a background task to the session that started it), beyond
 # the plain model-provided arguments. server.py/main.py inject session_id
 # through invoke_tool() instead of the generic tool.fn(**args) call.
-SESSION_AWARE_TOOLS = {"start_background_task", "list_background_tasks"}
+SESSION_AWARE_TOOLS = {"start_background_task", "list_background_tasks", "remember"}
 
 
 def invoke_tool(tool: Tool, name: str, args: dict[str, object], session_id: str) -> str:

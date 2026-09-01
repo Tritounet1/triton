@@ -24,8 +24,13 @@ sessions/
 # Logs d'observabilite (donnees locales, pas versionnees)
 logs/
 
-# Memoire persistante du tool remember (donnees locales, pas versionnees)
-memory.md
+# Memoire persistante du tool remember : globale (partagee par toutes les
+# conversations, actuellement vide - infrastructure posee pour plus tard),
+# par projet (project_memory/<id>.md) et par conversation sans projet
+# (sessions/<id>.memory.md, deja couvert par l'entree sessions/ ci-dessus)
+# - donnees locales, pas versionnees
+memory_global.md
+project_memory/
 
 # Config des serveurs MCP (contient souvent des cles API en clair, comme
 # claude_desktop_config.json : jamais versionne)

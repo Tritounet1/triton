@@ -23,11 +23,10 @@ from typing import TYPE_CHECKING, Literal
 
 from openai.types.chat import (
     ChatCompletionMessageParam,
-    ChatCompletionMessageToolCallUnion,
-    ChatCompletionMessageToolCallUnionParam,
 )
 
 from triton.llm.api import call_chat
+from triton.llm.chat_loop import to_tool_call_params
 from triton.llm.pricing import estimate_cost
 from triton.storage.logs import log_event
 
@@ -85,32 +84,6 @@ class SubagentTask:
 TASKS: dict[str, SubagentTask] = {}
 
 
-# not reused from triton.llm.chat_loop's to_tool_call_params despite being
-# identical: importing chat_loop here would import triton.tools at module
-# load time too (chat_loop needs load_memory), through this module's own
-# tools/background.py -> agents.subagents chain - the exact cycle this
-# file's own module docstring already calls out avoiding. Small enough to
-# duplicate rather than restructure either side to break that cycle.
-def _to_tool_call_params(
-    tool_calls: list[ChatCompletionMessageToolCallUnion],
-) -> list[ChatCompletionMessageToolCallUnionParam]:
-    params: list[ChatCompletionMessageToolCallUnionParam] = []
-    for tool_call in tool_calls:
-        if tool_call.type != "function":
-            continue
-        params.append(
-            {
-                "id": tool_call.id,
-                "type": "function",
-                "function": {
-                    "name": tool_call.function.name,
-                    "arguments": tool_call.function.arguments,
-                },
-            }
-        )
-    return params
-
-
 def _run(task_entry: SubagentTask) -> None:
     from triton.tools import TOOLS_REGISTRY
 
@@ -161,7 +134,7 @@ def _run(task_entry: SubagentTask) -> None:
                 {
                     "role": "assistant",
                     "content": reply.content,
-                    "tool_calls": _to_tool_call_params(reply.tool_calls),
+                    "tool_calls": to_tool_call_params(reply.tool_calls),
                 }
             )
 

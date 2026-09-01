@@ -156,7 +156,7 @@ def main():
         console.print(f"[dim]session resumed: {session_path.name} ({len(messages)} messages)[/dim]")
     else:
         session_path = new_session_path()
-        messages = [build_system_message()]
+        messages = [build_system_message(session_path.stem)]
 
     console.rule("[bold cyan]Triton[/bold cyan]")
 

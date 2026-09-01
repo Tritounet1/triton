@@ -19,8 +19,9 @@ from openai.types.chat import (
 from triton.llm.api import ChatResult, call_chat, stream_chat
 from triton.llm.pricing import estimate_cost
 from triton.storage.logs import log_event
-from triton.storage.projects import Project
-from triton.tools import load_memory
+from triton.storage.memory import load_global_memory
+from triton.storage.projects import Project, load_project_memory
+from triton.storage.sessions import load_session_memory
 
 SYSTEM_PROMPT = "You are a concise and clear assistant."
 # raised from 10: a single non-trivial task (e.g. building a multi-section
@@ -30,10 +31,17 @@ SYSTEM_PROMPT = "You are a concise and clear assistant."
 MAX_ITERATIONS = 25
 
 
-def build_system_message(project: Project | None = None) -> ChatCompletionMessageParam:
-    """Builds the initial system message for a new conversation, appending
-    any facts saved via the remember tool so they don't need repeating, and
-    scoping the conversation to a project's folder when it belongs to one."""
+def build_system_message(
+    session_id: str, project: Project | None = None
+) -> ChatCompletionMessageParam:
+    """Builds the initial system message for a new conversation, scoping it
+    to a project's folder when it belongs to one, and appending memory from
+    all three tiers the remember tool can write to: global (shared by
+    every conversation - see storage/memory.py, empty until something
+    populates it), project-scoped (shared by every conversation in the
+    same project - storage/projects.py), and session-scoped (private to
+    this one conversation - storage/sessions.py, only relevant without a
+    project, since a project's conversations share its memory instead)."""
     content = SYSTEM_PROMPT
     if project is not None:
         content += (
@@ -43,9 +51,20 @@ def build_system_message(project: Project | None = None) -> ChatCompletionMessag
             "git_status, git_diff, git_commit, run_tests). This is enforced: a path "
             "outside this folder will be rejected, not just discouraged."
         )
-    memory = load_memory()
-    if memory:
-        content += f"\n\nFacts remembered from previous conversations:\n{memory}"
+
+    global_memory = load_global_memory()
+    if global_memory:
+        content += f"\n\nFacts remembered (shared across all conversations):\n{global_memory}"
+
+    if project is not None:
+        scoped_memory = load_project_memory(project.id)
+        scope_label = "shared across every conversation in this project"
+    else:
+        scoped_memory = load_session_memory(session_id)
+        scope_label = "remembered in this conversation"
+    if scoped_memory:
+        content += f"\n\nFacts {scope_label}:\n{scoped_memory}"
+
     return {"role": "system", "content": content}
 
 
