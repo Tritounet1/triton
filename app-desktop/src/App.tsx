@@ -653,6 +653,82 @@ function WriteFileDiff({
   return <EditFileDiff oldString={oldContent ?? ""} newString={newContent} />;
 }
 
+interface EditFileEdit {
+  path: string;
+  old_string: string;
+  new_string: string;
+}
+
+/** edit_file accepte desormais plusieurs hunks/fichiers en un seul appel
+ * (voir filesystem.py) : ses arguments sont `{edits: [{path, old_string,
+ * new_string, replace_all?}, ...]}` plutot que old_string/new_string a
+ * plat. Le modele n'est pas force de respecter le schema (voir
+ * invoke_tool dans _shared.py) - filtre defensivement tout element qui ne
+ * ressemble pas a un edit valide plutot que de planter sur un rendu. */
+function parseEditFileEdits(args: Record<string, unknown>): EditFileEdit[] {
+  if (!Array.isArray(args.edits)) return [];
+  const edits: EditFileEdit[] = [];
+  for (const item of args.edits as unknown[]) {
+    if (
+      item &&
+      typeof item === "object" &&
+      typeof (item as Record<string, unknown>).path === "string" &&
+      typeof (item as Record<string, unknown>).old_string === "string" &&
+      typeof (item as Record<string, unknown>).new_string === "string"
+    ) {
+      const e = item as Record<string, unknown>;
+      edits.push({
+        path: e.path as string,
+        old_string: e.old_string as string,
+        new_string: e.new_string as string,
+      });
+    }
+  }
+  return edits;
+}
+
+/** Un EditFileDiff par hunk, groupes par fichier (avec le chemin en
+ * en-tete des qu'il y en a plus d'un) - le rendu "detail" complet d'un
+ * appel edit_file, que ce soit pour la preview de confirmation ou pour
+ * l'historique deja execute. */
+function EditFileEdits({ edits }: { edits: EditFileEdit[] }) {
+  const byPath = new Map<string, EditFileEdit[]>();
+  for (const e of edits) {
+    const list = byPath.get(e.path) ?? [];
+    list.push(e);
+    byPath.set(e.path, list);
+  }
+  return (
+    <div className="flex flex-col gap-3">
+      {[...byPath.entries()].map(([path, hunks]) => (
+        <div key={path} className="flex flex-col gap-1">
+          {byPath.size > 1 && (
+            <Text size="2xs" color="secondary" className="font-mono">
+              {path}
+            </Text>
+          )}
+          {hunks.map((h, i) => (
+            <EditFileDiff key={i} oldString={h.old_string} newString={h.new_string} />
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Resume compact d'un appel edit_file pour la ligne "target" (visible
+ * sans deplier) - le JSON brut de `edits` (via formatArgs) serait illisible
+ * une fois tronque a une ligne, surtout avec plusieurs hunks/fichiers. */
+function editFileTarget(args: Record<string, unknown>): string {
+  const edits = parseEditFileEdits(args);
+  if (edits.length === 0) return formatArgs(args);
+  const paths = [...new Set(edits.map((e) => e.path))];
+  if (paths.length === 1) {
+    return `${paths[0]} (${edits.length} edit${edits.length > 1 ? "s" : ""})`;
+  }
+  return `${edits.length} edits across ${paths.length} files`;
+}
+
 // web_search prefixe son resultat d'un marqueur "[source: ...]" (voir
 // tools/web.py) pour que l'app puisse afficher quelle API a repondu sans
 // que l'utilisateur ait a deplier l'appel - jamais montre tel quel dans
@@ -680,14 +756,11 @@ interface ToolCallLike {
 }
 
 function toolResultDetail(t: ToolCallLike): ReactNode {
-  const { old_string: oldString, new_string: newString, content } = t.args;
-  if (
-    t.tool === "edit_file" &&
-    typeof oldString === "string" &&
-    typeof newString === "string"
-  ) {
-    return <EditFileDiff oldString={oldString} newString={newString} />;
+  if (t.tool === "edit_file") {
+    const edits = parseEditFileEdits(t.args);
+    if (edits.length > 0) return <EditFileEdits edits={edits} />;
   }
+  const { content } = t.args;
   if (t.tool === "write_file" && typeof content === "string") {
     // pas d'"avant" fiable a afficher ici (contrairement a la preview de
     // confirmation - voir WriteFileDiff plus haut, qui va chercher l'etat
@@ -712,9 +785,12 @@ function toolResultDetail(t: ToolCallLike): ReactNode {
 function toolDiffStats(t: ToolCallLike): { additions?: number; deletions?: number } {
   const countLines = (s: string) => (s === "" ? 0 : s.split("\n").length);
   if (t.tool === "edit_file") {
-    const { old_string: oldString, new_string: newString } = t.args;
-    if (typeof oldString === "string" && typeof newString === "string") {
-      return { additions: countLines(newString), deletions: countLines(oldString) };
+    const edits = parseEditFileEdits(t.args);
+    if (edits.length > 0) {
+      return {
+        additions: edits.reduce((sum, e) => sum + countLines(e.new_string), 0),
+        deletions: edits.reduce((sum, e) => sum + countLines(e.old_string), 0),
+      };
     }
   }
   if (t.tool === "write_file" && typeof t.args.content === "string") {
@@ -740,7 +816,7 @@ function multiAgentSubtaskDetail(t: ToolMsg): ReactNode {
             name: c.tool,
             status: toolCallStatus(c.result),
             node: c.tool === "web_search" ? webSearchSource(c.result) : undefined,
-            target: formatArgs(c.args),
+            target: c.tool === "edit_file" ? editFileTarget(c.args) : formatArgs(c.args),
             ...toolDiffStats(c),
             resultDetail: toolResultDetail(c),
           }))}
@@ -2594,7 +2670,11 @@ function App() {
                                     : t.tool === "web_search"
                                       ? webSearchSource(t.result)
                                       : undefined,
-                                target: isSubtask ? t.subtaskDescription : formatArgs(t.args),
+                                target: isSubtask
+                                  ? t.subtaskDescription
+                                  : t.tool === "edit_file"
+                                    ? editFileTarget(t.args)
+                                    : formatArgs(t.args),
                                 stats:
                                   isSubtask && status === "running" && callCount > 0
                                     ? `${callCount} outil${callCount > 1 ? "s" : ""}`
@@ -2669,15 +2749,14 @@ function App() {
                   <div className="mx-auto flex max-w-2xl flex-col items-center gap-3 rounded-lg border border-warning bg-warning-muted px-4 py-3">
                     <Text weight="medium" className="text-center">
                       autoriser {pendingConfirmation.tool}(
-                      {formatArgs(pendingConfirmation.args)}) ?
+                      {pendingConfirmation.tool === "edit_file"
+                        ? editFileTarget(pendingConfirmation.args)
+                        : formatArgs(pendingConfirmation.args)}
+                      ) ?
                     </Text>
                     {pendingConfirmation.tool === "edit_file" &&
-                      typeof pendingConfirmation.args.old_string === "string" &&
-                      typeof pendingConfirmation.args.new_string === "string" && (
-                        <EditFileDiff
-                          oldString={pendingConfirmation.args.old_string}
-                          newString={pendingConfirmation.args.new_string}
-                        />
+                      parseEditFileEdits(pendingConfirmation.args).length > 0 && (
+                        <EditFileEdits edits={parseEditFileEdits(pendingConfirmation.args)} />
                       )}
                     {pendingConfirmation.tool === "write_file" &&
                       activeProject &&

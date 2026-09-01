@@ -68,7 +68,11 @@ SANDBOXED_PATH_ARGS: dict[str, list[str]] = {
     "read_file": ["path"],
     "list_files": ["directory"],
     "write_file": ["path"],
-    "edit_file": ["path"],
+    # edit_file is deliberately absent here: its "edits" argument is a
+    # list of {path, old_string, new_string, ...} objects, not a flat
+    # string/list-of-strings like every other entry below - it gets its
+    # own check, _enforce_edit_file_sandbox, called directly from
+    # enforce_project_sandbox before this dict is even consulted.
     "delete_file": ["path"],
     "move_file": ["source", "destination"],
     "grep": ["directory"],
@@ -101,6 +105,32 @@ DEFAULTABLE_PATH_ARGS = {
 }
 
 
+def _enforce_edit_file_sandbox(args: dict[str, object], project: Project) -> str | None:
+    """edit_file's own path check: `args["edits"]` is a list of
+    {path, old_string, new_string, ...} objects (see filesystem.py) rather
+    than the flat string/list-of-strings shape SANDBOXED_PATH_ARGS assumes
+    for every other tool, so it can't reuse the generic loop below."""
+    root = Path(project.folder_path).resolve()
+    edits = args.get("edits")
+    if not isinstance(edits, list):
+        return None
+
+    for edit in edits:
+        if not isinstance(edit, dict):
+            continue
+        raw_path = edit.get("path")
+        if not isinstance(raw_path, str) or not raw_path:
+            continue
+        candidate = Path(raw_path)
+        resolved = candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
+        if not resolved.is_relative_to(root):
+            return (
+                f"error: this conversation is scoped to the project folder {root}, "
+                f"'{raw_path}' resolves outside of it. Use a path within the project."
+            )
+    return None
+
+
 def enforce_project_sandbox(
     name: str, args: dict[str, object], project: Project | None
 ) -> str | None:
@@ -111,6 +141,9 @@ def enforce_project_sandbox(
     project folder for tools in DEFAULTABLE_PATH_ARGS."""
     if project is None:
         return None
+
+    if name == "edit_file":
+        return _enforce_edit_file_sandbox(args, project)
 
     arg_names = SANDBOXED_PATH_ARGS.get(name)
     if arg_names is None:

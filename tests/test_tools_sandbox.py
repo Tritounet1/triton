@@ -48,6 +48,44 @@ def test_run_tests_path_and_directory_both_checked(tmp_path):
     assert bad_path is not None
 
 
+def test_edit_file_allows_edits_within_the_project(tmp_path):
+    project = _project(tmp_path)
+    root = tmp_path / "myproject"
+    args: dict[str, object] = {
+        "edits": [{"path": str(root / "a.py"), "old_string": "x", "new_string": "y"}]
+    }
+    assert enforce_project_sandbox("edit_file", args, project) is None
+
+
+def test_edit_file_rejects_a_path_outside_the_project(tmp_path):
+    project = _project(tmp_path)
+    args: dict[str, object] = {
+        "edits": [{"path": str(tmp_path / "outside.py"), "old_string": "x", "new_string": "y"}]
+    }
+    error = enforce_project_sandbox("edit_file", args, project)
+    assert error is not None
+
+
+def test_edit_file_rejects_if_any_edit_in_the_batch_is_outside(tmp_path):
+    project = _project(tmp_path)
+    root = tmp_path / "myproject"
+    args: dict[str, object] = {
+        "edits": [
+            {"path": str(root / "a.py"), "old_string": "x", "new_string": "y"},
+            {"path": str(tmp_path / "outside.py"), "old_string": "x", "new_string": "y"},
+        ]
+    }
+    error = enforce_project_sandbox("edit_file", args, project)
+    assert error is not None
+
+
+def test_edit_file_malformed_edits_do_not_crash(tmp_path):
+    project = _project(tmp_path)
+    assert enforce_project_sandbox("edit_file", {"edits": "not a list"}, project) is None
+    assert enforce_project_sandbox("edit_file", {"edits": ["not a dict"]}, project) is None
+    assert enforce_project_sandbox("edit_file", {"edits": [{}]}, project) is None
+
+
 def test_run_code_directory_defaults_to_project_root(tmp_path):
     project = _project(tmp_path)
     args: dict[str, object] = {"code": "print(1)"}
