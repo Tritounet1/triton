@@ -1,6 +1,7 @@
 """Automatic safety net for the write tools (write_file/edit_file/
-delete_file/move_file): the first time one of them is about to run in a
-project-scoped session, the project folder's current state is captured -
+delete_file/move_file/git_commit): the first time one of them is about to
+run in a project-scoped session, the project folder's current state is
+captured -
 a dangling git commit if the folder is a git repo, or a plain recursive
 copy otherwise (see the module docstring's two halves below) - so the
 whole session's writes can be undone in one action later via
@@ -39,7 +40,16 @@ from triton.paths import ROOT_DIR
 from triton.storage.projects import Project, get_project
 from triton.storage.snapshots import Snapshot, delete_snapshot, get_snapshot, save_snapshot
 
-WRITE_TOOL_NAMES = {"write_file", "edit_file", "delete_file", "move_file"}
+# git_commit is included even though it doesn't touch the working tree
+# itself: it still changes the repo's state (a new commit on the current
+# branch), and until now had only the one-off confirmation prompt as a
+# safeguard. Note the resulting restore is still working-tree-only (see
+# restore_snapshot): checking the snapshot ref back out brings files back
+# to their pre-session content, but doesn't move the branch pointer, so a
+# commit the model made stays in history - undoing that fully still needs
+# a manual `git reset`/`git revert`, this only guarantees the file
+# contents are recoverable in one action.
+WRITE_TOOL_NAMES = {"write_file", "edit_file", "delete_file", "move_file", "git_commit"}
 
 BACKUP_ROOT = ROOT_DIR / "snapshot_backups"
 

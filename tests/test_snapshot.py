@@ -162,5 +162,11 @@ def test_discard_snapshot_removes_the_record_and_the_backup(tmp_path):
     assert not backup_dir.exists()
 
 
-def test_write_tool_names_covers_the_four_mutating_file_tools():
-    assert {"write_file", "edit_file", "delete_file", "move_file"} == snap.WRITE_TOOL_NAMES
+def test_write_tool_names_covers_the_mutating_tools():
+    assert {
+        "write_file",
+        "edit_file",
+        "delete_file",
+        "move_file",
+        "git_commit",
+    } == snap.WRITE_TOOL_NAMES

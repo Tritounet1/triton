@@ -1,16 +1,19 @@
 """Reaching outside the local machine: fetching a URL and searching the
-web. fetch_url is a plain GET, no API key. web_search tries Tavily first
-(a real search API - actual content snippets, not just a title/link) when
-a key is configured, falling back to scraping DuckDuckGo's no-JS HTML
-endpoint (no key needed, but brittle - see its own bot-detection handling
-below) whenever Tavily is unavailable, most commonly because a free-tier
-key ran out of credits."""
+web. fetch_url is a plain GET, no API key, no headless browser (a page
+that renders its content with JavaScript can't be read this way - see
+_js_rendered_warning). web_search tries Tavily first (a real search API -
+actual content snippets, not just a title/link) when a key is configured,
+falling back to scraping DuckDuckGo's no-JS HTML endpoint (no key needed,
+but brittle - see its own bot-detection handling below) whenever Tavily
+is unavailable, most commonly because a free-tier key ran out of
+credits."""
 
 import os
 import re
 from urllib.parse import parse_qs, unquote, urlparse
 
 import requests
+import trafilatura
 from tavily import TavilyClient
 from tavily.errors import (
     BadRequestError,
@@ -23,25 +26,81 @@ from tavily.errors import TimeoutError as TavilyTimeoutError
 from triton.storage.settings import load_tavily_api_key
 from triton.tools._shared import Tool
 
+FETCH_CHUNK_SIZE = 5000
+# below this raw HTML size, "extraction found almost nothing" is just as
+# likely to mean "this genuinely is a short page" as "this is JS-rendered" -
+# not worth warning about a page that small either way
+JS_RENDERED_MIN_RAW_SIZE = 3000
+JS_RENDERED_MAX_EXTRACTED_SIZE = 200
 
-def fetch_url(url: str) -> str:
+
+def _extract_readable_text(html: str) -> str:
+    """Pulls the main readable content out of an HTML page (article body,
+    stripped of nav/ads/boilerplate/scripts) via trafilatura - a real
+    content-extraction library (the same family of algorithm as Firefox's
+    Reader View), a large step up from blindly stripping every tag.
+    Falls back to that same blunt strip when trafilatura finds nothing it
+    recognizes as extractable content (a non-article page, e.g. a login
+    screen or a bare API response mislabeled as HTML) - better a messy
+    result than none at all."""
+    extracted = trafilatura.extract(html, include_comments=False, include_tables=True)
+    if extracted:
+        return extracted.strip()
+
+    stripped = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", html, flags=re.DOTALL | re.IGNORECASE)
+    stripped = re.sub(r"<[^>]+>", " ", stripped)
+    return re.sub(r"\s+", " ", stripped).strip()
+
+
+def _js_rendered_warning(extracted_len: int, raw_html_len: int) -> str:
+    """A large raw HTML document that yields almost no readable text is
+    the classic signature of a JS-rendered page (a React/Vue app whose
+    real content only exists after client-side scripts run, which
+    fetch_url can't execute) - flagged so the model doesn't mistake a
+    near-empty result for "this page has nothing", and reaches for
+    web_search or a different source instead of trusting it."""
+    if raw_html_len < JS_RENDERED_MIN_RAW_SIZE or extracted_len >= JS_RENDERED_MAX_EXTRACTED_SIZE:
+        return ""
+    return (
+        f"(note: only {extracted_len} characters of readable text were extracted from "
+        f"{raw_html_len} characters of raw HTML - this page likely renders its content "
+        "with JavaScript, which fetch_url cannot execute. Treat what follows as "
+        "unreliable/incomplete; try web_search or a different source instead.)\n\n"
+    )
+
+
+def fetch_url(url: str, offset: int = 0) -> str:
     if not url.startswith(("http://", "https://")):
         return "error: url must start with http:// or https://"
+    offset = max(0, offset)
+
     try:
         response = requests.get(url, timeout=15, headers={"User-Agent": "Triton/1.0"})
         response.raise_for_status()
     except requests.RequestException as e:
         return f"error: could not fetch {url} ({e})"
 
-    text = response.text
+    raw = response.text
+    warning = ""
     if "html" in response.headers.get("content-type", ""):
-        text = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", text, flags=re.DOTALL | re.IGNORECASE)
-        text = re.sub(r"<[^>]+>", " ", text)
-        text = re.sub(r"\s+", " ", text).strip()
+        text = _extract_readable_text(raw)
+        warning = _js_rendered_warning(len(text), len(raw))
+    else:
+        text = raw
 
-    if len(text) > 5000:
-        text = text[:5000] + "\n(truncated)"
-    return text
+    total = len(text)
+    if total and offset >= total:
+        return f"(nothing left to show: offset {offset} is past the end - {total} characters total)"
+
+    next_offset = offset + FETCH_CHUNK_SIZE
+    chunk = text[offset:next_offset]
+    footer = (
+        f"\n(showing characters {offset}-{min(next_offset, total)} of {total} - call "
+        f"fetch_url again with offset={next_offset} for more)"
+        if next_offset < total
+        else ""
+    )
+    return warning + chunk + footer
 
 
 DEFAULT_MAX_RESULTS = 8
@@ -159,14 +218,26 @@ REGISTRY: dict[str, Tool] = {
             "type": "function",
             "function": {
                 "name": "fetch_url",
-                "description": "Fetches a URL and returns its text content "
-                "(HTML tags stripped for web pages).",
+                "description": "Fetches a URL and returns its readable text content - for a "
+                "web page, the main article-like content with navigation/ads/boilerplate "
+                "stripped, not just raw tags removed. Cannot execute JavaScript, so a page "
+                "that renders its content client-side (a typical single-page app) may come "
+                "back with little to no text; the result says so explicitly when that "
+                "happens. Long pages are paginated at 5000 characters per call - use offset "
+                "to continue reading one, following the note at the end of a truncated "
+                "result.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "url": {
                             "type": "string",
                             "description": "URL to fetch (must start with http:// or https://).",
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "description": "Character offset to start reading from. Default "
+                            "0. Only needed to continue a page that a previous fetch_url call "
+                            "on the same URL said was truncated - use the offset it suggested.",
                         },
                     },
                     "required": ["url"],

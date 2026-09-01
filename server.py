@@ -113,6 +113,13 @@ logging.getLogger("uvicorn.access").addFilter(_QuietPollingEndpoints())
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     mcp_client.manager.connect_all_enabled()
+    resumed = orchestrator.resume_incomplete_runs()
+    if resumed:
+        logging.getLogger("uvicorn").info(
+            "resumed %d orchestrator run(s) interrupted by the last restart: %s",
+            len(resumed),
+            ", ".join(resumed),
+        )
     yield
     mcp_client.manager.disconnect_all()
 

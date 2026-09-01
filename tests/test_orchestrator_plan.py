@@ -19,22 +19,50 @@ from triton.agents.orchestrator import (
 
 def test_parses_a_clean_json_array():
     raw = '[{"role": "research", "description": "find the launch date"}]'
-    assert _parse_plan(raw) == [{"role": "research", "description": "find the launch date"}]
+    assert _parse_plan(raw) == [
+        {"role": "research", "description": "find the launch date", "depends_on": []}
+    ]
 
 
 def test_strips_markdown_code_fences():
     raw = '```json\n[{"role": "code", "description": "write the file"}]\n```'
-    assert _parse_plan(raw) == [{"role": "code", "description": "write the file"}]
+    assert _parse_plan(raw) == [{"role": "code", "description": "write the file", "depends_on": []}]
 
 
 def test_missing_role_defaults_to_conversational():
     raw = '[{"description": "write a haiku"}]'
-    assert _parse_plan(raw) == [{"role": "conversational", "description": "write a haiku"}]
+    assert _parse_plan(raw) == [
+        {"role": "conversational", "description": "write a haiku", "depends_on": []}
+    ]
 
 
 def test_items_without_a_description_are_dropped():
     raw = '[{"role": "research", "description": "real one"}, {"role": "code"}]'
-    assert _parse_plan(raw) == [{"role": "research", "description": "real one"}]
+    assert _parse_plan(raw) == [{"role": "research", "description": "real one", "depends_on": []}]
+
+
+def test_parses_depends_on_indices():
+    raw = (
+        '[{"role": "research", "description": "find prices"}, '
+        '{"role": "code", "description": "write a script using them", "depends_on": [0]}]'
+    )
+    plan = _parse_plan(raw)
+    assert plan[0]["depends_on"] == []
+    assert plan[1]["depends_on"] == [0]
+
+
+def test_non_list_or_non_int_depends_on_entries_are_ignored():
+    raw = (
+        '[{"role": "research", "description": "a"}, '
+        '{"role": "code", "description": "b", "depends_on": [0, "oops", true, 1.5, null]}]'
+    )
+    plan = _parse_plan(raw)
+    assert plan[1]["depends_on"] == [0]
+
+
+def test_depends_on_defaults_to_empty_when_absent_or_wrong_type():
+    raw = '[{"role": "research", "description": "a", "depends_on": "not a list"}]'
+    assert _parse_plan(raw)[0]["depends_on"] == []
 
 
 def test_non_list_json_raises():
@@ -63,7 +91,7 @@ def test_planner_system_prompt_survives_format_with_literal_json_braces(can_writ
     JSON example - .format() must not mistake those braces for its own
     placeholders and raise KeyError."""
     prompt = _planner_system_prompt(can_write_code)
-    assert '[{"role": "...", "description": "..."}, ...]' in prompt
+    assert '[{"role": "...", "description": "...", "depends_on": [...]}, ...]' in prompt
 
 
 @pytest.mark.parametrize("can_write", [True, False])

@@ -50,3 +50,8 @@ background_tasks_state/
 # repos git - donnees locales, pas versionnees
 snapshots.json
 snapshot_backups/
+
+# Runs multi-agents en cours (persistes pour survivre a un redemarrage du
+# harness - voir orchestrator.resume_incomplete_runs()) - supprime des
+# qu'un run se termine, donnees locales et ephemeres, pas versionnees
+orchestrator_runs/
