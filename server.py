@@ -903,6 +903,26 @@ def remember_in_session(session_id: str, body: RememberRequest) -> dict[str, str
     return {"result": remember(body.note, session_id=session_id)}
 
 
+@app.post("/sessions/{session_id}/compact", tags=["Sessions"])
+def compact_session(session_id: str) -> dict[str, str]:
+    """The /compact command's backend - forces compress_history_if_needed
+    to summarize the oldest turns right now, instead of waiting for the
+    automatic trigger in run_chat_stream (context already over
+    MAX_CONTEXT_CHARS). Saves the compressed history back so it's what the
+    next turn (and the next automatic check) build on."""
+    path = SESSIONS_DIR / f"{session_id}.json"
+    if not path.exists():
+        raise HTTPException(404, "session not found")
+
+    messages = load_session(path)
+    compressed, compress_message = compress_history_if_needed(messages, force=True)
+    if compress_message is None:
+        return {"result": "nothing to compact yet: not enough exchanges in this conversation"}
+
+    save_session(path, compressed)
+    return {"result": compress_message}
+
+
 @app.post("/memory/global", tags=["Memory"])
 def remember_globally(body: RememberRequest) -> dict[str, str]:
     """The /remember global command's backend - the only writer of

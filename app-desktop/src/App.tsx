@@ -102,6 +102,7 @@ const UNDO_COMMAND = "/undo";
 const REMEMBER_PREFIX = "/remember ";
 const REMEMBER_SESSION_PREFIX = "session ";
 const REMEMBER_GLOBAL_PREFIX = "global ";
+const COMPACT_COMMAND = "/compact";
 
 // menu declenche par "/" dans le composer (style Notion/Discord), via le
 // mecanisme de trigger deja fourni par ChatComposerInput.
@@ -146,6 +147,13 @@ const SLASH_COMMANDS: SearchableItem<{ description: string }>[] = [
     label: "remember global",
     auxiliaryData: {
       description: "Note quelque chose dans la mémoire globale, partagée par toutes les conversations",
+    },
+  },
+  {
+    id: "compact",
+    label: "compact",
+    auxiliaryData: {
+      description: "Résume les échanges les plus anciens dès maintenant, sans attendre que le contexte soit plein",
     },
   },
 ];
@@ -1562,6 +1570,36 @@ function App() {
     }
   }
 
+  /** /compact : force le resume des echanges les plus anciens des
+   * maintenant (POST /sessions/{id}/compact, reutilise
+   * compress_history_if_needed avec force=True cote serveur), plutot que
+   * d'attendre le declenchement automatique quand le contexte depasse
+   * MAX_CONTEXT_CHARS (voir chat_loop.py). */
+  async function handleCompactCommand() {
+    setInput("");
+    setMessages((prev) => [...prev, { kind: "user", text: COMPACT_COMMAND, time: Date.now() }]);
+
+    if (!sessionId) {
+      setMessages((prev) => [
+        ...prev,
+        { kind: "error", text: "Aucune conversation active pour l'instant.", time: Date.now() },
+      ]);
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/sessions/${sessionId}/compact`, { method: "POST" });
+      if (!res.ok) throw new Error(String(res.status));
+      const data = (await res.json()) as { result: string };
+      setMessages((prev) => [...prev, { kind: "info", text: data.result, time: Date.now() }]);
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        { kind: "error", text: "impossible de résumer cette conversation.", time: Date.now() },
+      ]);
+    }
+  }
+
   async function sendMessage(rawText: string) {
     const text = rawText.trim();
     if (
@@ -1589,6 +1627,10 @@ function App() {
     }
     if (text.toLowerCase().startsWith(REMEMBER_PREFIX)) {
       await handleRememberCommand(text);
+      return;
+    }
+    if (text === COMPACT_COMMAND) {
+      await handleCompactCommand();
       return;
     }
 

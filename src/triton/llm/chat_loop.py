@@ -213,14 +213,18 @@ def summarize(old_messages: list[ChatCompletionMessageParam]) -> str:
 
 def compress_history_if_needed(
     messages: list[ChatCompletionMessageParam],
+    force: bool = False,
 ) -> tuple[list[ChatCompletionMessageParam], str | None]:
     """Core compression logic, with no dependency on Rich (reused by the
     API). Summarizes the oldest turns if the history exceeds a threshold,
     keeping the system prompt and the most recent turns intact (so an
     assistant/tool_calls pair is never cut in the middle). Returns the
     history (unchanged or compressed) and a message to log, if compression
-    happened."""
-    if estimate_size(messages) <= MAX_CONTEXT_CHARS:
+    happened. `force=True` (the /compact command - see server.py's POST
+    /sessions/{id}/compact) skips the size check below and always
+    summarizes the oldest turns, as long as there are enough of them to
+    leave KEEP_RECENT_TURNS untouched."""
+    if not force and estimate_size(messages) <= MAX_CONTEXT_CHARS:
         return messages, None
 
     turns = turn_start_indices(messages)

@@ -107,6 +107,54 @@ def test_oversized_history_compresses_oldest_turns_only(monkeypatch):
     assert compressed[2:] == messages[3:]
 
 
+def test_force_compresses_a_small_history_that_would_otherwise_be_left_alone(monkeypatch):
+    """/compact (server.py's POST /sessions/{id}/compact) must be able to
+    summarize well under MAX_CONTEXT_CHARS - that's the whole point of
+    forcing it rather than waiting for the automatic trigger."""
+    monkeypatch.setattr(chat_loop, "log_event", lambda **_kwargs: None)
+    monkeypatch.setattr(chat_loop, "estimate_cost", lambda *_args: None)
+    monkeypatch.setattr(
+        chat_loop,
+        "call_chat",
+        lambda *_args, **_kwargs: _result(content="a short summary"),
+    )
+
+    messages = [
+        _system("system prompt"),
+        _user("turn 1"),
+        _assistant("reply 1"),
+        _user("turn 2"),
+        _assistant("reply 2"),
+        _user("turn 3"),
+        _assistant("reply 3"),
+        _user("turn 4"),
+        _assistant("reply 4"),
+    ]
+    assert chat_loop.estimate_size(messages) <= chat_loop.MAX_CONTEXT_CHARS
+
+    compressed, log_message = chat_loop.compress_history_if_needed(messages, force=True)
+
+    assert log_message == "history compressed: 2 messages summarized into 1"
+    assert compressed[1]["role"] == "system"
+    assert "a short summary" in cast(str, compressed[1]["content"])
+
+
+def test_force_still_leaves_a_short_conversation_untouched(monkeypatch):
+    """Forcing compaction on a conversation with KEEP_RECENT_TURNS turns or
+    fewer has nothing to summarize without cutting into the turns that
+    must stay intact - same floor as the automatic path."""
+
+    def _fail_if_called(*_args: object, **_kwargs: object) -> ChatResult:
+        raise AssertionError("summarize() must not run when there's nothing to compress")
+
+    monkeypatch.setattr(chat_loop, "call_chat", _fail_if_called)
+
+    messages = [_system("s"), _user("hi"), _assistant("ok")]
+    compressed, log_message = chat_loop.compress_history_if_needed(messages, force=True)
+    assert compressed == messages
+    assert log_message is None
+
+
 def test_summarize_redacts_attachments_instead_of_resending_them(monkeypatch):
     """Regression test: summarizing old turns that included an image/PDF
     used to re-send that attachment's full base64 data as part of the
