@@ -2,6 +2,8 @@
 
 A small AI agent harness built from scratch in Python, as a learning project to understand how tools like Claude Code work under the hood: the loop that turns a plain LLM into an agent capable of using tools, keeping memory, and acting safely.
 
+![Triton desktop app](docs/assets/images/homescreen.png)
+
 ## What's a harness?
 
 An LLM on its own only does one thing: take text in, give text out. It can't read a file, run a command, remember yesterday, or decide on its own when to stop.
