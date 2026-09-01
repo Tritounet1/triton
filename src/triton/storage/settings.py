@@ -57,6 +57,20 @@ def save_openrouter_api_key(key: str | None) -> None:
     _save({"openrouter_api_key": key})
 
 
+def load_tavily_api_key() -> str | None:
+    """The key entered through the Settings UI, if any - tools/web.py
+    falls back to the TAVILY_API_KEY env var (.env) when this is unset,
+    same convention as load_openrouter_api_key. Without either, web_search
+    skips Tavily entirely and goes straight to the DuckDuckGo fallback -
+    Tavily is optional, unlike the OpenRouter key."""
+    key = _load().get("tavily_api_key")
+    return key if isinstance(key, str) and key.strip() else None
+
+
+def save_tavily_api_key(key: str | None) -> None:
+    _save({"tavily_api_key": key})
+
+
 def load_role_model_overrides() -> dict[str, str]:
     """Per-role model overrides set through the Settings UI - model_roles.py's
     hardcoded ROLE_MODELS stays the fallback for any role without one."""

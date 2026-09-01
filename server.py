@@ -68,6 +68,7 @@ from triton.storage.settings import (
     save_monthly_budget,
     save_openrouter_api_key,
     save_role_model_override,
+    save_tavily_api_key,
 )
 from triton.storage.snapshots import get_snapshot
 from triton.tools import (
@@ -80,6 +81,7 @@ from triton.tools import (
     ensure_snapshot,
     invoke_tool,
     is_skipped,
+    is_tavily_configured,
     restore_snapshot,
 )
 
@@ -589,6 +591,24 @@ def get_api_key_status() -> dict[str, bool]:
 def set_api_key(body: ApiKeyUpdate) -> dict[str, bool]:
     save_openrouter_api_key(body.api_key.strip() or None)
     return {"configured": is_api_key_configured()}
+
+
+class TavilyKeyUpdate(BaseModel):
+    api_key: str
+
+
+@app.get("/settings/tavily_key", tags=["Settings"])
+def get_tavily_key_status() -> dict[str, bool]:
+    """Unlike OpenRouter's key, Tavily is optional - web_search falls back
+    to scraping DuckDuckGo when this isn't configured (see tools/web.py),
+    it's never a hard blocker like a missing OpenRouter key is."""
+    return {"configured": is_tavily_configured()}
+
+
+@app.put("/settings/tavily_key", tags=["Settings"])
+def set_tavily_key(body: TavilyKeyUpdate) -> dict[str, bool]:
+    save_tavily_api_key(body.api_key.strip() or None)
+    return {"configured": is_tavily_configured()}
 
 
 class RoleModelInfo(TypedDict):

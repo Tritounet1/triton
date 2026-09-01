@@ -44,6 +44,7 @@ from triton.tools.snapshot import (
     ensure_snapshot,
     restore_snapshot,
 )
+from triton.tools.web import is_tavily_configured
 
 __all__ = [
     "DEFAULTABLE_PATH_ARGS",
@@ -60,6 +61,7 @@ __all__ = [
     "ensure_snapshot",
     "invoke_tool",
     "is_skipped",
+    "is_tavily_configured",
     "rebuild_tools_list",
     "restore_snapshot",
 ]

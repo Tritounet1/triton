@@ -1,12 +1,26 @@
 """Reaching outside the local machine: fetching a URL and searching the
-web. No API key for either - fetch_url is a plain GET, web_search scrapes
-DuckDuckGo's no-JS HTML endpoint (see its bot-detection handling below)."""
+web. fetch_url is a plain GET, no API key. web_search tries Tavily first
+(a real search API - actual content snippets, not just a title/link) when
+a key is configured, falling back to scraping DuckDuckGo's no-JS HTML
+endpoint (no key needed, but brittle - see its own bot-detection handling
+below) whenever Tavily is unavailable, most commonly because a free-tier
+key ran out of credits."""
 
+import os
 import re
 from urllib.parse import parse_qs, unquote, urlparse
 
 import requests
+from tavily import TavilyClient
+from tavily.errors import (
+    BadRequestError,
+    ForbiddenError,
+    InvalidAPIKeyError,
+    UsageLimitExceededError,
+)
+from tavily.errors import TimeoutError as TavilyTimeoutError
 
+from triton.storage.settings import load_tavily_api_key
 from triton.tools._shared import Tool
 
 
@@ -30,7 +44,49 @@ def fetch_url(url: str) -> str:
     return text
 
 
-def web_search(query: str) -> str:
+def _effective_tavily_key() -> str | None:
+    return load_tavily_api_key() or os.getenv("TAVILY_API_KEY")
+
+
+def is_tavily_configured() -> bool:
+    """Whether web_search will try Tavily at all (Settings UI key or
+    TAVILY_API_KEY env var) - unlike is_api_key_configured() (api.py),
+    False here isn't fatal, it just means every search goes straight to
+    the DuckDuckGo fallback. Used by server.py's GET /settings/tavily_key
+    to show the same configured/not-configured badge the OpenRouter key
+    already gets."""
+    return _effective_tavily_key() is not None
+
+
+def _tavily_search(query: str, api_key: str) -> str | None:
+    """None means "unavailable right now" - web_search falls back to
+    _duckduckgo_search below rather than surfacing this as a hard error,
+    since that free fallback already exists. Never raises: a free-tier
+    Tavily key running out of credits (UsageLimitExceededError) is the
+    most likely case day to day, but any failure here degrades the same
+    way rather than taking web_search down entirely."""
+    try:
+        response = TavilyClient(api_key=api_key).search(query, max_results=8)
+    except (
+        UsageLimitExceededError,
+        InvalidAPIKeyError,
+        ForbiddenError,
+        BadRequestError,
+        TavilyTimeoutError,
+        requests.RequestException,
+    ):
+        return None
+
+    results = response.get("results") or []
+    if not results:
+        return None
+    lines = [
+        f"{r.get('title', '')}\n{r.get('url', '')}\n{r.get('content', '')}".strip() for r in results
+    ]
+    return "\n\n".join(lines)
+
+
+def _duckduckgo_search(query: str) -> str:
     # scrapes DuckDuckGo's no-JS HTML endpoint (no API key required); the
     # regex parsing is brittle to markup changes but keeps this dependency-free
     try:
@@ -74,6 +130,15 @@ def web_search(query: str) -> str:
     return "\n\n".join(lines)
 
 
+def web_search(query: str) -> str:
+    api_key = _effective_tavily_key()
+    if api_key:
+        result = _tavily_search(query, api_key)
+        if result is not None:
+            return result
+    return _duckduckgo_search(query)
+
+
 REGISTRY: dict[str, Tool] = {
     "fetch_url": Tool(
         schema={
@@ -102,7 +167,8 @@ REGISTRY: dict[str, Tool] = {
             "type": "function",
             "function": {
                 "name": "web_search",
-                "description": "Searches the web and returns the top result titles and URLs.",
+                "description": "Searches the web and returns the top results (title, URL, and "
+                "a content snippet when available).",
                 "parameters": {
                     "type": "object",
                     "properties": {
