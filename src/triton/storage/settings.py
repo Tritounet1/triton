@@ -93,3 +93,36 @@ def save_role_model_override(role: str, model: str | None) -> None:
     else:
         overrides.pop(role, None)
     _save({"role_models": overrides})
+
+
+DEFAULT_MAX_SUBTASKS = 6
+
+
+def load_max_subtasks() -> int:
+    value = _load().get("max_subtasks")
+    return value if isinstance(value, int) and value > 0 else DEFAULT_MAX_SUBTASKS
+
+
+def save_max_subtasks(value: int | None) -> None:
+    """`value=None` clears the override, falling back to
+    DEFAULT_MAX_SUBTASKS again."""
+    _save({"max_subtasks": value})
+
+
+def load_multi_agent_roles() -> list[dict[str, object]] | None:
+    """Custom multi-agent roles set through the Settings UI, or None if
+    never customized. Kept as plain JSON-safe dicts here rather than a
+    dataclass: agents/orchestrator.py's MultiAgentRole (and its
+    DEFAULT_ROLES fallback for when this is None) is what this data
+    actually models, but this storage module is a leaf every other module
+    imports from - defining the dataclass here would make orchestrator.py
+    import back from storage in a way that's fine, but having storage
+    depend on agents/ instead would be circular."""
+    roles = _load().get("multi_agent_roles")
+    return roles if isinstance(roles, list) else None
+
+
+def save_multi_agent_roles(roles: list[dict[str, object]] | None) -> None:
+    """`roles=None` clears the customization, falling back to
+    orchestrator.py's DEFAULT_ROLES again."""
+    _save({"multi_agent_roles": roles})

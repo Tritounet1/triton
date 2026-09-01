@@ -9,9 +9,16 @@ import { ChartBarIcon, CpuIcon, KeyIcon, NetworkIcon, PlugIcon, SearchIcon, XIco
 import { LogsSettings } from "./LogsSettings";
 import { McpSettings } from "./McpSettings";
 import { ModelSettings } from "./ModelSettings";
+import { MultiAgentRolesSettings } from "./MultiAgentRolesSettings";
 import { RoleModelsSettings } from "./RoleModelsSettings";
 
-type SettingsCategory = "api_key" | "model" | "role_models" | "mcp" | "logs";
+type SettingsCategory =
+  | "api_key"
+  | "model"
+  | "role_models"
+  | "multi_agent_roles"
+  | "mcp"
+  | "logs";
 
 interface CategoryDef {
   id: SettingsCategory;
@@ -22,7 +29,16 @@ interface CategoryDef {
 const CATEGORIES: CategoryDef[] = [
   { id: "api_key", label: "Clé API", icon: <KeyIcon className="h-4 w-4" /> },
   { id: "model", label: "Modèle", icon: <CpuIcon className="h-4 w-4" /> },
-  { id: "role_models", label: "Rôles multi-agent", icon: <NetworkIcon className="h-4 w-4" /> },
+  {
+    id: "multi_agent_roles",
+    label: "Rôles multi-agent",
+    icon: <NetworkIcon className="h-4 w-4" />,
+  },
+  {
+    id: "role_models",
+    label: "Rôles multi-agent (modèles)",
+    icon: <NetworkIcon className="h-4 w-4" />,
+  },
   { id: "mcp", label: "Serveurs MCP", icon: <PlugIcon className="h-4 w-4" /> },
   { id: "logs", label: "Logs & coûts", icon: <ChartBarIcon className="h-4 w-4" /> },
 ];
@@ -105,6 +121,7 @@ export function SettingsModal({ isOpen, onClose, onModelChanged }: SettingsModal
           <div key={category} className="animate-fade-in">
             {category === "api_key" && <ApiKeySettings />}
             {category === "model" && <ModelSettings onModelChanged={onModelChanged} />}
+            {category === "multi_agent_roles" && <MultiAgentRolesSettings />}
             {category === "role_models" && <RoleModelsSettings />}
             {category === "mcp" && <McpSettings />}
             {category === "logs" && <LogsSettings />}

@@ -63,10 +63,14 @@ from triton.storage.sessions import (
     set_pinned,
 )
 from triton.storage.settings import (
+    DEFAULT_MAX_SUBTASKS,
+    load_max_subtasks,
     load_monthly_budget,
     load_role_model_overrides,
+    save_max_subtasks,
     save_model,
     save_monthly_budget,
+    save_multi_agent_roles,
     save_openrouter_api_key,
     save_role_model_override,
     save_tavily_api_key,
@@ -683,6 +687,80 @@ def set_role_model(body: RoleModelUpdate) -> list[RoleModelInfo]:
         raise HTTPException(404, f"unknown role: {body.role}")
     save_role_model_override(body.role, body.model)
     return _role_models_status()
+
+
+class MaxSubtasksUpdate(BaseModel):
+    # None clears the override, falling back to DEFAULT_MAX_SUBTASKS again
+    value: int | None = None
+
+
+@app.get("/settings/max_subtasks", tags=["Settings"])
+def get_max_subtasks() -> dict[str, int]:
+    return {"value": load_max_subtasks(), "default": DEFAULT_MAX_SUBTASKS}
+
+
+@app.put("/settings/max_subtasks", tags=["Settings"])
+def set_max_subtasks(body: MaxSubtasksUpdate) -> dict[str, int]:
+    if body.value is not None and body.value < 1:
+        raise HTTPException(400, "value must be at least 1")
+    save_max_subtasks(body.value)
+    return {"value": load_max_subtasks(), "default": DEFAULT_MAX_SUBTASKS}
+
+
+class MultiAgentRoleModel(BaseModel):
+    id: str
+    label: str
+    description: str
+    can_write: bool = False
+    system_prompt: str = ""
+
+
+def _roles_status() -> list[MultiAgentRoleModel]:
+    return [
+        MultiAgentRoleModel(
+            id=r.id,
+            label=r.label,
+            description=r.description,
+            can_write=r.can_write,
+            system_prompt=r.system_prompt,
+        )
+        for r in orchestrator.load_roles()
+    ]
+
+
+@app.get("/settings/multi_agent_roles", tags=["Settings"])
+def get_multi_agent_roles() -> list[MultiAgentRoleModel]:
+    """The multi-agent orchestrator's configured role set - DEFAULT_ROLES
+    (code/research/vision/conversational) unless the Settings UI has saved
+    a custom list. Each role's `id` also keys its entry in
+    /settings/role_models (which model runs it) - see orchestrator.py's
+    MultiAgentRole docstring for what changing an id in place vs.
+    removing/adding one means for anything already referencing it."""
+    return _roles_status()
+
+
+class MultiAgentRolesUpdate(BaseModel):
+    roles: list[MultiAgentRoleModel]
+
+
+@app.put("/settings/multi_agent_roles", tags=["Settings"])
+def set_multi_agent_roles(body: MultiAgentRolesUpdate) -> list[MultiAgentRoleModel]:
+    if not body.roles:
+        raise HTTPException(400, "at least one role is required")
+    ids = [r.id.strip() for r in body.roles]
+    if any(not i for i in ids):
+        raise HTTPException(400, "every role needs a non-empty id")
+    if len(set(ids)) != len(ids):
+        raise HTTPException(400, "role ids must be unique")
+
+    save_multi_agent_roles([r.model_dump() for r in body.roles])
+    return _roles_status()
+
+
+@app.post("/settings/multi_agent_roles/reset", tags=["Settings"])
+def reset_multi_agent_roles() -> list[MultiAgentRoleModel]:
+    save_multi_agent_roles(None)
+    return _roles_status()
 
 
 # short-lived: the catalog itself barely changes minute to minute, but a

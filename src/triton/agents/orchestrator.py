@@ -58,6 +58,7 @@ from triton.storage.logs import log_event
 from triton.storage.orchestrator_runs import delete_run, load_all_runs, save_run
 from triton.storage.projects import Project, get_project
 from triton.storage.sessions import load_session, save_session, session_path
+from triton.storage.settings import load_max_subtasks, load_multi_agent_roles
 from triton.tools import WRITE_TOOL_NAMES, enforce_project_sandbox, ensure_snapshot
 
 if TYPE_CHECKING:
@@ -74,16 +75,116 @@ RunStatus = Literal["planning", "running", "done", "error"]
 # a little higher since a "code" subtask writing/testing files can
 # reasonably need more back-and-forth than pure research.
 MAX_SUBTASK_ITERATIONS = 10
-MAX_SUBTASKS = 6
+
+
+@dataclass
+class MultiAgentRole:
+    """A role the planner can tag a subtask with. The default set (code/
+    research/vision/conversational) below matches what used to be hardcoded
+    directly into the planner prompt; storage/settings.py's
+    multi_agent_roles override (Settings UI) replaces the whole set when
+    present - see load_roles(). `id` is also the key model_roles.py's
+    per-role model override (Settings > Rôles multi-agent) and
+    orchestrator_runs.py's persisted subtasks reference, so renaming an
+    existing role's id orphans any in-flight run/override still using the
+    old one - changing `label`/`description`/`can_write`/`system_prompt`
+    in place is always safe, adding or removing a role is too."""
+
+    id: str
+    label: str
+    description: str
+    # whether this role gets write_file/edit_file/delete_file/move_file/
+    # run_tests instead of the read-only tool set, when - and only when -
+    # the run is scoped to a Project (see _run_subtask). Unsupervised: see
+    # the module docstring.
+    can_write: bool = False
+    # appended verbatim to this role's subtask system prompt, after the
+    # capability line - the "custom system prompt" half of making roles
+    # configurable, empty by default (no change from the built-in roles).
+    system_prompt: str = ""
+
+
+DEFAULT_ROLES: list[MultiAgentRole] = [
+    MultiAgentRole(
+        id="code",
+        label="code",
+        description="reading, analyzing, and actually writing/editing/deleting files within "
+        "the working directory given below - use it for changes you want actually made, not "
+        "just described",
+        can_write=True,
+    ),
+    MultiAgentRole(
+        id="research",
+        label="research",
+        description="web search, reading files/URLs, gathering information",
+    ),
+    MultiAgentRole(
+        id="vision",
+        label="vision",
+        description="analyzing an image or PDF already referenced in the task",
+    ),
+    MultiAgentRole(
+        id="conversational",
+        label="conversational",
+        description="anything else - drafting text, general reasoning",
+    ),
+]
+
+
+def _role_to_dict(role: MultiAgentRole) -> dict[str, object]:
+    return {
+        "id": role.id,
+        "label": role.label,
+        "description": role.description,
+        "can_write": role.can_write,
+        "system_prompt": role.system_prompt,
+    }
+
+
+def _role_from_dict(data: dict[str, object]) -> MultiAgentRole | None:
+    role_id = data.get("id")
+    if not isinstance(role_id, str) or not role_id:
+        return None
+    label = data.get("label")
+    return MultiAgentRole(
+        id=role_id,
+        label=label if isinstance(label, str) and label else role_id,
+        description=cast(str, data.get("description") or ""),
+        can_write=bool(data.get("can_write")),
+        system_prompt=cast(str, data.get("system_prompt") or ""),
+    )
+
+
+def load_roles() -> list[MultiAgentRole]:
+    """The configured role set - DEFAULT_ROLES unless the Settings UI has
+    saved a custom list (storage/settings.py's multi_agent_roles)."""
+    raw = load_multi_agent_roles()
+    if raw is None:
+        return DEFAULT_ROLES
+    roles = [r for item in raw if isinstance(item, dict) and (r := _role_from_dict(item))]
+    return roles or DEFAULT_ROLES
+
+
+def _resolve_role(role_id: str, roles: list[MultiAgentRole]) -> MultiAgentRole:
+    """A subtask's role always names one of the roles the planner was
+    given - but the model isn't bound by that any more than it's bound by
+    a tool's JSON schema (see _shared.py's invoke_tool docstring), and a
+    role can also be deleted from the config between planning and running
+    an in-flight run's subtasks. Either way, falls back to a synthetic
+    read-only role rather than crashing - matches what already happened
+    implicitly before roles were configurable (any role name other than
+    "code" was already read-only)."""
+    for role in roles:
+        if role.id == role_id:
+            return role
+    return MultiAgentRole(id=role_id, label=role_id, description="")
+
 
 PLANNER_SYSTEM_PROMPT_TEMPLATE = (
     "You are a planning agent. Break the user's task into a small number of "
     "subtasks (as few as make sense, never more than "
-    f"{MAX_SUBTASKS}), each tagged with the role best suited to it: "
-    "'code' ({code_capability}), 'research' (web search, reading "
-    "files/URLs, gathering information), 'vision' (analyzing an image or "
-    "PDF already referenced in the task), or 'conversational' (anything "
-    "else - drafting text, general reasoning). Most subtasks should be "
+    "{max_subtasks}), each tagged with the role best suited to it: "
+    "{roles_text}. Most subtasks should be "
     "independent so they can run in parallel, but when one genuinely needs "
     "another's result before it can start (e.g. code that implements what "
     'a research subtask finds), give it a "depends_on" array with the '
@@ -97,17 +198,19 @@ PLANNER_SYSTEM_PROMPT_TEMPLATE = (
     "repeat them here)."
 )
 
-CODE_ROLE_READ_ONLY = "reading/analyzing code, suggesting changes - it cannot write files"
-CODE_ROLE_CAN_WRITE = (
-    "reading, analyzing, and actually writing/editing/deleting files "
-    "within the working directory given below - use it for changes you "
-    "want actually made, not just described"
-)
 
-
-def _planner_system_prompt(can_write_code: bool) -> str:
-    code_capability = CODE_ROLE_CAN_WRITE if can_write_code else CODE_ROLE_READ_ONLY
-    return PLANNER_SYSTEM_PROMPT_TEMPLATE.format(code_capability=code_capability)
+def _planner_system_prompt(
+    roles: list[MultiAgentRole], max_subtasks: int, project_scoped: bool
+) -> str:
+    role_descriptions: list[str] = []
+    for role in roles:
+        capability = role.description
+        if role.can_write and not project_scoped:
+            capability += " - read-only for now, no working directory is available"
+        role_descriptions.append(f"'{role.id}' ({capability})")
+    return PLANNER_SYSTEM_PROMPT_TEMPLATE.format(
+        max_subtasks=max_subtasks, roles_text=", ".join(role_descriptions)
+    )
 
 
 SUBTASK_SYSTEM_PROMPT_TEMPLATE = (
@@ -126,8 +229,8 @@ READ_ONLY_CAPABILITY_LINE = (
     "You cannot modify any files or run commands, only read, search, and browse the web."
 )
 
-CODE_WRITE_CAPABILITY_LINE = (
-    "Your role is 'code': unlike other sub-agents, you can write, edit, "
+CODE_WRITE_CAPABILITY_LINE_TEMPLATE = (
+    "Your role is '{role_id}': unlike a read-only sub-agent, you can write, edit, "
     "and delete files within your working directory, and run the test "
     "suite - but you cannot run arbitrary shell commands or make a git "
     "commit. Nothing you do goes through a human confirmation step, so be "
@@ -136,15 +239,22 @@ CODE_WRITE_CAPABILITY_LINE = (
 )
 
 
-def _subtask_system_prompt(can_write: bool) -> str:
-    capability_line = CODE_WRITE_CAPABILITY_LINE if can_write else READ_ONLY_CAPABILITY_LINE
-    return SUBTASK_SYSTEM_PROMPT_TEMPLATE.format(capability_line=capability_line)
+def _subtask_system_prompt(role: MultiAgentRole, can_write: bool) -> str:
+    capability_line = (
+        CODE_WRITE_CAPABILITY_LINE_TEMPLATE.format(role_id=role.id)
+        if can_write
+        else READ_ONLY_CAPABILITY_LINE
+    )
+    prompt = SUBTASK_SYSTEM_PROMPT_TEMPLATE.format(capability_line=capability_line)
+    if role.system_prompt:
+        prompt += f"\n\n{role.system_prompt}"
+    return prompt
 
 
-# a "code" subtask gets these instead of SUBAGENT_TOOL_NAMES only when a
-# project is scoped (see _run_subtask) - deliberately no run_shell
-# (arbitrary command execution) and no git_commit (nothing should commit
-# autonomously, unsupervised).
+# a write-capable role (role.can_write - see MultiAgentRole) gets these
+# instead of SUBAGENT_TOOL_NAMES only when a project is scoped (see
+# _run_subtask) - deliberately no run_shell (arbitrary command execution)
+# and no git_commit (nothing should commit autonomously, unsupervised).
 CODE_WRITE_TOOL_NAMES = SUBAGENT_TOOL_NAMES | {
     "write_file",
     "edit_file",
@@ -259,7 +369,7 @@ def _append_result_to_session(run: OrchestratorRun) -> None:
     save_session(path, messages)
 
 
-def _parse_plan(raw: str) -> list[dict[str, object]]:
+def _parse_plan(raw: str, max_subtasks: int) -> list[dict[str, object]]:
     # models often wrap JSON in ```json fences despite being told not to
     cleaned = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
     data = json.loads(cleaned)
@@ -267,7 +377,7 @@ def _parse_plan(raw: str) -> list[dict[str, object]]:
         raise ValueError("plan is not a JSON array")
 
     subtasks: list[dict[str, object]] = []
-    for item in data[:MAX_SUBTASKS]:
+    for item in data[:max_subtasks]:
         if not isinstance(item, dict):
             continue
         role = str(item.get("role") or "").strip() or "conversational"
@@ -322,10 +432,12 @@ def _run_subtask(
     project: Project | None,
     session_id: str | None,
     all_subtasks: list[Subtask],
+    roles: list[MultiAgentRole],
 ) -> None:
     from triton.tools import TOOLS_REGISTRY
 
-    can_write = subtask.role == "code" and project is not None
+    role = _resolve_role(subtask.role, roles)
+    can_write = role.can_write and project is not None
     tool_names = CODE_WRITE_TOOL_NAMES if can_write else SUBAGENT_TOOL_NAMES
     registry: dict[str, Tool] = {
         name: TOOLS_REGISTRY[name] for name in tool_names if name in TOOLS_REGISTRY
@@ -339,7 +451,7 @@ def _run_subtask(
         deps_report = "\n\n".join(f"[{d.role}] {d.description}\n-> {d.result}" for d in deps)
         deps_block = f"\n\nResults from the subtasks this one depends on:\n\n{deps_report}"
     messages: list[ChatCompletionMessageParam] = [
-        {"role": "system", "content": _subtask_system_prompt(can_write)},
+        {"role": "system", "content": _subtask_system_prompt(role, can_write)},
         {
             "role": "user",
             "content": f"Role: {subtask.role}{project_line}\n"
@@ -465,11 +577,19 @@ def _run_subtask(
 def _run(run: OrchestratorRun) -> None:
     project = get_project(run.project_id) if run.project_id else None
     project_context = f"\n\nWorking directory available: {project.folder_path}" if project else ""
+    # loaded once per run (not re-read mid-run): a run in flight shouldn't
+    # have its role set/cap change under it because someone edited Settings
+    # while it was running.
+    roles = load_roles()
+    max_subtasks = load_max_subtasks()
 
     try:
         plan_reply = call_chat(
             [
-                {"role": "system", "content": _planner_system_prompt(project is not None)},
+                {
+                    "role": "system",
+                    "content": _planner_system_prompt(roles, max_subtasks, project is not None),
+                },
                 {"role": "user", "content": run.task + project_context},
             ],
             model=model_for_role("orchestrator"),
@@ -487,7 +607,7 @@ def _run(run: OrchestratorRun) -> None:
         )
         if plan_reply.content is None:
             raise ValueError("planner returned no plan")
-        raw_subtasks = _parse_plan(plan_reply.content)
+        raw_subtasks = _parse_plan(plan_reply.content, max_subtasks)
     except Exception as e:
         run.status = "error"
         run.error = f"planning failed: {type(e).__name__}: {e}"
@@ -512,10 +632,12 @@ def _run(run: OrchestratorRun) -> None:
     run.status = "running"
     _persist(run)
 
-    _execute_subtasks(run, project)
+    _execute_subtasks(run, project, roles)
 
 
-def _execute_subtasks(run: OrchestratorRun, project: Project | None) -> None:
+def _execute_subtasks(
+    run: OrchestratorRun, project: Project | None, roles: list[MultiAgentRole]
+) -> None:
     """Runs every subtask that isn't already "done" (respecting dependency
     waves via _schedule_waves), then synthesizes the final answer. Reused
     both by a fresh run (every subtask starts "pending", so this is just
@@ -535,7 +657,7 @@ def _execute_subtasks(run: OrchestratorRun, project: Project | None) -> None:
         threads = [
             threading.Thread(
                 target=_run_subtask,
-                args=(s, project, run.session_id, run.subtasks),
+                args=(s, project, run.session_id, run.subtasks, roles),
                 daemon=True,
             )
             for s in wave_to_run
@@ -673,7 +795,7 @@ def _resume_one(run: OrchestratorRun) -> None:
         _run(run)
         return
     project = get_project(run.project_id) if run.project_id else None
-    _execute_subtasks(run, project)
+    _execute_subtasks(run, project, load_roles())
 
 
 def resume_incomplete_runs() -> list[str]:
