@@ -669,8 +669,18 @@ function stripWebSearchSource(result: string): string {
   return result.replace(WEB_SEARCH_SOURCE_RE, "");
 }
 
-function toolResultDetail(t: ToolMsg): ReactNode {
-  const { old_string: oldString, new_string: newString } = t.args;
+/** Shape commune a un vrai appel d'outil (ToolMsg) et a celui d'une
+ * sous-tache multi-agent (MultiAgentSubtaskToolCall) - les deux seuls
+ * appelants de toolResultDetail/toolDiffStats, qui n'utilisent rien de
+ * plus specifique que ces trois champs. */
+interface ToolCallLike {
+  tool: string;
+  args: Record<string, unknown>;
+  result: string;
+}
+
+function toolResultDetail(t: ToolCallLike): ReactNode {
+  const { old_string: oldString, new_string: newString, content } = t.args;
   if (
     t.tool === "edit_file" &&
     typeof oldString === "string" &&
@@ -678,12 +688,39 @@ function toolResultDetail(t: ToolMsg): ReactNode {
   ) {
     return <EditFileDiff oldString={oldString} newString={newString} />;
   }
+  if (t.tool === "write_file" && typeof content === "string") {
+    // pas d'"avant" fiable a afficher ici (contrairement a la preview de
+    // confirmation - voir WriteFileDiff plus haut, qui va chercher l'etat
+    // *actuel* du fichier) : cet appel appartient a l'historique, un
+    // fetch "maintenant" ne refleterait son etat juste avant CET appel que
+    // si rien ne l'a modifie depuis - pas garanti. Le nouveau contenu
+    // ecrit, lui, est un fait connu avec certitude (l'argument de l'appel).
+    return <EditFileDiff oldString="" newString={content} />;
+  }
   const result = t.tool === "web_search" ? stripWebSearchSource(t.result) : t.result;
   return (
     <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap text-xs">
       {result}
     </pre>
   );
+}
+
+/** Nombre de lignes ajoutees/retirees pour un appel d'ecriture - affiche
+ * en permanence dans la ligne (+N/-N, voir ChatToolCallItem.additions/
+ * deletions), donc visible sans avoir a deplier le detail complet du
+ * resultat (qui reste, lui, derriere un clic - voir toolResultDetail). */
+function toolDiffStats(t: ToolCallLike): { additions?: number; deletions?: number } {
+  const countLines = (s: string) => (s === "" ? 0 : s.split("\n").length);
+  if (t.tool === "edit_file") {
+    const { old_string: oldString, new_string: newString } = t.args;
+    if (typeof oldString === "string" && typeof newString === "string") {
+      return { additions: countLines(newString), deletions: countLines(oldString) };
+    }
+  }
+  if (t.tool === "write_file" && typeof t.args.content === "string") {
+    return { additions: countLines(t.args.content) };
+  }
+  return {};
 }
 
 /** Detail d'une sous-tache multi-agent : sa description, puis ses propres
@@ -698,16 +735,14 @@ function multiAgentSubtaskDetail(t: ToolMsg): ReactNode {
       )}
       {calls.length > 0 && (
         <ChatToolCalls
+          defaultIsExpanded
           calls={calls.map((c) => ({
             name: c.tool,
             status: toolCallStatus(c.result),
             node: c.tool === "web_search" ? webSearchSource(c.result) : undefined,
             target: formatArgs(c.args),
-            resultDetail: (
-              <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap text-xs">
-                {c.tool === "web_search" ? stripWebSearchSource(c.result) : c.result}
-              </pre>
-            ),
+            ...toolDiffStats(c),
+            resultDetail: toolResultDetail(c),
           }))}
         />
       )}
@@ -742,6 +777,13 @@ function App() {
     [],
   );
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // compteur plutot qu'un booleen simple : dragenter/dragleave se
+  // declenchent aussi en survolant les enfants (la liste de messages, le
+  // composer...), donc un simple "entree = true / sortie = false" clignote
+  // des qu'on traverse une frontiere d'enfant a l'interieur meme de la
+  // zone de drop. Le compteur ne retombe a 0 (masque l'overlay) qu'une
+  // fois vraiment sorti de tous les enfants imbriques.
+  const [dragDepth, setDragDepth] = useState(0);
   const [sessionId, setSessionId] = useState<string | null>(() =>
     localStorage.getItem("triton_session_id"),
   );
@@ -1189,6 +1231,18 @@ function App() {
       };
       reader.readAsDataURL(file);
     }
+  }
+
+  /** Coller une image (ex. capture d'ecran) depuis le presse-papier :
+   * e.clipboardData.files est deja une FileList native, exactement ce que
+   * handleFilesSelected attend (meme chemin que le selecteur de fichiers
+   * et le glisser-deposer) - rien de plus a faire que la lui passer. Ne
+   * touche pas au comportement par defaut quand rien de collable n'est un
+   * fichier (coller du texte normal dans le composer doit rester intact). */
+  function handlePaste(e: React.ClipboardEvent) {
+    if (e.clipboardData.files.length === 0) return;
+    e.preventDefault();
+    handleFilesSelected(e.clipboardData.files);
   }
 
   function removeAttachment(index: number) {
@@ -2279,7 +2333,34 @@ function App() {
           />
         )}
         {view === "chat" && (
-          <div className="flex h-full">
+          <div
+            className="relative flex h-full"
+            onPaste={handlePaste}
+            onDragEnter={(e) => {
+              e.preventDefault();
+              setDragDepth((d) => d + 1);
+            }}
+            onDragLeave={(e) => {
+              e.preventDefault();
+              setDragDepth((d) => Math.max(0, d - 1));
+            }}
+            onDragOver={(e) => {
+              e.preventDefault();
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragDepth(0);
+              handleFilesSelected(e.dataTransfer.files);
+            }}
+          >
+            {dragDepth > 0 && (
+              <div className="pointer-events-none absolute inset-2 z-50 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-accent bg-surface/90">
+                <FileIcon className="h-8 w-8 text-accent" />
+                <Text weight="medium" className="text-accent">
+                  Déposer pour joindre
+                </Text>
+              </div>
+            )}
             <ChatLayout
               density="spacious"
               className="h-full min-w-0 flex-1"
@@ -2499,6 +2580,7 @@ function App() {
                           <ChatToolCalls
                             key={bi}
                             className="animate-fade-in"
+                            defaultIsExpanded
                             calls={block.items.map((t) => {
                               const isSubtask = t.subtaskToolCalls !== undefined;
                               const status = t.status ?? toolCallStatus(t.result);
@@ -2517,6 +2599,7 @@ function App() {
                                   isSubtask && status === "running" && callCount > 0
                                     ? `${callCount} outil${callCount > 1 ? "s" : ""}`
                                     : undefined,
+                                ...(isSubtask ? {} : toolDiffStats(t)),
                                 resultDetail: isSubtask
                                   ? multiAgentSubtaskDetail(t)
                                   : toolResultDetail(t),

@@ -14,7 +14,8 @@
       {
         "title": "Triton",
         "width": 900,
-        "height": 700
+        "height": 700,
+        "dragDropEnabled": false
       }
     ],
     "security": {

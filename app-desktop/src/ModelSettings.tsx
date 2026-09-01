@@ -6,6 +6,7 @@ import { TextInput } from "@astryxdesign/core/TextInput";
 import { Switch } from "@astryxdesign/core/Switch";
 import { Avatar } from "@astryxdesign/core/Avatar";
 import { Table, proportional, pixel, type TableColumn } from "@astryxdesign/core/Table";
+import { Tooltip } from "@astryxdesign/core/Tooltip";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { CheckIcon, ChevronRightIcon, SearchIcon } from "./icons";
 import { familyKey, familyInfo } from "./modelFamilies";
@@ -44,6 +45,18 @@ function formatContextLength(n: number): string {
 function formatPrice(price: number): string {
   if (price === 0) return "gratuit";
   return `$${price < 1 ? price.toFixed(3) : price.toFixed(2)}`;
+}
+
+/* Fond du Tooltip toujours sombre quel que soit le theme de l'appli (voir
+ * LogsSettings.tsx's DayTooltipContent) - text-on-dark plutot que <Text>
+ * pour rester lisible dans les deux themes clair/sombre. */
+function ModelNameTooltipContent({ model }: { model: ModelInfo }) {
+  return (
+    <div className="flex max-w-xs flex-col gap-0.5 px-1 py-0.5 text-on-dark">
+      <span className="text-xs font-semibold">{model.name}</span>
+      <span className="text-[11px] opacity-80">{model.id}</span>
+    </div>
+  );
 }
 
 export function ModelSettings({ onModelChanged }: ModelSettingsProps) {
@@ -144,52 +157,63 @@ export function ModelSettings({ onModelChanged }: ModelSettingsProps) {
     {
       key: "name",
       header: "Modèle",
+      // seule colonne proportionnelle : absorbe tout l'espace restant une
+      // fois les colonnes a largeur fixe soustraites - resserrees ci-dessous
+      // pour lui en laisser davantage, la description longue d'un modele
+      // (ex. "DeepSeek: DeepSeek V4 Flash Preview (free)") ne rentrant
+      // souvent pas meme avec cette marge, d'ou le Tooltip au survol.
       width: proportional(3),
       renderCell: (m) => (
         <div className="flex min-w-0 items-center gap-2">
           {m.id === currentModel && (
             <CheckIcon className="h-4 w-4 shrink-0 text-accent" />
           )}
-          <div className="min-w-0">
-            <Text
-              size="sm"
-              weight="medium"
-              className={`block truncate ${m.id === currentModel ? "text-accent" : ""}`}
-            >
-              {m.name}
-            </Text>
-            <Text size="2xs" color="secondary" className="block truncate">
-              {m.id}
-            </Text>
-          </div>
+          <Tooltip
+            content={<ModelNameTooltipContent model={m} />}
+            placement="above"
+            alignment="start"
+          >
+            <div className="min-w-0">
+              <Text
+                size="sm"
+                weight="medium"
+                className={`block truncate ${m.id === currentModel ? "text-accent" : ""}`}
+              >
+                {m.name}
+              </Text>
+              <Text size="2xs" color="secondary" className="block truncate">
+                {m.id}
+              </Text>
+            </div>
+          </Tooltip>
         </div>
       ),
     },
     {
       key: "context",
       header: "Contexte",
-      width: pixel(90),
+      width: pixel(75),
       align: "end",
       renderCell: (m) => <Text size="sm">{formatContextLength(m.context_length)}</Text>,
     },
     {
       key: "prompt_price",
       header: "Entrée /M",
-      width: pixel(100),
+      width: pixel(85),
       align: "end",
       renderCell: (m) => <Text size="sm">{formatPrice(m.prompt_price)}</Text>,
     },
     {
       key: "completion_price",
       header: "Sortie /M",
-      width: pixel(100),
+      width: pixel(85),
       align: "end",
       renderCell: (m) => <Text size="sm">{formatPrice(m.completion_price)}</Text>,
     },
     {
       key: "tools",
       header: "Outils",
-      width: pixel(90),
+      width: pixel(70),
       align: "center",
       renderCell: (m) =>
         m.supports_tools ? (
@@ -201,7 +225,7 @@ export function ModelSettings({ onModelChanged }: ModelSettingsProps) {
     {
       key: "action",
       header: "",
-      width: pixel(110),
+      width: pixel(100),
       align: "end",
       renderCell: (m) =>
         m.id === currentModel ? (

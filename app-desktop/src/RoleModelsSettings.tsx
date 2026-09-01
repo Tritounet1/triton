@@ -123,7 +123,7 @@ export function RoleModelsSettings() {
                   onChange={(e) => {
                     void updateRole(r.role, e.target.value);
                   }}
-                  className="max-w-56 rounded-lg border border-border bg-transparent px-2 py-1.5 text-sm"
+                  className="max-w-80 rounded-lg border border-border bg-transparent px-2 py-1.5 text-sm"
                 >
                   {groupedToolModels.map(([key, list]) => (
                     <optgroup key={key} label={familyInfo(key).label}>
