@@ -36,12 +36,13 @@ def build_system_message(
 ) -> ChatCompletionMessageParam:
     """Builds the initial system message for a new conversation, scoping it
     to a project's folder when it belongs to one, and appending memory from
-    all three tiers the remember tool can write to: global (shared by
-    every conversation - see storage/memory.py, empty until something
-    populates it), project-scoped (shared by every conversation in the
-    same project - storage/projects.py), and session-scoped (private to
-    this one conversation - storage/sessions.py, only relevant without a
-    project, since a project's conversations share its memory instead)."""
+    all three tiers: global (shared by every conversation - storage/
+    memory.py, written only through the /remember global command, never by
+    the model itself), project-scoped (shared by every conversation in the
+    same project - storage/projects.py, written by the remember tool),
+    and session-scoped (private to this one conversation - storage/
+    sessions.py, written by the remember tool too, only relevant without
+    a project since a project's conversations share its memory instead)."""
     content = SYSTEM_PROMPT
     if project is not None:
         content += (

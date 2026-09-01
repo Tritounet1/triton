@@ -35,6 +35,7 @@ from triton.llm.chat_loop import (
 )
 from triton.llm.model_roles import ROLE_MODELS
 from triton.storage.logs import LOGS_FILE, current_month_cost, log_event
+from triton.storage.memory import append_global_memory
 from triton.storage.projects import (
     Project,
     create_project,
@@ -84,6 +85,7 @@ from triton.tools import (
     is_tavily_configured,
     restore_snapshot,
 )
+from triton.tools.memory import remember
 
 
 class _QuietPollingEndpoints(logging.Filter):
@@ -139,6 +141,12 @@ OPENAPI_TAGS = [
         "description": "Long-running processes started by the model (start_background_task).",
     },
     {"name": "MCP", "description": "Configured MCP servers: list, add, toggle, remove."},
+    {
+        "name": "Memory",
+        "description": "The /remember global command's write path - the session/project "
+        "tiers are written through the remember tool during a conversation instead, not a "
+        "dedicated route.",
+    },
     {"name": "Settings", "description": "Model, budget, API key, per-role model overrides."},
     {"name": "Models", "description": "The OpenRouter model catalog."},
     {"name": "Logs", "description": "Raw event log (model/tool calls) for observability."},
@@ -877,6 +885,31 @@ def get_session_cost(session_id: str) -> SessionCost:
         total_tokens=prompt_tokens + completion_tokens,
         cost_usd=round(cost_usd, 6),
     )
+
+
+class RememberRequest(BaseModel):
+    note: str
+
+
+@app.post("/sessions/{session_id}/remember", tags=["Sessions"])
+def remember_in_session(session_id: str, body: RememberRequest) -> dict[str, str]:
+    """The /remember session command's backend - reuses the remember tool
+    itself (tools/memory.py) rather than duplicating its project-vs-session
+    scoping logic, so this lands in exactly the same place a model-issued
+    remember call for this session would."""
+    path = SESSIONS_DIR / f"{session_id}.json"
+    if not path.exists():
+        raise HTTPException(404, "session not found")
+    return {"result": remember(body.note, session_id=session_id)}
+
+
+@app.post("/memory/global", tags=["Memory"])
+def remember_globally(body: RememberRequest) -> dict[str, str]:
+    """The /remember global command's backend - the only writer of
+    memory_global.md (see storage/memory.py): the remember tool itself
+    never writes here, only ever to the session/project tier."""
+    append_global_memory(body.note)
+    return {"result": f"remembered globally: {body.note.strip()}"}
 
 
 @app.get("/sessions/search", tags=["Sessions"])

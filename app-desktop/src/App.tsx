@@ -98,6 +98,9 @@ const MULTI_AGENT_POLL_INTERVAL_MS = 1500;
 const MODEL_COMMAND_PREFIX = "/model ";
 const COST_COMMAND = "/cost";
 const UNDO_COMMAND = "/undo";
+const REMEMBER_PREFIX = "/remember ";
+const REMEMBER_SESSION_PREFIX = "session ";
+const REMEMBER_GLOBAL_PREFIX = "global ";
 
 // menu declenche par "/" dans le composer (style Notion/Discord), via le
 // mecanisme de trigger deja fourni par ChatComposerInput.
@@ -128,6 +131,14 @@ const SLASH_COMMANDS: SearchableItem<{ description: string }>[] = [
     label: "undo",
     auxiliaryData: {
       description: "Restaure le dossier du projet à l'état d'avant cette session (filet de sécurité)",
+    },
+  },
+  {
+    id: "remember",
+    label: "remember",
+    auxiliaryData: {
+      description:
+        "Note quelque chose en mémoire : /remember session <note> (conversation/projet) ou /remember global <note>",
     },
   },
 ];
@@ -1441,6 +1452,100 @@ function App() {
     }
   }
 
+  /** /remember session <note> ou /remember global <note> : appelle
+   * directement le tool remember (ou l'equivalent memoire globale) sans
+   * detour par le modele - un raccourci pour noter quelque chose vite. La
+   * portee "session" suit exactement la meme logique que le tool
+   * (POST /sessions/{id}/remember la reutilise cote serveur) : memoire du
+   * projet si la conversation en a un, sinon celle de la conversation
+   * seule - jamais les deux. */
+  async function handleRememberCommand(rawCommand: string) {
+    setInput("");
+    setMessages((prev) => [...prev, { kind: "user", text: rawCommand, time: Date.now() }]);
+
+    const rest = rawCommand.slice(REMEMBER_PREFIX.length);
+    const restLower = rest.toLowerCase();
+    const isGlobal = restLower.startsWith(REMEMBER_GLOBAL_PREFIX);
+    const isSession = restLower.startsWith(REMEMBER_SESSION_PREFIX);
+    const note = isGlobal
+      ? rest.slice(REMEMBER_GLOBAL_PREFIX.length).trim()
+      : isSession
+        ? rest.slice(REMEMBER_SESSION_PREFIX.length).trim()
+        : "";
+
+    if (!isGlobal && !isSession) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          kind: "error",
+          text: "Précise la portée : /remember session <note> ou /remember global <note>",
+          time: Date.now(),
+        },
+      ]);
+      return;
+    }
+    if (!note) {
+      setMessages((prev) => [
+        ...prev,
+        { kind: "error", text: "Précise une note à retenir.", time: Date.now() },
+      ]);
+      return;
+    }
+
+    if (isGlobal) {
+      try {
+        const res = await fetch(`${API_BASE}/memory/global`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ note }),
+        });
+        if (!res.ok) throw new Error(String(res.status));
+        setMessages((prev) => [
+          ...prev,
+          { kind: "info", text: `Retenu dans la mémoire globale : ${note}`, time: Date.now() },
+        ]);
+      } catch {
+        setMessages((prev) => [
+          ...prev,
+          { kind: "error", text: "impossible d'enregistrer cette note.", time: Date.now() },
+        ]);
+      }
+      return;
+    }
+
+    if (!sessionId) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          kind: "error",
+          text: "Aucune conversation active pour l'instant - envoie d'abord un message.",
+          time: Date.now(),
+        },
+      ]);
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/sessions/${sessionId}/remember`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      const scopeLabel = activeProject
+        ? `le projet « ${activeProject.name} »`
+        : "cette conversation";
+      setMessages((prev) => [
+        ...prev,
+        { kind: "info", text: `Retenu pour ${scopeLabel} : ${note}`, time: Date.now() },
+      ]);
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        { kind: "error", text: "impossible d'enregistrer cette note.", time: Date.now() },
+      ]);
+    }
+  }
+
   async function sendMessage(rawText: string) {
     const text = rawText.trim();
     if (
@@ -1464,6 +1569,10 @@ function App() {
     }
     if (text === UNDO_COMMAND) {
       await handleUndoCommand();
+      return;
+    }
+    if (text.toLowerCase().startsWith(REMEMBER_PREFIX)) {
+      await handleRememberCommand(text);
       return;
     }
 

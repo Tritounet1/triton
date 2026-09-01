@@ -2,11 +2,11 @@
 (storage/sessions.py) and per-project memory (storage/projects.py) -
 shared across every conversation regardless of project or session scope.
 
-Scaffolding only for now: always loaded into the system prompt (see
-llm/chat_loop.py's build_system_message), but nothing writes to it yet -
-no tool exposes it, and the file doesn't need to exist (an absent file
-just means an empty global memory, same as the other two tiers). What
-populates it and how is deliberately deferred."""
+Written only through the /remember global command (server.py's POST
+/memory/global) for now, not by the model itself: the remember tool only
+ever writes to the session/project tier (see tools/memory.py) - a
+deliberate choice to keep the model from silently promoting something to
+"every conversation forever" on its own judgment."""
 
 from triton.paths import ROOT_DIR
 
@@ -17,3 +17,8 @@ def load_global_memory() -> str:
     if not GLOBAL_MEMORY_FILE.exists():
         return ""
     return GLOBAL_MEMORY_FILE.read_text().strip()
+
+
+def append_global_memory(note: str) -> None:
+    with GLOBAL_MEMORY_FILE.open("a", encoding="utf-8") as f:
+        f.write(f"- {note.strip()}\n")
