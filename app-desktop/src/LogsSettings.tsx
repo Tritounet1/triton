@@ -6,6 +6,7 @@ import { Button } from "@astryxdesign/core/Button";
 import { IconButton } from "@astryxdesign/core/IconButton";
 import { NumberInput } from "@astryxdesign/core/NumberInput";
 import { Table, proportional, pixel, type TableColumn } from "@astryxdesign/core/Table";
+import { Tooltip } from "@astryxdesign/core/Tooltip";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { RefreshIcon } from "./icons";
 import { formatArgs, formatDuration } from "./format";
@@ -101,6 +102,7 @@ function StatTile({ label, value }: StatTileProps) {
 
 const CHART_DAYS = 14;
 const CHART_HEIGHT_PX = 140;
+const VISIBLE_ROWS = 25;
 
 interface DayStats {
   date: string;
@@ -156,10 +158,29 @@ interface DailyBarChartProps {
   days: DayStats[];
   title: string;
   getValue: (d: DayStats) => number;
-  formatValue: (v: number) => string;
 }
 
-function DailyBarChart({ days, title, getValue, formatValue }: DailyBarChartProps) {
+/** Contenu du survol d'une barre : tokens ET coût ensemble, quel que soit
+ * le graphique survolé (celui des tokens ou celui du coût) - une seule
+ * des deux valeurs ne suffit pas a repondre a "qu'est-ce qui a coute cher
+ * ce jour-la", il faut les deux d'un coup d'oeil. */
+function DayTooltipContent({ d }: { d: DayStats }) {
+  return (
+    <div className="flex flex-col gap-0.5 px-1 py-0.5">
+      <Text size="xsm" weight="semibold">
+        {formatDayLabel(d.date)}
+      </Text>
+      <Text size="2xs" color="secondary">
+        {d.tokens.toLocaleString("fr-FR")} tokens
+      </Text>
+      <Text size="2xs" color="secondary">
+        {formatCost(d.cost)}
+      </Text>
+    </div>
+  );
+}
+
+function DailyBarChart({ days, title, getValue }: DailyBarChartProps) {
   if (days.length === 0) return null;
   const max = Math.max(1, ...days.map(getValue));
 
@@ -172,12 +193,12 @@ function DailyBarChart({ days, title, getValue, formatValue }: DailyBarChartProp
         {days.map((d) => {
           const value = getValue(d);
           return (
-            <div
-              key={d.date}
-              title={`${formatDayLabel(d.date)} : ${formatValue(value)}`}
-              className="flex-1 rounded-t bg-accent transition-[height] hover:opacity-80"
-              style={{ height: `${Math.max(value > 0 ? 3 : 0, (value / max) * 100)}%` }}
-            />
+            <Tooltip key={d.date} content={<DayTooltipContent d={d} />}>
+              <div
+                className="flex-1 rounded-t bg-accent transition-[height] hover:opacity-80"
+                style={{ height: `${Math.max(value > 0 ? 3 : 0, (value / max) * 100)}%` }}
+              />
+            </Tooltip>
           );
         })}
       </div>
@@ -198,6 +219,12 @@ export function LogsSettings() {
   const [budget, setBudget] = useState<number | null>(null);
   const [budgetInput, setBudgetInput] = useState<number | null>(null);
   const [savingBudget, setSavingBudget] = useState(false);
+  // les deux tableaux peuvent vite compter des centaines de lignes - repliés
+  // aux VISIBLE_ROWS plus recents par defaut (deja l'ordre du plus recent
+  // au plus ancien, voir /logs cote serveur), avec un bouton pour tout
+  // afficher plutot que de tronquer sans echappatoire.
+  const [showAllModelCalls, setShowAllModelCalls] = useState(false);
+  const [showAllToolCalls, setShowAllToolCalls] = useState(false);
 
   // n'appelle jamais setLoading() de facon synchrone (seulement dans les
   // callbacks .then()/.catch()/.finally()), pour pouvoir etre utilisee
@@ -256,6 +283,8 @@ export function LogsSettings() {
   const modelCalls = useMemo(() => events.filter(isModelCall), [events]);
   const subagentModelCalls = useMemo(() => events.filter(isSubagentModelCall), [events]);
   const toolCalls = useMemo(() => events.filter(isToolCall), [events]);
+  const visibleModelCalls = showAllModelCalls ? modelCalls : modelCalls.slice(0, VISIBLE_ROWS);
+  const visibleToolCalls = showAllToolCalls ? toolCalls : toolCalls.slice(0, VISIBLE_ROWS);
   const costEvents = useMemo(
     () => [...modelCalls, ...subagentModelCalls],
     [modelCalls, subagentModelCalls],
@@ -413,18 +442,8 @@ export function LogsSettings() {
           </div>
 
           <div className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-2">
-            <DailyBarChart
-              days={days}
-              title="Tokens consommés par jour"
-              getValue={(d) => d.tokens}
-              formatValue={(v) => `${v.toLocaleString("fr-FR")} tokens`}
-            />
-            <DailyBarChart
-              days={days}
-              title="Coût par jour"
-              getValue={(d) => d.cost}
-              formatValue={formatCost}
-            />
+            <DailyBarChart days={days} title="Tokens consommés par jour" getValue={(d) => d.tokens} />
+            <DailyBarChart days={days} title="Coût par jour" getValue={(d) => d.cost} />
           </div>
 
           <div className="mb-8 flex items-end gap-3 rounded-xl border border-border bg-surface px-4 py-3">
@@ -449,18 +468,42 @@ export function LogsSettings() {
             </Text>
           </div>
 
-          <Text size="sm" weight="semibold" className="mb-2 block">
-            Appels au modèle
-          </Text>
+          <div className="mb-2 flex items-center justify-between">
+            <Text size="sm" weight="semibold">
+              Appels au modèle
+            </Text>
+            {modelCalls.length > VISIBLE_ROWS && (
+              <Button
+                label={showAllModelCalls ? "Réduire" : `Tout afficher (${modelCalls.length})`}
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setShowAllModelCalls((v) => !v);
+                }}
+              />
+            )}
+          </div>
           <div className="mb-8 overflow-hidden rounded-xl border border-border">
-            <Table data={modelCalls} columns={modelColumns} density="compact" hasHover />
+            <Table data={visibleModelCalls} columns={modelColumns} density="compact" hasHover />
           </div>
 
-          <Text size="sm" weight="semibold" className="mb-2 block">
-            Appels d'outils
-          </Text>
+          <div className="mb-2 flex items-center justify-between">
+            <Text size="sm" weight="semibold">
+              Appels d'outils
+            </Text>
+            {toolCalls.length > VISIBLE_ROWS && (
+              <Button
+                label={showAllToolCalls ? "Réduire" : `Tout afficher (${toolCalls.length})`}
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setShowAllToolCalls((v) => !v);
+                }}
+              />
+            )}
+          </div>
           <div className="overflow-hidden rounded-xl border border-border">
-            <Table data={toolCalls} columns={toolColumns} density="compact" hasHover />
+            <Table data={visibleToolCalls} columns={toolColumns} density="compact" hasHover />
           </div>
         </>
       )}
