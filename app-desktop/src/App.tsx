@@ -14,6 +14,7 @@ import {
     ChatMessageMetadata,
     ChatSystemMessage,
     ChatToolCalls,
+    type ChatComposerToken,
     type ChatComposerTrigger,
 } from "@astryxdesign/core/Chat";
 import { DropdownMenu } from "@astryxdesign/core/DropdownMenu";
@@ -134,11 +135,17 @@ const SLASH_COMMANDS: SearchableItem<{ description: string }>[] = [
     },
   },
   {
-    id: "remember",
-    label: "remember",
+    id: "remember-session",
+    label: "remember session",
     auxiliaryData: {
-      description:
-        "Note quelque chose en mémoire : /remember session <note> (conversation/projet) ou /remember global <note>",
+      description: "Note quelque chose pour cette conversation (ou son projet, si elle en a un)",
+    },
+  },
+  {
+    id: "remember-global",
+    label: "remember global",
+    auxiliaryData: {
+      description: "Note quelque chose dans la mémoire globale, partagée par toutes les conversations",
     },
   },
 ];
@@ -151,7 +158,16 @@ const composerTriggers: ChatComposerTrigger[] = [
     searchSource: slashCommandSource,
     menuLabel: "Commandes",
     emptySearchResultsText: "Aucune commande",
-    onSelect: (item) => `/${item.label} `,
+    // un jeton (puce) plutot qu'un texte brut : la commande se distingue
+    // visuellement de ce qui suit (le texte tape ensuite reste normal,
+    // hors du jeton) - `value` est ce qui finit dans le message envoye,
+    // identique a l'ancien texte brut inséré, donc le parsing de
+    // sendMessage (prefixes /model, /remember session, etc.) ne change pas.
+    onSelect: (item): ChatComposerToken => ({
+      value: `/${item.label} `,
+      label: `/${item.label}`,
+      variant: "neutral",
+    }),
     renderItem: (item) => {
       const description = (item as SearchableItem<{ description: string }>).auxiliaryData
         ?.description;
