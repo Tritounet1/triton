@@ -309,6 +309,12 @@ class OrchestratorRun:
     created_at: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
     project_id: str | None = None
     session_id: str | None = None
+    # the turn (nth user message in the session, 1-based) this run's task
+    # was dispatched from - the "code" subtask role's writes (see
+    # _run_subtask) snapshot under this turn, same convention a normal
+    # conversation's own writes use (server.py's run_chat_stream), so an
+    # orchestrator run's changes get their own restore point.
+    turn_index: int = 1
 
 
 RUNS: dict[str, OrchestratorRun] = {}
@@ -431,6 +437,7 @@ def _run_subtask(
     subtask: Subtask,
     project: Project | None,
     session_id: str | None,
+    turn_index: int,
     all_subtasks: list[Subtask],
     roles: list[MultiAgentRole],
 ) -> None:
@@ -523,7 +530,7 @@ def _run_subtask(
                                 # module docstring) - the snapshot taken
                                 # here is the only safety net a "code"
                                 # subtask's writes get at all
-                                ensure_snapshot(project, session_id)
+                                ensure_snapshot(project, session_id, turn_index)
                             try:
                                 result = tool.fn(**args)
                             except TypeError as e:
@@ -657,7 +664,7 @@ def _execute_subtasks(
         threads = [
             threading.Thread(
                 target=_run_subtask,
-                args=(s, project, run.session_id, run.subtasks, roles),
+                args=(s, project, run.session_id, run.turn_index, run.subtasks, roles),
                 daemon=True,
             )
             for s in wave_to_run
@@ -746,6 +753,7 @@ def _run_to_dict(run: OrchestratorRun) -> dict[str, object]:
         "created_at": run.created_at,
         "project_id": run.project_id,
         "session_id": run.session_id,
+        "turn_index": run.turn_index,
     }
 
 
@@ -760,6 +768,7 @@ def _run_from_dict(data: dict[str, object]) -> OrchestratorRun:
         created_at=cast(str, data["created_at"]),
         project_id=cast("str | None", data.get("project_id")),
         session_id=cast("str | None", data.get("session_id")),
+        turn_index=cast(int, data.get("turn_index") or 1),
     )
 
 
@@ -771,11 +780,22 @@ def _forget(run_id: str) -> None:
     delete_run(run_id)
 
 
-def dispatch(task: str, project_id: str | None = None, session_id: str | None = None) -> str:
+def dispatch(
+    task: str, project_id: str | None = None, session_id: str | None = None, turn_index: int = 1
+) -> str:
     """Starts a multi-agent run in a background thread and returns its id
-    immediately, without waiting for it to finish."""
+    immediately, without waiting for it to finish. `turn_index` (the nth
+    user message in the session, 1-based - server.py's dispatch_orchestrator
+    computes it the same way run_chat_stream does for a normal turn) is
+    what a write-capable subtask's own snapshot uses (see _run_subtask),
+    so this run's changes get their own restore point rather than being
+    silently folded into whatever turn_index happened to default to."""
     run = OrchestratorRun(
-        id=uuid.uuid4().hex[:8], task=task, project_id=project_id, session_id=session_id
+        id=uuid.uuid4().hex[:8],
+        task=task,
+        project_id=project_id,
+        session_id=session_id,
+        turn_index=turn_index,
     )
     RUNS[run.id] = run
     _persist(run)

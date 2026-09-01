@@ -1,20 +1,46 @@
 const API_BASE = "http://127.0.0.1:8000";
 
+export interface SnapshotPoint {
+  turn_index: number;
+  kind: "git" | "copy";
+  created_at: string;
+  message_preview: string | null;
+}
+
 export interface SnapshotDiff {
   created: string[];
   deleted: string[];
   modified: string[];
 }
 
-/** GET /sessions/{id}/snapshot/diff - what restoring this session's
- * snapshot would actually change. Used to enrich the restore
- * confirmation (see SnapshotSection.tsx and App.tsx's /undo flow) right
- * before the user commits to it - null on any failure (no snapshot,
- * project deleted, ...), the confirmation still works without it, just
- * without the extra detail. */
-export async function fetchSnapshotDiff(sessionId: string): Promise<SnapshotDiff | null> {
+/** GET /sessions/{id}/snapshots - every restore point this session has
+ * (one per turn whose first write triggered a snapshot, oldest first) -
+ * empty when there's none, never a 404. Used by SnapshotSection.tsx (the
+ * file panel banner) and App.tsx's /undo command to decide whether to
+ * offer a restore action at all, and which turn(s) to offer. */
+export async function fetchSnapshotPoints(sessionId: string): Promise<SnapshotPoint[]> {
   try {
-    const r = await fetch(`${API_BASE}/sessions/${sessionId}/snapshot/diff`);
+    const r = await fetch(`${API_BASE}/sessions/${sessionId}/snapshots`);
+    if (!r.ok) return [];
+    return (await r.json()) as SnapshotPoint[];
+  } catch {
+    return [];
+  }
+}
+
+/** GET /sessions/{id}/snapshot/diff?turn_index=N - what restoring to
+ * that specific turn's snapshot would actually change. Used to enrich
+ * the restore confirmation right before the user commits to it - null
+ * on any failure (no snapshot for that turn, project deleted, ...), the
+ * confirmation still works without it, just without the extra detail. */
+export async function fetchSnapshotDiff(
+  sessionId: string,
+  turnIndex: number,
+): Promise<SnapshotDiff | null> {
+  try {
+    const r = await fetch(
+      `${API_BASE}/sessions/${sessionId}/snapshot/diff?turn_index=${turnIndex}`,
+    );
     if (!r.ok) return null;
     return (await r.json()) as SnapshotDiff;
   } catch {

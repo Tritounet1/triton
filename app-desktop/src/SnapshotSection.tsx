@@ -2,14 +2,15 @@ import { useEffect, useState } from "react";
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Button } from "@astryxdesign/core/Button";
 import { Text } from "@astryxdesign/core/Text";
-import { describeSnapshotDiff, fetchSnapshotDiff, type SnapshotDiff } from "./snapshotDiff";
+import {
+  describeSnapshotDiff,
+  fetchSnapshotDiff,
+  fetchSnapshotPoints,
+  type SnapshotDiff,
+  type SnapshotPoint,
+} from "./snapshotDiff";
 
 const API_BASE = "http://127.0.0.1:8000";
-
-interface SnapshotInfo {
-  kind: "git" | "copy";
-  created_at: string;
-}
 
 interface SnapshotSectionProps {
   sessionId: string | null;
@@ -19,13 +20,16 @@ interface SnapshotSectionProps {
 }
 
 /** Filet de securite ecriture (voir triton/tools/snapshot.py cote backend) :
- * si cette session a deja ecrit dans le projet, un instantane du dossier a
- * ete pris juste avant sa toute premiere ecriture - ce bandeau permet d'y
- * revenir en un clic, derriere une confirmation (action irreversible). Ne
- * s'affiche pas tant qu'aucune ecriture n'a eu lieu dans cette session. */
+ * un instantane est pris avant la premiere ecriture de chaque tour de
+ * conversation (pas plus qu'une fois par tour), donc une session qui a
+ * ecrit dans plusieurs tours a plusieurs points de restauration - ce
+ * bandeau propose "annuler le dernier message" en plus de "annuler toute
+ * la session" quand il y en a plus d'un, ou un simple "Restaurer" s'il
+ * n'y en a qu'un. Ne s'affiche pas tant qu'aucune ecriture n'a eu lieu
+ * dans cette session. */
 export function SnapshotSection({ sessionId, onRestored }: SnapshotSectionProps) {
-  const [snapshot, setSnapshot] = useState<SnapshotInfo | null>(null);
-  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [points, setPoints] = useState<SnapshotPoint[]>([]);
+  const [restoreTarget, setRestoreTarget] = useState<SnapshotPoint | null>(null);
   const [restoring, setRestoring] = useState(false);
   // charge en arriere-plan des l'ouverture de la confirmation, pas au
   // montage du composant : c'est un vrai travail cote serveur (git diff,
@@ -33,34 +37,38 @@ export function SnapshotSection({ sessionId, onRestored }: SnapshotSectionProps)
   // qui n'a de sens que juste avant que l'utilisateur ne s'engage vraiment.
   const [diff, setDiff] = useState<SnapshotDiff | null>(null);
 
-  // pas d'appel synchrone a setSnapshot() ici (seulement dans les
+  // pas d'appel synchrone a setPoints() ici (seulement dans les
   // callbacks) : react-hooks (set-state-in-effect) interdit setState
   // synchrone dans un effet - voir McpSettings.tsx pour le meme
   // garde-fou. Sans sessionId, la garde de rendu plus bas (!sessionId ||
-  // !snapshot) masque deja le bandeau, pas besoin de vider l'etat ici.
-  // Consequence acceptee : au changement de sessionId, un ancien snapshot
-  // encore en etat peut brievement rester affiche le temps que la requete
-  // reponde, avant d'etre remplace ou retire par le .then()/.catch().
+  // points.length === 0) masque deja le bandeau, pas besoin de vider
+  // l'etat ici. Consequence acceptee : au changement de sessionId, une
+  // ancienne liste encore en etat peut brievement rester affichee le
+  // temps que la requete reponde, avant d'etre remplacee.
   useEffect(() => {
     if (!sessionId) return;
-    fetch(`${API_BASE}/sessions/${sessionId}/snapshot`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((data: SnapshotInfo) => {
-        setSnapshot(data);
-      })
-      .catch(() => {
-        setSnapshot(null);
-      });
+    void fetchSnapshotPoints(sessionId).then(setPoints);
   }, [sessionId]);
 
+  function openConfirm(target: SnapshotPoint) {
+    setDiff(null);
+    setRestoreTarget(target);
+    if (sessionId) {
+      void fetchSnapshotDiff(sessionId, target.turn_index).then(setDiff);
+    }
+  }
+
   async function restore() {
+    if (!sessionId || !restoreTarget) return;
     setRestoring(true);
     try {
       const r = await fetch(`${API_BASE}/sessions/${sessionId}/snapshot/restore`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ turn_index: restoreTarget.turn_index }),
       });
       if (r.ok) {
-        setConfirmOpen(false);
+        setRestoreTarget(null);
         onRestored();
       }
     } finally {
@@ -68,7 +76,15 @@ export function SnapshotSection({ sessionId, onRestored }: SnapshotSectionProps)
     }
   }
 
-  if (!sessionId || !snapshot) return null;
+  if (!sessionId || points.length === 0) return null;
+
+  const oldest = points[0];
+  const newest = points[points.length - 1];
+  // both guaranteed defined by points.length === 0 already returning
+  // above - narrows for TS's noUncheckedIndexedAccess without a
+  // non-null assertion (forbidden by this project's eslint config)
+  if (!oldest || !newest) return null;
+  const hasMultiplePoints = oldest.turn_index !== newest.turn_index;
 
   return (
     <>
@@ -77,26 +93,59 @@ export function SnapshotSection({ sessionId, onRestored }: SnapshotSectionProps)
           <Text size="sm" color="secondary" className="min-w-0 flex-1">
             Filet de sécurité actif pour cette session
           </Text>
-          <Button
-            label="Restaurer"
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              setDiff(null);
-              setConfirmOpen(true);
-              void fetchSnapshotDiff(sessionId).then(setDiff);
-            }}
-          >
-            Restaurer
-          </Button>
+          {hasMultiplePoints ? (
+            <>
+              <Button
+                label="Annuler le dernier message"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  openConfirm(newest);
+                }}
+              >
+                Dernier message
+              </Button>
+              <Button
+                label="Annuler toute la session"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  openConfirm(oldest);
+                }}
+              >
+                Toute la session
+              </Button>
+            </>
+          ) : (
+            <Button
+              label="Restaurer"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                openConfirm(oldest);
+              }}
+            >
+              Restaurer
+            </Button>
+          )}
         </div>
       </div>
 
       <AlertDialog
-        isOpen={confirmOpen}
-        onOpenChange={setConfirmOpen}
-        title="Restaurer l'état d'avant cette session ?"
-        description={`Annule tous les fichiers créés, modifiés ou supprimés par cette conversation dans le dossier du projet, en revenant à l'état capturé juste avant sa première écriture. Cette action est irréversible.${describeSnapshotDiff(diff)}`}
+        isOpen={restoreTarget !== null}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) setRestoreTarget(null);
+        }}
+        title={
+          restoreTarget?.turn_index === oldest.turn_index
+            ? "Restaurer l'état d'avant cette session ?"
+            : "Annuler le dernier message ?"
+        }
+        description={`${
+          restoreTarget?.turn_index === oldest.turn_index
+            ? "Annule tous les fichiers créés, modifiés ou supprimés par cette conversation dans le dossier du projet, en revenant à l'état capturé juste avant sa première écriture."
+            : "Annule les fichiers créés, modifiés ou supprimés depuis le dernier message écrit dans le dossier du projet."
+        } Cette action est irréversible.${describeSnapshotDiff(diff)}`}
         actionLabel="Restaurer"
         isActionLoading={restoring}
         onAction={() => {

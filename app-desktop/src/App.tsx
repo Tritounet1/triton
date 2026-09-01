@@ -74,7 +74,13 @@ import { ProjectFilePanel } from "./ProjectFilePanel";
 import { SearchPage } from "./SearchPage";
 import { SettingsModal } from "./SettingsModal";
 import { parseSSE } from "./sse";
-import { describeSnapshotDiff, fetchSnapshotDiff, type SnapshotDiff } from "./snapshotDiff";
+import {
+  describeSnapshotDiff,
+  fetchSnapshotDiff,
+  fetchSnapshotPoints,
+  type SnapshotDiff,
+  type SnapshotPoint,
+} from "./snapshotDiff";
 import { SubagentsPanel } from "./SubagentsPanel";
 import { TaskView } from "./TaskView";
 
@@ -877,8 +883,11 @@ function App() {
   const [deletingProject, setDeletingProject] = useState<Project | null>(null);
   // confirmation pour la commande /undo (voir handleUndoCommand) - meme
   // AlertDialog que les suppressions ci-dessus, action destructrice donc
-  // pas de raccourci sans confirmation meme depuis le composer.
-  const [undoConfirmOpen, setUndoConfirmOpen] = useState(false);
+  // pas de raccourci sans confirmation meme depuis le composer. /undo
+  // cible toujours le point de restauration le plus recent (annuler le
+  // dernier message) - "annuler toute la session" reste une action du
+  // panneau fichiers (SnapshotSection.tsx), pas de la commande texte.
+  const [undoTarget, setUndoTarget] = useState<SnapshotPoint | null>(null);
   const [undoing, setUndoing] = useState(false);
   // meme diff que SnapshotSection.tsx pour la meme confirmation - chargee
   // des l'ouverture, pas au montage (voir snapshotDiff.ts).
@@ -1567,8 +1576,8 @@ function App() {
       return;
     }
 
-    const res = await fetch(`${API_BASE}/sessions/${sessionId}/snapshot`);
-    if (!res.ok) {
+    const points = await fetchSnapshotPoints(sessionId);
+    if (points.length === 0) {
       setMessages((prev) => [
         ...prev,
         {
@@ -1579,24 +1588,31 @@ function App() {
       ]);
       return;
     }
+    const target = points[points.length - 1];
+    // guaranteed defined by points.length === 0 already returning above -
+    // narrows for TS's noUncheckedIndexedAccess without a non-null
+    // assertion (forbidden by this project's eslint config)
+    if (!target) return;
     setUndoDiff(null);
-    setUndoConfirmOpen(true);
-    void fetchSnapshotDiff(sessionId).then(setUndoDiff);
+    setUndoTarget(target);
+    void fetchSnapshotDiff(sessionId, target.turn_index).then(setUndoDiff);
   }
 
   async function confirmUndo() {
-    if (!sessionId) return;
+    if (!sessionId || !undoTarget) return;
     setUndoing(true);
     try {
       const res = await fetch(`${API_BASE}/sessions/${sessionId}/snapshot/restore`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ turn_index: undoTarget.turn_index }),
       });
       setMessages((prev) => [
         ...prev,
         res.ok
           ? {
               kind: "info",
-              text: "Filet de sécurité restauré : le dossier du projet est revenu à l'état d'avant cette session.",
+              text: "Filet de sécurité restauré : le dossier du projet est revenu à l'état d'avant le dernier message.",
               time: Date.now(),
             }
           : {
@@ -1608,7 +1624,7 @@ function App() {
       setFileRefreshTick((t) => t + 1);
     } finally {
       setUndoing(false);
-      setUndoConfirmOpen(false);
+      setUndoTarget(null);
     }
   }
 
@@ -2867,12 +2883,12 @@ function App() {
       />
 
       <AlertDialog
-        isOpen={undoConfirmOpen}
+        isOpen={undoTarget !== null}
         onOpenChange={(isOpen) => {
-          if (!isOpen) setUndoConfirmOpen(false);
+          if (!isOpen) setUndoTarget(null);
         }}
-        title="Restaurer l'état d'avant cette session ?"
-        description={`Annule tous les fichiers créés, modifiés ou supprimés par cette conversation dans le dossier du projet, en revenant à l'état capturé juste avant sa première écriture. Cette action est irréversible.${describeSnapshotDiff(undoDiff)}`}
+        title="Annuler le dernier message ?"
+        description={`Annule les fichiers créés, modifiés ou supprimés depuis le dernier message écrit dans le dossier du projet. Cette action est irréversible.${describeSnapshotDiff(undoDiff)}`}
         actionLabel="Restaurer"
         isActionLoading={undoing}
         onAction={() => {

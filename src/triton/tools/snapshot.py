@@ -1,15 +1,16 @@
 """Automatic safety net for the write tools (write_file/edit_file/
-delete_file/move_file/git_commit): the first time one of them is about to
-run in a project-scoped session, the project folder's current state is
-captured -
-a dangling git commit if the folder is a git repo, or a plain recursive
-copy otherwise (see the module docstring's two halves below) - so the
-whole session's writes can be undone in one action later via
-restore_snapshot(), no matter how many individual edits happened along
-the way. One snapshot per session (ensure_snapshot is a no-op once a
-record exists for that session_id), taken lazily on the first write
-rather than eagerly when a project is opened, since most sessions never
-write anything.
+delete_file/move_file/git_commit): the first time one is about to run in
+a given turn of a project-scoped session, that turn's starting state is
+captured - a dangling git commit if the folder is a git repo, or a plain
+recursive copy otherwise (see the module docstring's two halves below).
+One snapshot per (session, turn) - ensure_snapshot is a no-op once a
+record exists for that specific turn_index, taken lazily on the first
+write of the turn rather than eagerly, since most turns never write
+anything - so a session accumulates one restore point per turn that
+actually wrote something, letting a restore target either "undo the last
+turn" or "undo everything back to the first write" (see
+storage/snapshots.py's list_snapshots), not only the latter like before
+turns were tracked individually.
 
 Used from both server.py (normal conversation, behind the existing
 per-call confirmation) and agents/orchestrator.py (the unsupervised
@@ -24,8 +25,9 @@ Instead this builds the tree by hand in a scratch index (GIT_INDEX_FILE
 pointed at a throwaway path): `git add -A` there stages tracked and
 untracked content into *that* index only, never touching the repo's real
 index or working tree, then `write-tree`/`commit-tree` turn it into a
-real (if unreachable) commit object. A ref under refs/triton/snapshots/
-keeps that commit from being garbage-collected."""
+real (if unreachable) commit object. A ref under
+refs/triton/snapshots/<session_id>/<turn_index> keeps that commit from
+being garbage-collected."""
 
 import os
 import shutil
@@ -34,12 +36,19 @@ import tempfile
 import threading
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from triton.paths import ROOT_DIR
 from triton.storage.projects import Project, get_project
-from triton.storage.snapshots import Snapshot, delete_snapshot, get_snapshot, save_snapshot
+from triton.storage.snapshots import (
+    Snapshot,
+    delete_expired_snapshots,
+    delete_snapshots_for_project,
+    delete_snapshots_for_session,
+    get_snapshot,
+    save_snapshot,
+)
 
 # git_commit is included even though it doesn't touch the working tree
 # itself: it still changes the repo's state (a new commit on the current
@@ -78,7 +87,11 @@ def _is_git_repo(root: Path) -> bool:
     return (root / ".git").exists()
 
 
-def _take_git_snapshot(root: Path, session_id: str) -> str | None:
+def _snapshot_ref(session_id: str, turn_index: int) -> str:
+    return f"refs/triton/snapshots/{session_id}/{turn_index}"
+
+
+def _take_git_snapshot(root: Path, session_id: str, turn_index: int) -> str | None:
     """Builds a commit representing the working tree's current state
     (tracked changes + untracked files, respecting .gitignore, exactly
     what `git add -A` would stage) without touching the repo's real index
@@ -108,7 +121,7 @@ def _take_git_snapshot(root: Path, session_id: str) -> str | None:
             return None
         commit_sha = commit.stdout.strip()
 
-        ref = _git(["update-ref", f"refs/triton/snapshots/{session_id}", commit_sha], root)
+        ref = _git(["update-ref", _snapshot_ref(session_id, turn_index), commit_sha], root)
         if ref.returncode != 0:
             return None
         return commit_sha
@@ -116,8 +129,8 @@ def _take_git_snapshot(root: Path, session_id: str) -> str | None:
         scratch_index.unlink(missing_ok=True)
 
 
-def _take_copy_snapshot(root: Path, session_id: str) -> str:
-    backup_dir = BACKUP_ROOT / session_id
+def _take_copy_snapshot(root: Path, session_id: str, turn_index: int) -> str:
+    backup_dir = BACKUP_ROOT / session_id / str(turn_index)
     if backup_dir.exists():
         shutil.rmtree(backup_dir)
     backup_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -125,23 +138,24 @@ def _take_copy_snapshot(root: Path, session_id: str) -> str:
     return str(backup_dir)
 
 
-def ensure_snapshot(project: Project | None, session_id: str) -> bool:
-    """Takes a snapshot of the project folder if this session hasn't had
-    one yet. Silently does nothing without a project, for a session that
-    already has a snapshot, or if the snapshot attempt itself fails (a
-    missing/broken git binary shouldn't block the write the model was
-    actually trying to make - this is a best-effort safety net, not a
-    precondition for writing). Returns whether a snapshot was actually
-    just taken by this call - server.py's run_chat_stream uses this to
-    surface a one-time "safety net is now active" notice in the
-    conversation itself instead of only in the project file panel (see
-    SnapshotSection.tsx), which required knowing the feature existed at
-    all to go find it."""
+def ensure_snapshot(project: Project | None, session_id: str, turn_index: int) -> bool:
+    """Takes a snapshot of the project folder if this turn hasn't had one
+    yet (turn_index: the nth user message in this session, 1-based - see
+    server.py's run_chat_stream). Silently does nothing without a
+    project, for a turn that already has a snapshot, or if the snapshot
+    attempt itself fails (a missing/broken git binary shouldn't block the
+    write the model was actually trying to make - this is a best-effort
+    safety net, not a precondition for writing). Returns whether a
+    snapshot was actually just taken by this call - server.py's
+    run_chat_stream uses this to surface a one-time "safety net is now
+    active [for this turn]" notice in the conversation itself instead of
+    only in the project file panel (see SnapshotSection.tsx), which
+    required knowing the feature existed at all to go find it."""
     if project is None:
         return False
 
     with _LOCK:
-        if get_snapshot(session_id) is not None:
+        if get_snapshot(session_id, turn_index) is not None:
             return False
 
         root = Path(project.folder_path).resolve()
@@ -150,7 +164,7 @@ def ensure_snapshot(project: Project | None, session_id: str) -> bool:
 
         try:
             if _is_git_repo(root):
-                sha = _take_git_snapshot(root, session_id)
+                sha = _take_git_snapshot(root, session_id, turn_index)
                 if sha is None:
                     return False
                 snapshot = Snapshot(
@@ -159,15 +173,17 @@ def ensure_snapshot(project: Project | None, session_id: str) -> bool:
                     kind="git",
                     location=sha,
                     created_at=datetime.now(UTC).isoformat(),
+                    turn_index=turn_index,
                 )
             else:
-                location = _take_copy_snapshot(root, session_id)
+                location = _take_copy_snapshot(root, session_id, turn_index)
                 snapshot = Snapshot(
                     session_id=session_id,
                     project_id=project.id,
                     kind="copy",
                     location=location,
                     created_at=datetime.now(UTC).isoformat(),
+                    turn_index=turn_index,
                 )
         except OSError:
             return False
@@ -314,21 +330,70 @@ def diff_snapshot(project: Project, snapshot: Snapshot) -> SnapshotDiff:
     return _diff_copy_snapshot(root, Path(snapshot.location))
 
 
-def discard_snapshot(session_id: str) -> None:
-    """Cleans up a session's snapshot record and whatever it points to
-    (the git ref, or the backup copy) - called when the session itself is
-    deleted, so neither lingers forever. Best-effort: if the project was
-    since deleted or the git ref is already gone, there's nothing left to
-    clean up beyond the record itself."""
-    snapshot = delete_snapshot(session_id)
-    if snapshot is None:
-        return
-
+def _discard_one(snapshot: Snapshot) -> None:
+    """Cleans up whatever a single snapshot record points to (the git
+    ref, or the backup copy) - the record itself is assumed already
+    removed by the caller. Best-effort: if the project was since deleted
+    or the git ref is already gone, there's nothing left to clean up
+    beyond the record."""
     if snapshot.kind == "git":
         project = get_project(snapshot.project_id)
         if project is not None:
             root = Path(project.folder_path).resolve()
             if root.is_dir():
-                _git(["update-ref", "-d", f"refs/triton/snapshots/{session_id}"], root)
+                _git(
+                    ["update-ref", "-d", _snapshot_ref(snapshot.session_id, snapshot.turn_index)],
+                    root,
+                )
     else:
         shutil.rmtree(snapshot.location, ignore_errors=True)
+
+
+def discard_snapshot(session_id: str) -> None:
+    """Cleans up every restore point a session has (one per turn that
+    wrote something - see storage/snapshots.py's list_snapshots), called
+    when the session itself is deleted so none of them linger forever."""
+    for snapshot in delete_snapshots_for_session(session_id):
+        _discard_one(snapshot)
+
+
+def discard_snapshots_for_project(project_id: str) -> int:
+    """Same as discard_snapshot, scoped to every session's restore points
+    for one project instead of one session's - called from server.py's
+    DELETE /projects/{id}, before the Project record itself is removed
+    (its folder_path is what a git-backed snapshot's ref cleanup needs -
+    once the record's gone, get_project() can no longer resolve it).
+    Without this, a project's snapshots become dead weight forever: they
+    already can't be restored to (restore/diff both 404 once get_project()
+    returns None for a deleted project), but nothing was removing the git
+    ref or backup copy - see PLAN.md's "Purge des vieux snapshots" entry.
+    Returns how many were removed, for the endpoint's own log."""
+    removed = delete_snapshots_for_project(project_id)
+    for snapshot in removed:
+        _discard_one(snapshot)
+    return len(removed)
+
+
+# a session that's simply abandoned (never explicitly deleted) would
+# otherwise keep its restore points - and the disk space and dangling git
+# refs/backup copies they represent - forever. 30 days comfortably covers
+# "I might still want to undo this" while still eventually reclaiming
+# space for a conversation nobody's touched again.
+SNAPSHOT_MAX_AGE_DAYS = 30
+
+
+def purge_expired_snapshots(max_age_days: int = SNAPSHOT_MAX_AGE_DAYS) -> int:
+    """Called once at harness startup (see server.py's lifespan): removes
+    every snapshot older than max_age_days, regardless of whether its
+    session or project still exist - the project-delete cascade
+    (discard_snapshots_for_project) and session-delete cascade
+    (discard_snapshot) only fire on those specific actions, so a
+    conversation that's simply never revisited (project and session both
+    still exist, nobody deleted anything) would otherwise accumulate
+    restore points forever. Returns how many were removed, for the
+    startup log."""
+    cutoff = (datetime.now(UTC) - timedelta(days=max_age_days)).isoformat()
+    removed = delete_expired_snapshots(cutoff)
+    for snapshot in removed:
+        _discard_one(snapshot)
+    return len(removed)

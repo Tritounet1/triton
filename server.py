@@ -75,19 +75,22 @@ from triton.storage.settings import (
     save_role_model_override,
     save_tavily_api_key,
 )
-from triton.storage.snapshots import get_snapshot
+from triton.storage.snapshots import get_snapshot, list_snapshots
 from triton.tools import (
+    SNAPSHOT_MAX_AGE_DAYS,
     TOOLS,
     TOOLS_REGISTRY,
     WRITE_TOOL_NAMES,
     RestoreError,
     diff_snapshot,
     discard_snapshot,
+    discard_snapshots_for_project,
     enforce_project_sandbox,
     ensure_snapshot,
     invoke_tool,
     is_skipped,
     is_tavily_configured,
+    purge_expired_snapshots,
     restore_snapshot,
 )
 from triton.tools.memory import remember
@@ -124,6 +127,11 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             "resumed %d orchestrator run(s) interrupted by the last restart: %s",
             len(resumed),
             ", ".join(resumed),
+        )
+    purged = purge_expired_snapshots()
+    if purged:
+        logging.getLogger("uvicorn").info(
+            "purged %d snapshot(s) older than %d days", purged, SNAPSHOT_MAX_AGE_DAYS
         )
     yield
     mcp_client.manager.disconnect_all()
@@ -276,6 +284,17 @@ def sse(event: str, data: dict[str, object]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+def turn_index_of(messages: list[ChatCompletionMessageParam]) -> int:
+    """Which turn `messages` is currently on (the nth "user" message,
+    1-based) - the write-tool safety net's snapshot key (tools/snapshot.py's
+    ensure_snapshot), so a restore point exists per turn instead of only
+    once per session. Must be called on the full, uncompressed history:
+    compress_history_if_needed can collapse several old turns into one
+    system message, so counting *after* it runs would undercount real
+    turns and collide two different turns onto the same snapshot."""
+    return sum(1 for m in messages if m.get("role") == "user")
+
+
 MAX_TITLE_CHARS = 60
 
 
@@ -340,6 +359,9 @@ def run_chat_stream(
     project_id = load_session_project(session_id)
     project = get_project(project_id) if project_id else None
     session_model = load_session_model(session_id)
+    # computed before compression can collapse old turns away - see
+    # turn_index_of's own docstring
+    turn_index = turn_index_of(messages)
 
     if first_message is not None:
         title = generate_conversation_title(first_message)
@@ -403,25 +425,24 @@ def run_chat_stream(
                     # approval below - taking it is harmless even if this
                     # particular call ends up denied, and it guarantees the
                     # safety net is in place before any write from this
-                    # session could have landed (see tools/snapshot.py).
+                    # turn could have landed (see tools/snapshot.py).
                     # ensure_snapshot's own return is only true the one time
-                    # this session's snapshot actually gets taken - surfaced
-                    # here instead of only in the project file panel
-                    # (SnapshotSection.tsx), which needed knowing the
+                    # this specific turn's snapshot actually gets taken -
+                    # surfaced here instead of only in the project file
+                    # panel (SnapshotSection.tsx), which needed knowing the
                     # feature existed at all to go find.
                     if (
                         sandbox_error is None
                         and tool is not None
                         and name in WRITE_TOOL_NAMES
-                        and ensure_snapshot(project, session_id)
+                        and ensure_snapshot(project, session_id, turn_index)
                     ):
                         yield sse(
                             "info",
                             {
-                                "message": "Filet de sécurité activé pour cette "
-                                "conversation : l'état actuel du dossier du projet vient "
-                                "d'être sauvegardé, avant sa première écriture. Utilise "
-                                "/undo pour tout annuler d'un coup si besoin.",
+                                "message": "Point de restauration créé pour ce message : "
+                                "l'état actuel du dossier du projet vient d'être sauvegardé. "
+                                "Utilise /undo pour y revenir si besoin.",
                             },
                         )
 
@@ -1199,20 +1220,66 @@ def remove_session(session_id: str) -> dict[str, bool]:
     return {"ok": True}
 
 
-class SnapshotInfo(BaseModel):
+MESSAGE_PREVIEW_CHARS = 80
+
+
+def _user_message_preview(session_id: str, turn_index: int) -> str | None:
+    """The text of the nth user message in a session (1-based) - labels a
+    restore point with what it precedes ("before: ...") instead of a bare
+    turn number, so picking one to restore to is actually meaningful.
+    None if the session/message is gone, or that message was purely an
+    attachment with no text part."""
+    path = SESSIONS_DIR / f"{session_id}.json"
+    if not path.exists():
+        return None
+    try:
+        messages = load_session(path)
+    except (OSError, ValueError):
+        return None
+
+    user_messages = [m for m in messages if m.get("role") == "user"]
+    if turn_index < 1 or turn_index > len(user_messages):
+        return None
+
+    content = user_messages[turn_index - 1].get("content")
+    text: str | None = content if isinstance(content, str) else None
+    if text is None and isinstance(content, list):
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                text = cast("str | None", part.get("text"))
+                break
+    if not text:
+        return None
+
+    text = text.strip()
+    if len(text) > MESSAGE_PREVIEW_CHARS:
+        text = text[:MESSAGE_PREVIEW_CHARS].rstrip() + "..."
+    return text
+
+
+class SnapshotPoint(BaseModel):
+    turn_index: int
     kind: str
     created_at: str
+    message_preview: str | None
 
 
-@app.get("/sessions/{session_id}/snapshot", tags=["Sessions"])
-def get_session_snapshot(session_id: str) -> SnapshotInfo:
-    """Whether this session's project folder was auto-snapshotted before
-    its first write (see tools/snapshot.py) - the desktop app uses this to
-    decide whether to offer a "restore" action at all."""
-    snapshot = get_snapshot(session_id)
-    if snapshot is None:
-        raise HTTPException(404, "no snapshot for this session")
-    return SnapshotInfo(kind=snapshot.kind, created_at=snapshot.created_at)
+@app.get("/sessions/{session_id}/snapshots", tags=["Sessions"])
+def list_session_snapshots(session_id: str) -> list[SnapshotPoint]:
+    """Every restore point this session has - one per turn whose first
+    write triggered a snapshot (see tools/snapshot.py's ensure_snapshot),
+    oldest first. Empty rather than a 404 when there are none: the
+    desktop app uses an empty list the same way it used to use a 404, to
+    decide whether to offer a restore action at all."""
+    return [
+        SnapshotPoint(
+            turn_index=s.turn_index,
+            kind=s.kind,
+            created_at=s.created_at,
+            message_preview=_user_message_preview(session_id, s.turn_index),
+        )
+        for s in list_snapshots(session_id)
+    ]
 
 
 class SnapshotDiffResponse(BaseModel):
@@ -1222,17 +1289,18 @@ class SnapshotDiffResponse(BaseModel):
 
 
 @app.get("/sessions/{session_id}/snapshot/diff", tags=["Sessions"])
-def get_session_snapshot_diff(session_id: str) -> SnapshotDiffResponse:
-    """A preview of what restoring this session's snapshot would actually
-    change - which files it created (restore deletes them), deleted
-    (restore recreates them), or modified (restore reverts them). The
-    desktop app fetches this when the restore confirmation dialog opens,
-    not eagerly on every session load - it's real work (a git diff, or
-    reading every shared file's bytes for the non-git backend) that only
-    matters right before the user is about to commit to it."""
-    snapshot = get_snapshot(session_id)
+def get_session_snapshot_diff(session_id: str, turn_index: int) -> SnapshotDiffResponse:
+    """A preview of what restoring to this specific turn's snapshot would
+    actually change - which files it created (restore deletes them),
+    deleted (restore recreates them), or modified (restore reverts them).
+    The desktop app fetches this when a restore confirmation dialog
+    opens for that turn, not eagerly for every restore point on session
+    load - it's real work (a git diff, or reading every shared file's
+    bytes for the non-git backend) that only matters right before the
+    user is about to commit to it."""
+    snapshot = get_snapshot(session_id, turn_index)
     if snapshot is None:
-        raise HTTPException(404, "no snapshot for this session")
+        raise HTTPException(404, "no snapshot for this session at that turn")
 
     project = get_project(snapshot.project_id)
     if project is None:
@@ -1246,16 +1314,23 @@ def get_session_snapshot_diff(session_id: str) -> SnapshotDiffResponse:
     return SnapshotDiffResponse(created=diff.created, deleted=diff.deleted, modified=diff.modified)
 
 
+class SnapshotRestoreRequest(BaseModel):
+    turn_index: int
+
+
 @app.post("/sessions/{session_id}/snapshot/restore", tags=["Sessions"])
-def restore_session_snapshot(session_id: str) -> dict[str, bool]:
-    """Undoes every write this session's tools made to its project folder,
-    bringing it back to the state ensure_snapshot captured before the
-    first one. Destructive (see tools/snapshot.py's restore_snapshot) -
-    the desktop app is expected to confirm with the user before calling
-    this, the same way it does for any other irreversible action."""
-    snapshot = get_snapshot(session_id)
+def restore_session_snapshot(session_id: str, body: SnapshotRestoreRequest) -> dict[str, bool]:
+    """Undoes every write this session's tools made to its project folder
+    from the given turn onward, bringing it back to the state
+    ensure_snapshot captured just before that turn's first write - pass
+    the oldest restore point (see GET .../snapshots) to undo the whole
+    session, or a more recent one to only undo back to a specific turn.
+    Destructive (see tools/snapshot.py's restore_snapshot) - the desktop
+    app is expected to confirm with the user before calling this, the
+    same way it does for any other irreversible action."""
+    snapshot = get_snapshot(session_id, body.turn_index)
     if snapshot is None:
-        raise HTTPException(404, "no snapshot for this session")
+        raise HTTPException(404, "no snapshot for this session at that turn")
 
     project = get_project(snapshot.project_id)
     if project is None:
@@ -1324,8 +1399,15 @@ def rename_project_endpoint(project_id: str, body: ProjectRename) -> list[Projec
 
 @app.delete("/projects/{project_id}", tags=["Projects"])
 def remove_project(project_id: str) -> list[Project]:
-    if not delete_project(project_id):
+    if get_project(project_id) is None:
         raise HTTPException(404, "project not found")
+    # purge every snapshot this project has (across every session that
+    # ever wrote to it) while the record - and its folder_path, needed to
+    # clean up a git-backed snapshot's ref - can still be resolved (see
+    # discard_snapshots_for_project's own docstring for why leaving these
+    # behind means dead weight forever, not just an unused record)
+    discard_snapshots_for_project(project_id)
+    delete_project(project_id)
     for session_id in (p.stem for p in SESSIONS_DIR.glob("*.json")):
         if load_session_project(session_id) == project_id:
             clear_session_project(session_id)
@@ -1435,6 +1517,7 @@ def dispatch_orchestrator(body: OrchestratorDispatch) -> dict[str, str]:
     session_path, messages, is_new = resolve_session(body.session_id, body.project_id)
     session_id = session_path.stem
     messages.append({"role": "user", "content": body.task})
+    turn_index = turn_index_of(messages)
 
     if is_new:
         save_title(session_id, generate_conversation_title(body.task))
@@ -1442,7 +1525,9 @@ def dispatch_orchestrator(body: OrchestratorDispatch) -> dict[str, str]:
     save_session(session_path, messages)
 
     project_id = load_session_project(session_id)
-    run_id = orchestrator.dispatch(body.task, project_id=project_id, session_id=session_id)
+    run_id = orchestrator.dispatch(
+        body.task, project_id=project_id, session_id=session_id, turn_index=turn_index
+    )
     return {"run_id": run_id, "session_id": session_id}
 
 

@@ -1,9 +1,10 @@
-"""GET /sessions/{id}/snapshot and POST /sessions/{id}/snapshot/restore -
-the desktop app's "undo this session's writes" affordance (see
+"""GET /sessions/{id}/snapshots, GET .../snapshot/diff, and POST
+.../snapshot/restore - the desktop app's "undo" affordance (see
 triton/tools/snapshot.py for the actual git/copy logic, already covered
-directly in test_snapshot.py). These tests exercise the HTTP layer on top:
-404s when there's nothing to restore, and that a restore actually reaches
-the project folder end to end."""
+directly in test_snapshot.py). These tests exercise the HTTP layer on
+top: an empty/404 shape when there's nothing to restore, that a restore
+actually reaches the project folder end to end, and that deleting a
+session or a project purges the snapshots that belonged to it."""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,7 +19,9 @@ def _isolated_storage(tmp_path, monkeypatch):
     monkeypatch.setattr(projects, "PROJECTS_FILE", tmp_path / "projects.json")
     monkeypatch.setattr(snapshots, "SNAPSHOTS_FILE", tmp_path / "snapshots.json")
     monkeypatch.setattr(snap, "BACKUP_ROOT", tmp_path / "snapshot_backups")
-    monkeypatch.setattr(sessions, "SESSIONS_DIR", tmp_path / "sessions")
+    sessions_dir = tmp_path / "sessions"
+    monkeypatch.setattr(sessions, "SESSIONS_DIR", sessions_dir)
+    monkeypatch.setattr(server, "SESSIONS_DIR", sessions_dir)
 
 
 @pytest.fixture
@@ -32,24 +35,70 @@ def _project(tmp_path):
     return projects.create_project("test-project", str(folder))
 
 
-def test_get_snapshot_404_when_none_exists(client):
-    r = client.get("/sessions/no-such-session/snapshot")
-    assert r.status_code == 404
+def _session_with_messages(*user_texts: str) -> str:
+    path = sessions.new_session_path()
+    messages = []
+    for text in user_texts:
+        messages.append({"role": "user", "content": text})
+        messages.append({"role": "assistant", "content": "ok"})
+    sessions.save_session(path, messages)
+    return path.stem
 
 
-def test_get_snapshot_returns_kind_and_created_at(tmp_path, client):
-    project = _project(tmp_path)
-    snap.ensure_snapshot(project, "session1")
+# --- GET /sessions/{id}/snapshots ---
 
-    r = client.get("/sessions/session1/snapshot")
+
+def test_list_snapshots_is_empty_when_none_exist(client):
+    r = client.get("/sessions/no-such-session/snapshots")
     assert r.status_code == 200
-    body = r.json()
-    assert body["kind"] == "copy"
-    assert body["created_at"]
+    assert r.json() == []
 
 
-def test_diff_404_when_none_exists(client):
-    r = client.get("/sessions/no-such-session/snapshot/diff")
+def test_list_snapshots_reports_kind_and_created_at(tmp_path, client):
+    project = _project(tmp_path)
+    session_id = _session_with_messages("do something")
+    snap.ensure_snapshot(project, session_id, 1)
+
+    r = client.get(f"/sessions/{session_id}/snapshots")
+    assert r.status_code == 200
+    [point] = r.json()
+    assert point["kind"] == "copy"
+    assert point["turn_index"] == 1
+    assert point["created_at"]
+
+
+def test_list_snapshots_includes_a_preview_of_the_triggering_message(tmp_path, client):
+    project = _project(tmp_path)
+    session_id = _session_with_messages("add a login page", "now fix the CSS")
+    snap.ensure_snapshot(project, session_id, 1)
+    snap.ensure_snapshot(project, session_id, 2)
+
+    r = client.get(f"/sessions/{session_id}/snapshots")
+    points = r.json()
+
+    assert [p["turn_index"] for p in points] == [1, 2]
+    assert points[0]["message_preview"] == "add a login page"
+    assert points[1]["message_preview"] == "now fix the CSS"
+
+
+def test_list_snapshots_truncates_a_long_message_preview(tmp_path, client):
+    project = _project(tmp_path)
+    long_text = "x" * 200
+    session_id = _session_with_messages(long_text)
+    snap.ensure_snapshot(project, session_id, 1)
+
+    r = client.get(f"/sessions/{session_id}/snapshots")
+    preview = r.json()[0]["message_preview"]
+
+    assert len(preview) < len(long_text)
+    assert preview.endswith("...")
+
+
+# --- GET /sessions/{id}/snapshot/diff ---
+
+
+def test_diff_404_when_no_snapshot_for_that_turn(client):
+    r = client.get("/sessions/no-such-session/snapshot/diff", params={"turn_index": 1})
     assert r.status_code == 404
 
 
@@ -58,13 +107,14 @@ def test_diff_reports_created_deleted_and_modified(tmp_path, client):
     root = tmp_path / "myproject"
     (root / "a.txt").write_text("original")
     (root / "to_be_deleted.txt").write_text("present at snapshot time")
+    session_id = _session_with_messages("do something")
 
-    snap.ensure_snapshot(project, "session1")
+    snap.ensure_snapshot(project, session_id, 1)
     (root / "a.txt").write_text("edited by the agent")
     (root / "b.txt").write_text("created by the agent")
     (root / "to_be_deleted.txt").unlink()
 
-    r = client.get("/sessions/session1/snapshot/diff")
+    r = client.get(f"/sessions/{session_id}/snapshot/diff", params={"turn_index": 1})
     assert r.status_code == 200
     body = r.json()
     assert body["created"] == ["b.txt"]
@@ -72,17 +122,21 @@ def test_diff_reports_created_deleted_and_modified(tmp_path, client):
     assert body["modified"] == ["a.txt"]
 
 
-def test_restore_404_when_no_snapshot(client):
-    r = client.post("/sessions/no-such-session/snapshot/restore")
+# --- POST /sessions/{id}/snapshot/restore ---
+
+
+def test_restore_404_when_no_snapshot_for_that_turn(client):
+    r = client.post("/sessions/no-such-session/snapshot/restore", json={"turn_index": 1})
     assert r.status_code == 404
 
 
 def test_restore_404_when_project_was_deleted(tmp_path, client):
     project = _project(tmp_path)
-    snap.ensure_snapshot(project, "session1")
+    session_id = _session_with_messages("do something")
+    snap.ensure_snapshot(project, session_id, 1)
     projects.delete_project(project.id)
 
-    r = client.post("/sessions/session1/snapshot/restore")
+    r = client.post(f"/sessions/{session_id}/snapshot/restore", json={"turn_index": 1})
     assert r.status_code == 404
 
 
@@ -90,26 +144,62 @@ def test_restore_brings_the_project_folder_back(tmp_path, client):
     project = _project(tmp_path)
     root = tmp_path / "myproject"
     (root / "a.txt").write_text("original")
+    session_id = _session_with_messages("do something")
 
-    snap.ensure_snapshot(project, "session1")
+    snap.ensure_snapshot(project, session_id, 1)
     (root / "a.txt").write_text("edited by the agent")
     (root / "b.txt").write_text("created by the agent")
 
-    r = client.post("/sessions/session1/snapshot/restore")
+    r = client.post(f"/sessions/{session_id}/snapshot/restore", json={"turn_index": 1})
     assert r.status_code == 200
     assert r.json() == {"ok": True}
     assert (root / "a.txt").read_text() == "original"
     assert not (root / "b.txt").exists()
 
 
-def test_deleting_a_session_discards_its_snapshot(tmp_path, client):
+def test_restore_targets_a_specific_turn_not_only_the_first(tmp_path, client):
     project = _project(tmp_path)
-    path = sessions.new_session_path()
-    session_id = path.stem
-    sessions.save_session(path, [])
-    snap.ensure_snapshot(project, session_id)
-    assert snapshots.get_snapshot(session_id) is not None
+    root = tmp_path / "myproject"
+    session_id = _session_with_messages("turn one", "turn two")
+
+    snap.ensure_snapshot(project, session_id, 1)
+    (root / "a.txt").write_text("written during turn 1")
+    snap.ensure_snapshot(project, session_id, 2)
+    (root / "a.txt").write_text("written during turn 2")
+    (root / "b.txt").write_text("created during turn 2")
+
+    r = client.post(f"/sessions/{session_id}/snapshot/restore", json={"turn_index": 2})
+    assert r.status_code == 200
+    # only turn 2's writes are undone - turn 1's survives
+    assert (root / "a.txt").read_text() == "written during turn 1"
+    assert not (root / "b.txt").exists()
+
+
+# --- cascading cleanup ---
+
+
+def test_deleting_a_session_discards_every_turns_snapshot(tmp_path, client):
+    project = _project(tmp_path)
+    session_id = _session_with_messages("turn one", "turn two")
+    snap.ensure_snapshot(project, session_id, 1)
+    snap.ensure_snapshot(project, session_id, 2)
+    assert len(snapshots.list_snapshots(session_id)) == 2
 
     r = client.delete(f"/sessions/{session_id}")
     assert r.status_code == 200
-    assert snapshots.get_snapshot(session_id) is None
+    assert snapshots.list_snapshots(session_id) == []
+
+
+def test_deleting_a_project_discards_snapshots_from_every_session_that_wrote_to_it(
+    tmp_path, client
+):
+    project = _project(tmp_path)
+    session_a = _session_with_messages("turn one")
+    session_b = _session_with_messages("turn one")
+    snap.ensure_snapshot(project, session_a, 1)
+    snap.ensure_snapshot(project, session_b, 1)
+
+    r = client.delete(f"/projects/{project.id}")
+    assert r.status_code == 200
+    assert snapshots.list_snapshots(session_a) == []
+    assert snapshots.list_snapshots(session_b) == []

@@ -38,12 +38,15 @@ from triton.tools._shared import (
     is_skipped,
 )
 from triton.tools.snapshot import (
+    SNAPSHOT_MAX_AGE_DAYS,
     WRITE_TOOL_NAMES,
     RestoreError,
     SnapshotDiff,
     diff_snapshot,
     discard_snapshot,
+    discard_snapshots_for_project,
     ensure_snapshot,
+    purge_expired_snapshots,
     restore_snapshot,
 )
 from triton.tools.web import is_tavily_configured
@@ -53,6 +56,7 @@ __all__ = [
     "SANDBOXED_PATH_ARGS",
     "SESSION_AWARE_TOOLS",
     "SKIP_DIR_NAMES",
+    "SNAPSHOT_MAX_AGE_DAYS",
     "TOOLS",
     "TOOLS_REGISTRY",
     "WRITE_TOOL_NAMES",
@@ -61,11 +65,13 @@ __all__ = [
     "Tool",
     "diff_snapshot",
     "discard_snapshot",
+    "discard_snapshots_for_project",
     "enforce_project_sandbox",
     "ensure_snapshot",
     "invoke_tool",
     "is_skipped",
     "is_tavily_configured",
+    "purge_expired_snapshots",
     "rebuild_tools_list",
     "restore_snapshot",
 ]
