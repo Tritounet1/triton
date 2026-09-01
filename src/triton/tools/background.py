@@ -97,7 +97,9 @@ REGISTRY: dict[str, Tool] = {
                 "blocking the conversation. Don't use this for one-off commands that finish "
                 "on their own - use run_shell for those. Check on it with "
                 "list_background_tasks, and stop it with stop_background_task when done. "
-                "The user can also see it, read its live output, and stop it from the app.",
+                "The user can also see it, read its live output, and stop it from the app. "
+                f"At most {background_tasks.MAX_CONCURRENT_TASKS} can run at once across "
+                "every conversation - stop one you no longer need before starting another.",
                 "parameters": {
                     "type": "object",
                     "properties": {

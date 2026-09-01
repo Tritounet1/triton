@@ -55,6 +55,15 @@ STOP_TIMEOUT_SECONDS = 5.0
 # run for hours); only the tail is ever read back for display, so this
 # bounds response size/memory rather than disk usage.
 MAX_DISPLAY_LOG_BYTES = 512 * 1024
+# global, not per-session: these are real OS processes sharing the same
+# machine regardless of which conversation started them - nothing
+# previously stopped the model from spawning an unbounded number of dev
+# servers/watchers across every conversation at once. Auto-restart on
+# crash and cron-style scheduling are bigger asks (deciding what
+# "resumable" even means for an arbitrary command, retry-storm
+# protection, a persisted schedule format + a scheduler loop) left out of
+# this pass - the cap is the tractable, low-risk part.
+MAX_CONCURRENT_TASKS = 5
 
 
 @dataclass
@@ -166,12 +175,23 @@ def _load_persisted_tasks() -> dict[str, BackgroundTask]:
 TASKS: dict[str, BackgroundTask] = _load_persisted_tasks()
 
 
+def running_count() -> int:
+    return sum(1 for t in TASKS.values() if t.status == "running")
+
+
 def start(session_id: str, command: str, name: str = "", directory: str = ".") -> str:
     """Starts `command` in the background and returns immediately. The
     process runs in its own process group (start_new_session) so stop() can
     kill an entire process tree, e.g. a wrapper script and the server it
     spawns, not just the immediate child - and so it survives this harness
     process exiting rather than being torn down with it."""
+    if running_count() >= MAX_CONCURRENT_TASKS:
+        return (
+            f"error: {MAX_CONCURRENT_TASKS} background tasks are already running (across "
+            "every conversation) - stop one with stop_background_task before starting "
+            "another."
+        )
+
     label = name.strip() or command
     task_id = uuid.uuid4().hex[:8]
     STATE_DIR.mkdir(parents=True, exist_ok=True)
