@@ -163,19 +163,19 @@ interface DailyBarChartProps {
 /** Contenu du survol d'une barre : tokens ET coût ensemble, quel que soit
  * le graphique survolé (celui des tokens ou celui du coût) - une seule
  * des deux valeurs ne suffit pas a repondre a "qu'est-ce qui a coute cher
- * ce jour-la", il faut les deux d'un coup d'oeil. */
+ * ce jour-la", il faut les deux d'un coup d'oeil.
+ *
+ * Du HTML brut plutot que <Text> ici : le fond du Tooltip est sombre par
+ * design (couleurs inversees pour le contraste, cf. sa propre doc), mais
+ * <Text color="secondary"> est calibree pour un fond clair - un gris sur
+ * fond deja sombre devenait illisible. text-on-dark force un blanc fixe,
+ * correct quel que soit le theme clair/sombre de l'appli elle-meme. */
 function DayTooltipContent({ d }: { d: DayStats }) {
   return (
-    <div className="flex flex-col gap-0.5 px-1 py-0.5">
-      <Text size="xsm" weight="semibold">
-        {formatDayLabel(d.date)}
-      </Text>
-      <Text size="2xs" color="secondary">
-        {d.tokens.toLocaleString("fr-FR")} tokens
-      </Text>
-      <Text size="2xs" color="secondary">
-        {formatCost(d.cost)}
-      </Text>
+    <div className="flex flex-col gap-0.5 px-1 py-0.5 text-on-dark">
+      <span className="text-xs font-semibold">{formatDayLabel(d.date)}</span>
+      <span className="text-[11px] opacity-80">{d.tokens.toLocaleString("fr-FR")} tokens</span>
+      <span className="text-[11px] opacity-80">{formatCost(d.cost)}</span>
     </div>
   );
 }
@@ -195,7 +195,11 @@ function DailyBarChart({ days, title, getValue }: DailyBarChartProps) {
           return (
             <Tooltip key={d.date} content={<DayTooltipContent d={d} />}>
               <div
-                className="flex-1 rounded-t bg-accent transition-[height] hover:opacity-80"
+                // bg-accent (quasi-noir dans ce theme neutre) rendait les
+                // barres et la tooltip presque indissociables, tout
+                // paraissait sombre d'un bloc - bleu vif plus doux, meme
+                // couleur que le badge/texte "info" utilise ailleurs.
+                className="flex-1 rounded-t bg-blue-vivid transition-[height] hover:opacity-80"
                 style={{ height: `${Math.max(value > 0 ? 3 : 0, (value / max) * 100)}%` }}
               />
             </Tooltip>
