@@ -4,11 +4,20 @@ this just exposes it to the model with a JSON schema."""
 
 from triton import background_tasks
 from triton.agents import subagents
+from triton.storage.projects import get_project
+from triton.storage.sessions import load_session_project
 from triton.tools._shared import Tool
 
 
-def dispatch_subagent(task: str) -> str:
-    return subagents.dispatch(task)
+def dispatch_subagent(task: str, session_id: str) -> str:
+    # session-aware (see _shared.py's SESSION_AWARE_TOOLS) purely to
+    # resolve the project this conversation is scoped to, if any -
+    # subagents.dispatch needs it to know whether its own read-only file
+    # tools should be sandboxed to that folder, or blocked outright with
+    # no project (see enforce_project_sandbox).
+    project_id = load_session_project(session_id)
+    project = get_project(project_id) if project_id else None
+    return subagents.dispatch(task, project)
 
 
 def check_subagent(task_id: str) -> str:
@@ -45,7 +54,10 @@ REGISTRY: dict[str, Tool] = {
                 "- don't check on it repeatedly, see check_subagent. Its own reasoning "
                 "and tool calls stay isolated from this conversation, only its final "
                 "result comes back. Give it a self-contained task description, since it "
-                "starts with no context beyond what's provided.",
+                "starts with no context beyond what's provided. Its local file tools "
+                "(read_file, list_files, grep, glob) are scoped to this conversation's "
+                "project the same way yours are - unavailable to it too if there's no "
+                "project, web_search/fetch_url still work either way.",
                 "parameters": {
                     "type": "object",
                     "properties": {

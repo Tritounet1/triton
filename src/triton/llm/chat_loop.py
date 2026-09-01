@@ -52,6 +52,16 @@ def build_system_message(
             "git_status, git_diff, git_commit, run_tests). This is enforced: a path "
             "outside this folder will be rejected, not just discouraged."
         )
+    else:
+        content += (
+            "\n\nNo project is selected for this conversation: read_file, write_file, "
+            "edit_file, delete_file, move_file, grep, glob, git_status, git_diff, "
+            "git_commit, run_shell, run_tests, run_code, and start_background_task "
+            "are all unavailable - they need a project folder to be scoped to, and "
+            "calling one will just return an error explaining this. If the user wants "
+            "to work with local files or run commands, tell them to select or create "
+            "a project first instead of retrying these tools."
+        )
 
     global_memory = load_global_memory()
     if global_memory:

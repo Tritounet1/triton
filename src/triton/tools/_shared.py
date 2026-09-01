@@ -12,6 +12,7 @@ from pathlib import Path
 
 from openai.types.chat import ChatCompletionToolParam
 
+from triton.paths import ROOT_DIR
 from triton.storage.projects import Project
 
 
@@ -26,7 +27,12 @@ class Tool:
 # (e.g. to scope a background task to the session that started it), beyond
 # the plain model-provided arguments. server.py/main.py inject session_id
 # through invoke_tool() instead of the generic tool.fn(**args) call.
-SESSION_AWARE_TOOLS = {"start_background_task", "list_background_tasks", "remember"}
+SESSION_AWARE_TOOLS = {
+    "start_background_task",
+    "list_background_tasks",
+    "remember",
+    "dispatch_subagent",
+}
 
 
 def invoke_tool(tool: Tool, name: str, args: dict[str, object], session_id: str) -> str:
@@ -48,12 +54,14 @@ def invoke_tool(tool: Tool, name: str, args: dict[str, object], session_id: str)
         return f"error: {name} failed unexpectedly ({type(e).__name__}: {e})"
 
 
+# every tool that touches the local filesystem or spawns a process -
 # path/directory arguments to confine to the active project's folder when
-# a conversation (server.py) or a multi-agent subtask (orchestrator.py) is
-# scoped to one. MCP-sourced tools (unknown schemas) are deliberately not
-# covered here. Lives here rather than in server.py so orchestrator.py can
-# import it too without an import cycle (server.py already imports
-# orchestrator.py).
+# a conversation (server.py), a subagent (agents/subagents.py), or a
+# multi-agent subtask (agents/orchestrator.py) is scoped to one, and the
+# complete set of tools enforce_project_sandbox blocks outright when
+# there's no project at all (see its own docstring). MCP-sourced tools
+# (unknown schemas) are deliberately not covered here, and remain
+# unrestricted regardless of project - a separate, pre-existing gap.
 #
 # run_shell/run_tests only get a `directory` check, not a command-content
 # one: this confines their *working directory* to the project (so a
@@ -105,12 +113,42 @@ DEFAULTABLE_PATH_ARGS = {
 }
 
 
-def _enforce_edit_file_sandbox(args: dict[str, object], project: Project) -> str | None:
+def _resolve(raw_path: str, root: Path) -> Path:
+    candidate = Path(raw_path)
+    return candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
+
+
+def _path_error(raw_path: str, resolved: Path, root: Path) -> str | None:
+    """None if `resolved` is a legal target for this call: inside the
+    project folder, and not inside the harness's own installation
+    directory (ROOT_DIR) even when the project happens to be scoped
+    there. The ROOT_DIR check is unconditional - not just "no project
+    selected" - because a deliberately-scoped project pointed at it would
+    otherwise still get full read/write access to this harness's own
+    settings.json (API keys, in a dev checkout also readable from .env),
+    every conversation's history (sessions/), and its snapshot backups:
+    materially more sensitive than an arbitrary project folder, so it
+    stays off-limits to tool calls even on purpose."""
+    if resolved.is_relative_to(ROOT_DIR):
+        return (
+            f"error: '{raw_path}' resolves inside the harness's own installation "
+            f"directory ({ROOT_DIR}), which tool calls can never touch - even within "
+            "a project scoped there. It holds this harness's own settings, every "
+            "conversation's history, and (in a dev checkout) API keys."
+        )
+    if not resolved.is_relative_to(root):
+        return (
+            f"error: this conversation is scoped to the project folder {root}, "
+            f"'{raw_path}' resolves outside of it. Use a path within the project."
+        )
+    return None
+
+
+def _enforce_edit_file_sandbox(args: dict[str, object], root: Path) -> str | None:
     """edit_file's own path check: `args["edits"]` is a list of
     {path, old_string, new_string, ...} objects (see filesystem.py) rather
     than the flat string/list-of-strings shape SANDBOXED_PATH_ARGS assumes
     for every other tool, so it can't reuse the generic loop below."""
-    root = Path(project.folder_path).resolve()
     edits = args.get("edits")
     if not isinstance(edits, list):
         return None
@@ -121,37 +159,49 @@ def _enforce_edit_file_sandbox(args: dict[str, object], project: Project) -> str
         raw_path = edit.get("path")
         if not isinstance(raw_path, str) or not raw_path:
             continue
-        candidate = Path(raw_path)
-        resolved = candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
-        if not resolved.is_relative_to(root):
-            return (
-                f"error: this conversation is scoped to the project folder {root}, "
-                f"'{raw_path}' resolves outside of it. Use a path within the project."
-            )
+        error = _path_error(raw_path, _resolve(raw_path, root), root)
+        if error is not None:
+            return error
     return None
 
 
 def enforce_project_sandbox(
     name: str, args: dict[str, object], project: Project | None
 ) -> str | None:
-    """Returns an error message if a file tool call would touch a path
-    outside the active project's folder, or None if the call is allowed
-    (no project scoped, or this tool isn't in SANDBOXED_PATH_ARGS). Mutates
-    `args` in place to default an omitted directory argument to the
-    project folder for tools in DEFAULTABLE_PATH_ARGS."""
+    """Returns an error message if a tool call is disallowed, or None if
+    it's allowed. Two things it enforces:
+
+    - Every tool that touches the local filesystem or spawns a process
+      (SANDBOXED_PATH_ARGS's keys, plus edit_file) needs a project: with
+      none scoped to this conversation, the call is blocked outright
+      rather than left free to touch anywhere on disk - what a
+      conversation with no project used to allow, unrestricted (see
+      PLAN.md's changelog before this was fixed). A tool not in that set
+      (web_search, remember, ...) is unaffected either way.
+    - Once a project is confirmed, every path argument must resolve
+      inside its folder, and never inside the harness's own installation
+      directory even then - see _path_error.
+
+    Mutates `args` in place to default an omitted directory argument to
+    the project folder for tools in DEFAULTABLE_PATH_ARGS."""
+    is_filesystem_tool = name == "edit_file" or name in SANDBOXED_PATH_ARGS
+    if not is_filesystem_tool:
+        return None
+
     if project is None:
-        return None
-
-    if name == "edit_file":
-        return _enforce_edit_file_sandbox(args, project)
-
-    arg_names = SANDBOXED_PATH_ARGS.get(name)
-    if arg_names is None:
-        return None
+        return (
+            f"error: {name} needs a project to be selected for this conversation - "
+            "open or create one first. A conversation with no project can't touch "
+            "the local filesystem or run commands at all, to avoid reading or "
+            "modifying anything outside whatever a project explicitly scopes it to."
+        )
 
     root = Path(project.folder_path).resolve()
 
-    for arg_name in arg_names:
+    if name == "edit_file":
+        return _enforce_edit_file_sandbox(args, root)
+
+    for arg_name in SANDBOXED_PATH_ARGS[name]:
         value = args.get(arg_name)
 
         if not value:
@@ -162,15 +212,9 @@ def enforce_project_sandbox(
         for raw_path in value if isinstance(value, list) else [value]:
             if not isinstance(raw_path, str) or not raw_path:
                 continue
-            candidate = Path(raw_path)
-            resolved = (
-                candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
-            )
-            if not resolved.is_relative_to(root):
-                return (
-                    f"error: this conversation is scoped to the project folder {root}, "
-                    f"'{raw_path}' resolves outside of it. Use a path within the project."
-                )
+            error = _path_error(raw_path, _resolve(raw_path, root), root)
+            if error is not None:
+                return error
 
     return None
 

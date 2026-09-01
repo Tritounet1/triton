@@ -5,6 +5,14 @@ the sub-agent's own reasoning and tool calls stay isolated from the primary
 conversation's context, only its final result comes back (fetched via the
 check_subagent tool, or shown live in the desktop app's sidebar panel).
 
+Its local file tools (read_file/list_files/grep/glob) go through
+enforce_project_sandbox exactly like a normal conversation's own tool
+calls do - scoped to whatever project the dispatching conversation is
+scoped to, or blocked outright if it isn't scoped to one at all. Without
+this a subagent could read anywhere on disk regardless of the parent
+conversation's own project scope, since it otherwise runs with no
+oversight (no per-call confirmation, unlike a normal conversation).
+
 triton.tools imports this module (tools/background.py) to register the
 dispatch_subagent/check_subagent tools, so this module must not import
 triton.tools at module load time (that would be circular) - the one place
@@ -29,6 +37,8 @@ from triton.llm.api import call_chat
 from triton.llm.chat_loop import to_tool_call_params
 from triton.llm.pricing import estimate_cost
 from triton.storage.logs import log_event
+from triton.storage.projects import Project
+from triton.tools._shared import enforce_project_sandbox
 
 if TYPE_CHECKING:
     from triton.tools import Tool
@@ -52,7 +62,12 @@ SUBAGENT_SYSTEM_PROMPT = (
     "You are a focused, read-only research sub-agent, dispatched by a "
     "primary assistant to investigate a specific question in the "
     "background. You cannot modify any files or run commands, only read, "
-    "search, and browse the web. If web_search fails or returns nothing "
+    "search, and browse the web - and your local file tools (read_file, "
+    "list_files, grep, glob) only work at all if the conversation that "
+    "dispatched you has a project selected, scoped to that project's "
+    "folder the same way its own tools are; with no project they'll just "
+    "return an error, so rely on web_search/fetch_url instead when that "
+    "happens. If web_search fails or returns nothing "
     "useful, don't compensate by guessing or fabricating URLs to fetch - "
     "most guesses 404 and waste your remaining turns. Report what you did "
     "find (even if partial) and note the limitation instead of endlessly "
@@ -84,7 +99,7 @@ class SubagentTask:
 TASKS: dict[str, SubagentTask] = {}
 
 
-def _run(task_entry: SubagentTask) -> None:
+def _run(task_entry: SubagentTask, project: Project | None) -> None:
     from triton.tools import TOOLS_REGISTRY
 
     registry: dict[str, Tool] = {
@@ -148,18 +163,23 @@ def _run(task_entry: SubagentTask) -> None:
                     result = f"error: invalid arguments ({tool_call.function.arguments})"
                     args = {}
                 else:
-                    tool = registry.get(name)
-                    if tool is None:
-                        result = f"unknown tool: {name}"
+                    sandbox_error = enforce_project_sandbox(name, args, project)
+                    if sandbox_error is not None:
+                        result = sandbox_error
                     else:
-                        try:
-                            result = tool.fn(**args)
-                        except TypeError as e:
-                            # the model can call a tool with an argument it
-                            # doesn't accept (e.g. hallucinated from another
-                            # tool's schema) - report it back like any other
-                            # tool error instead of ending the sub-agent early
-                            result = f"error: invalid arguments for {name} ({e})"
+                        tool = registry.get(name)
+                        if tool is None:
+                            result = f"unknown tool: {name}"
+                        else:
+                            try:
+                                result = tool.fn(**args)
+                            except TypeError as e:
+                                # the model can call a tool with an argument
+                                # it doesn't accept (e.g. hallucinated from
+                                # another tool's schema) - report it back
+                                # like any other tool error instead of
+                                # ending the sub-agent early
+                                result = f"error: invalid arguments for {name} ({e})"
 
                 log_event(
                     type="subagent_tool_call",
@@ -203,12 +223,15 @@ def _run(task_entry: SubagentTask) -> None:
         task_entry.result = f"{type(e).__name__}: {e}"
 
 
-def dispatch(task: str) -> str:
+def dispatch(task: str, project: Project | None = None) -> str:
     """Starts a sub-agent in a background thread and returns immediately,
-    without waiting for it to finish."""
+    without waiting for it to finish. `project` (the dispatching
+    conversation's own project, if any - see tools/background.py's
+    dispatch_subagent) scopes the sub-agent's own file tools the same way
+    - see the module docstring."""
     task_entry = SubagentTask(id=uuid.uuid4().hex[:8], task=task)
     TASKS[task_entry.id] = task_entry
-    threading.Thread(target=_run, args=(task_entry,), daemon=True).start()
+    threading.Thread(target=_run, args=(task_entry, project), daemon=True).start()
     return (
         f"Sub-agent dispatched (id={task_entry.id}), running in the background. "
         "Continue with other work; call check_subagent with this id later to "
