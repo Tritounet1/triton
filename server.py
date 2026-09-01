@@ -12,7 +12,7 @@ from typing import TypedDict, cast
 import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
@@ -106,7 +106,45 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     mcp_client.manager.disconnect_all()
 
 
-app = FastAPI(title="Triton API", lifespan=lifespan)
+# route-grouping metadata for /docs (Swagger UI) and /redoc - purely
+# cosmetic (FastAPI already serves both by default, docs_url/redoc_url
+# aren't overridden anywhere), this just gives the desktop/CLI-free API
+# consumer a readable grouped view instead of one flat list of 40+ routes.
+# Order here is the order tags render in the UI.
+OPENAPI_TAGS = [
+    {"name": "Chat", "description": "Send a message, confirm/deny a tool call, cancel a reply."},
+    {
+        "name": "Sessions",
+        "description": "Conversations: history, title, pin, per-session model override, "
+        "cost, export, and the write-tool safety net's snapshot/restore.",
+    },
+    {"name": "Projects", "description": "Project folders: CRUD, file tree, raw file contents."},
+    {
+        "name": "Orchestrator",
+        "description": "Multi-agent runs (the /multi-agents command): dispatch a task, poll "
+        "its progress.",
+    },
+    {"name": "Subagents", "description": "Background research sub-agents (dispatch_subagent)."},
+    {
+        "name": "Background Tasks",
+        "description": "Long-running processes started by the model (start_background_task).",
+    },
+    {"name": "MCP", "description": "Configured MCP servers: list, add, toggle, remove."},
+    {"name": "Settings", "description": "Model, budget, API key, per-role model overrides."},
+    {"name": "Models", "description": "The OpenRouter model catalog."},
+    {"name": "Logs", "description": "Raw event log (model/tool calls) for observability."},
+    {"name": "Health", "description": "Liveness check."},
+]
+
+app = FastAPI(
+    title="Triton API",
+    description="Triton's HTTP/SSE API - everything the desktop app and CLI do goes through "
+    "this, so it's usable directly (curl, scripts, another client) without either. POST /chat "
+    "streams a Server-Sent Events response; every other route is plain JSON.",
+    version="0.1.0",
+    openapi_tags=OPENAPI_TAGS,
+    lifespan=lifespan,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -421,7 +459,15 @@ def run_chat_stream(
     save_session(session_path, messages)
 
 
-@app.get("/health")
+@app.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    """Visiting the API's own base URL in a browser is far more likely to
+    be someone looking for the docs than expecting a 404 - send them
+    there instead."""
+    return RedirectResponse("/docs")
+
+
+@app.get("/health", tags=["Health"])
 def health() -> dict[str, bool | str]:
     return {"ok": True, "model": get_model()}
 
@@ -445,23 +491,23 @@ class ModelInfo(TypedDict):
     supports_files: bool
 
 
-@app.get("/settings/model")
+@app.get("/settings/model", tags=["Settings"])
 def get_current_model() -> dict[str, str]:
     return {"model": get_model()}
 
 
-@app.put("/settings/model")
+@app.put("/settings/model", tags=["Settings"])
 def set_current_model(body: ModelUpdate) -> dict[str, str]:
     save_model(body.model)
     return {"model": body.model}
 
 
-@app.get("/settings/budget")
+@app.get("/settings/budget", tags=["Settings"])
 def get_monthly_budget() -> dict[str, float | None]:
     return {"monthly_budget_usd": load_monthly_budget()}
 
 
-@app.put("/settings/budget")
+@app.put("/settings/budget", tags=["Settings"])
 def set_monthly_budget(body: BudgetUpdate) -> dict[str, float | None]:
     save_monthly_budget(body.monthly_budget_usd)
     return {"monthly_budget_usd": body.monthly_budget_usd}
@@ -471,7 +517,7 @@ class ApiKeyUpdate(BaseModel):
     api_key: str
 
 
-@app.get("/settings/api_key")
+@app.get("/settings/api_key", tags=["Settings"])
 def get_api_key_status() -> dict[str, bool]:
     # never echoes the key itself back, only whether one is configured -
     # the Settings UI shows a blank password field either way, never the
@@ -479,7 +525,7 @@ def get_api_key_status() -> dict[str, bool]:
     return {"configured": is_api_key_configured()}
 
 
-@app.put("/settings/api_key")
+@app.put("/settings/api_key", tags=["Settings"])
 def set_api_key(body: ApiKeyUpdate) -> dict[str, bool]:
     save_openrouter_api_key(body.api_key.strip() or None)
     return {"configured": is_api_key_configured()}
@@ -512,12 +558,12 @@ def _role_models_status() -> list[RoleModelInfo]:
     ]
 
 
-@app.get("/settings/role_models")
+@app.get("/settings/role_models", tags=["Settings"])
 def get_role_models() -> list[RoleModelInfo]:
     return _role_models_status()
 
 
-@app.put("/settings/role_models")
+@app.put("/settings/role_models", tags=["Settings"])
 def set_role_model(body: RoleModelUpdate) -> list[RoleModelInfo]:
     if body.role not in ROLE_MODELS:
         raise HTTPException(404, f"unknown role: {body.role}")
@@ -536,7 +582,7 @@ _models_cache: list[ModelInfo] | None = None
 _models_cache_time = 0.0
 
 
-@app.get("/openrouter/models")
+@app.get("/openrouter/models", tags=["Models"])
 def list_openrouter_models() -> list[ModelInfo]:
     """Proxies OpenRouter's public model catalog (no API key required),
     trimmed to what the desktop app's model picker needs: id/name, context
@@ -628,7 +674,7 @@ def build_user_content(text: str, attachments: list[Attachment]) -> str | list[d
     return parts
 
 
-@app.post("/chat")
+@app.post("/chat", tags=["Chat"])
 def chat(body: ChatRequest) -> StreamingResponse:
     validate_attachments(body.attachments)
     session_path, messages, is_new = resolve_session(body.session_id, body.project_id)
@@ -645,7 +691,7 @@ def chat(body: ChatRequest) -> StreamingResponse:
     )
 
 
-@app.post("/chat/confirm")
+@app.post("/chat/confirm", tags=["Chat"])
 def confirm(body: ConfirmRequest) -> dict[str, bool]:
     pending = PENDING_CONFIRMATIONS.get(body.confirmation_id)
     if pending is None:
@@ -657,7 +703,7 @@ def confirm(body: ConfirmRequest) -> dict[str, bool]:
     return {"ok": True}
 
 
-@app.post("/chat/cancel")
+@app.post("/chat/cancel", tags=["Chat"])
 def cancel_chat(body: CancelRequest) -> dict[str, bool]:
     """Marks a session as cancelled: run_chat_stream checks this between
     agentic-loop iterations and stops before starting another one. Doesn't
@@ -667,7 +713,7 @@ def cancel_chat(body: CancelRequest) -> dict[str, bool]:
     return {"ok": True}
 
 
-@app.get("/sessions")
+@app.get("/sessions", tags=["Sessions"])
 def list_sessions() -> list[dict[str, str | bool | None]]:
     if not SESSIONS_DIR.exists():
         return []
@@ -687,7 +733,7 @@ class PinRequest(BaseModel):
     pinned: bool
 
 
-@app.put("/sessions/{session_id}/pin")
+@app.put("/sessions/{session_id}/pin", tags=["Sessions"])
 def pin_session(session_id: str, body: PinRequest) -> dict[str, bool]:
     path = SESSIONS_DIR / f"{session_id}.json"
     if not path.exists():
@@ -700,7 +746,7 @@ class ModelRequest(BaseModel):
     model: str
 
 
-@app.get("/sessions/{session_id}/model")
+@app.get("/sessions/{session_id}/model", tags=["Sessions"])
 def get_session_model(session_id: str) -> dict[str, str | None]:
     """The /model command's override for this conversation, if any (see
     load_session_model) - None means it's using the global default
@@ -708,7 +754,7 @@ def get_session_model(session_id: str) -> dict[str, str | None]:
     return {"model": load_session_model(session_id)}
 
 
-@app.put("/sessions/{session_id}/model")
+@app.put("/sessions/{session_id}/model", tags=["Sessions"])
 def set_session_model(session_id: str, body: ModelRequest) -> dict[str, str]:
     path = SESSIONS_DIR / f"{session_id}.json"
     if not path.exists():
@@ -725,7 +771,7 @@ class SessionCost(BaseModel):
     cost_usd: float
 
 
-@app.get("/sessions/{session_id}/cost")
+@app.get("/sessions/{session_id}/cost", tags=["Sessions"])
 def get_session_cost(session_id: str) -> SessionCost:
     """Sums every model_call log event tagged with this session_id (see
     timed_stream_chat) - the /cost command's data source. A conversation
@@ -753,7 +799,7 @@ def get_session_cost(session_id: str) -> SessionCost:
     )
 
 
-@app.get("/sessions/search")
+@app.get("/sessions/search", tags=["Sessions"])
 def search_sessions(q: str) -> list[str]:
     """Returns ids of sessions whose title or message content contains q
     (case-insensitive). Reads each session file directly on the server
@@ -780,7 +826,7 @@ def search_sessions(q: str) -> list[str]:
     return matches
 
 
-@app.get("/sessions/{session_id}")
+@app.get("/sessions/{session_id}", tags=["Sessions"])
 def get_session(session_id: str) -> list[dict[str, object]]:
     """Returns the raw message dicts as stored on disk. Typed loosely
     (not list[ChatCompletionMessageParam]) on purpose: that TypedDict-based
@@ -877,7 +923,7 @@ def export_session_as_markdown(messages: list[dict[str, object]], title: str) ->
     return "\n".join(lines).rstrip() + "\n"
 
 
-@app.get("/sessions/{session_id}/export")
+@app.get("/sessions/{session_id}/export", tags=["Sessions"])
 def export_session(session_id: str, export_format: str = "markdown") -> Response:
     path = SESSIONS_DIR / f"{session_id}.json"
     if not path.exists():
@@ -899,7 +945,7 @@ def export_session(session_id: str, export_format: str = "markdown") -> Response
     )
 
 
-@app.put("/sessions/{session_id}/title")
+@app.put("/sessions/{session_id}/title", tags=["Sessions"])
 def rename_session(session_id: str, body: RenameRequest) -> dict[str, bool]:
     path = SESSIONS_DIR / f"{session_id}.json"
     if not path.exists():
@@ -908,7 +954,7 @@ def rename_session(session_id: str, body: RenameRequest) -> dict[str, bool]:
     return {"ok": True}
 
 
-@app.delete("/sessions/{session_id}")
+@app.delete("/sessions/{session_id}", tags=["Sessions"])
 def remove_session(session_id: str) -> dict[str, bool]:
     if not delete_session(session_id):
         raise HTTPException(404, "session not found")
@@ -921,7 +967,7 @@ class SnapshotInfo(BaseModel):
     created_at: str
 
 
-@app.get("/sessions/{session_id}/snapshot")
+@app.get("/sessions/{session_id}/snapshot", tags=["Sessions"])
 def get_session_snapshot(session_id: str) -> SnapshotInfo:
     """Whether this session's project folder was auto-snapshotted before
     its first write (see tools/snapshot.py) - the desktop app uses this to
@@ -932,7 +978,7 @@ def get_session_snapshot(session_id: str) -> SnapshotInfo:
     return SnapshotInfo(kind=snapshot.kind, created_at=snapshot.created_at)
 
 
-@app.post("/sessions/{session_id}/snapshot/restore")
+@app.post("/sessions/{session_id}/snapshot/restore", tags=["Sessions"])
 def restore_session_snapshot(session_id: str) -> dict[str, bool]:
     """Undoes every write this session's tools made to its project folder,
     bringing it back to the state ensure_snapshot captured before the
@@ -955,12 +1001,12 @@ def restore_session_snapshot(session_id: str) -> dict[str, bool]:
     return {"ok": True}
 
 
-@app.get("/mcp/servers")
+@app.get("/mcp/servers", tags=["MCP"])
 def list_mcp_servers() -> list[mcp_client.ServerStatus]:
     return mcp_client.manager.status()
 
 
-@app.post("/mcp/servers")
+@app.post("/mcp/servers", tags=["MCP"])
 def add_mcp_server(body: MCPServerCreate) -> list[mcp_client.ServerStatus]:
     config = mcp_client.MCPServerConfig(
         name=body.name, command=body.command, args=body.args, env=body.env, enabled=body.enabled
@@ -972,7 +1018,7 @@ def add_mcp_server(body: MCPServerCreate) -> list[mcp_client.ServerStatus]:
     return mcp_client.manager.status()
 
 
-@app.put("/mcp/servers/{name}")
+@app.put("/mcp/servers/{name}", tags=["MCP"])
 def toggle_mcp_server(name: str, body: MCPServerToggle) -> list[mcp_client.ServerStatus]:
     try:
         mcp_client.manager.set_enabled(name, body.enabled)
@@ -981,18 +1027,18 @@ def toggle_mcp_server(name: str, body: MCPServerToggle) -> list[mcp_client.Serve
     return mcp_client.manager.status()
 
 
-@app.delete("/mcp/servers/{name}")
+@app.delete("/mcp/servers/{name}", tags=["MCP"])
 def remove_mcp_server(name: str) -> list[mcp_client.ServerStatus]:
     mcp_client.manager.remove_server(name)
     return mcp_client.manager.status()
 
 
-@app.get("/projects")
+@app.get("/projects", tags=["Projects"])
 def list_projects() -> list[Project]:
     return load_projects()
 
 
-@app.post("/projects")
+@app.post("/projects", tags=["Projects"])
 def add_project(body: ProjectCreate) -> list[Project]:
     folder = Path(body.folder_path)
     if not folder.is_dir():
@@ -1001,14 +1047,14 @@ def add_project(body: ProjectCreate) -> list[Project]:
     return load_projects()
 
 
-@app.put("/projects/{project_id}")
+@app.put("/projects/{project_id}", tags=["Projects"])
 def rename_project_endpoint(project_id: str, body: ProjectRename) -> list[Project]:
     if not rename_project(project_id, body.name):
         raise HTTPException(404, "project not found")
     return load_projects()
 
 
-@app.delete("/projects/{project_id}")
+@app.delete("/projects/{project_id}", tags=["Projects"])
 def remove_project(project_id: str) -> list[Project]:
     if not delete_project(project_id):
         raise HTTPException(404, "project not found")
@@ -1053,7 +1099,7 @@ def _build_tree(directory: Path, budget: list[int]) -> list[dict[str, object]]:
     return entries
 
 
-@app.get("/projects/{project_id}/tree")
+@app.get("/projects/{project_id}/tree", tags=["Projects"])
 def get_project_tree(project_id: str) -> dict[str, object]:
     project = get_project(project_id)
     if project is None:
@@ -1068,7 +1114,7 @@ def get_project_tree(project_id: str) -> dict[str, object]:
     return {"tree": tree, "truncated": budget[0] <= 0}
 
 
-@app.get("/projects/{project_id}/file")
+@app.get("/projects/{project_id}/file", tags=["Projects"])
 def get_project_file(project_id: str, path: str) -> FileResponse:
     """Serves one file's raw bytes for the desktop app's in-app viewer
     (PDF/HTML/Markdown preview - see ProjectFilePanel.tsx/FileViewerPanel.tsx),
@@ -1090,7 +1136,7 @@ def get_project_file(project_id: str, path: str) -> FileResponse:
     return FileResponse(target)
 
 
-@app.get("/subagents")
+@app.get("/subagents", tags=["Subagents"])
 def list_subagents() -> list[subagents.SubagentTask]:
     return subagents.list_tasks()
 
@@ -1101,7 +1147,7 @@ class OrchestratorDispatch(BaseModel):
     project_id: str | None = None
 
 
-@app.post("/orchestrator")
+@app.post("/orchestrator", tags=["Orchestrator"])
 def dispatch_orchestrator(body: OrchestratorDispatch) -> dict[str, str]:
     """Entry point for the /multi-agents slash command: resolves/creates a
     session exactly like /chat does (same title generation, same project
@@ -1124,7 +1170,7 @@ def dispatch_orchestrator(body: OrchestratorDispatch) -> dict[str, str]:
     return {"run_id": run_id, "session_id": session_id}
 
 
-@app.get("/orchestrator/{run_id}")
+@app.get("/orchestrator/{run_id}", tags=["Orchestrator"])
 def get_orchestrator_run(run_id: str) -> orchestrator.OrchestratorRun:
     run = orchestrator.get(run_id)
     if run is None:
@@ -1132,12 +1178,12 @@ def get_orchestrator_run(run_id: str) -> orchestrator.OrchestratorRun:
     return run
 
 
-@app.get("/background_tasks")
+@app.get("/background_tasks", tags=["Background Tasks"])
 def list_background_tasks_endpoint(session_id: str | None = None) -> list[dict[str, object]]:
     return [background_tasks.summary(t) for t in background_tasks.list_tasks(session_id)]
 
 
-@app.get("/background_tasks/{task_id}")
+@app.get("/background_tasks/{task_id}", tags=["Background Tasks"])
 def get_background_task(task_id: str) -> dict[str, object]:
     task = background_tasks.get(task_id)
     if task is None:
@@ -1145,7 +1191,7 @@ def get_background_task(task_id: str) -> dict[str, object]:
     return background_tasks.detail(task)
 
 
-@app.post("/background_tasks/{task_id}/stop")
+@app.post("/background_tasks/{task_id}/stop", tags=["Background Tasks"])
 def stop_background_task_endpoint(task_id: str) -> dict[str, object]:
     task = background_tasks.get(task_id)
     if task is None:
@@ -1154,7 +1200,7 @@ def stop_background_task_endpoint(task_id: str) -> dict[str, object]:
     return background_tasks.detail(task)
 
 
-@app.delete("/background_tasks/{task_id}")
+@app.delete("/background_tasks/{task_id}", tags=["Background Tasks"])
 def delete_background_task_endpoint(task_id: str) -> dict[str, bool]:
     if background_tasks.get(task_id) is None:
         raise HTTPException(404, "background task not found")
@@ -1164,7 +1210,7 @@ def delete_background_task_endpoint(task_id: str) -> dict[str, bool]:
     return {"deleted": True}
 
 
-@app.get("/logs")
+@app.get("/logs", tags=["Logs"])
 def get_logs(limit: int = 500) -> list[dict[str, object]]:
     """Raw events from logs/events.jsonl (model_call / tool_call), most
     recent first. `limit` bounds the response so a file that grew huge is
