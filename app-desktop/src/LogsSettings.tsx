@@ -223,6 +223,8 @@ export function LogsSettings() {
   const [budget, setBudget] = useState<number | null>(null);
   const [budgetInput, setBudgetInput] = useState<number | null>(null);
   const [savingBudget, setSavingBudget] = useState(false);
+  const [spentThisMonth, setSpentThisMonth] = useState(0);
+  const [budgetExceeded, setBudgetExceeded] = useState(false);
   // les deux tableaux peuvent vite compter des centaines de lignes - repliés
   // aux VISIBLE_ROWS plus recents par defaut (deja l'ordre du plus recent
   // au plus ancien, voir /logs cote serveur), avec un bouton pour tout
@@ -243,12 +245,21 @@ export function LogsSettings() {
       .finally(() => { setLoading(false); });
   }
 
+  // seule source de verite pour "le budget est-il depasse" : le meme calcul
+  // (current_month_cost() cote serveur) que celui sur lequel run_chat_stream/
+  // dispatch_orchestrator bloquent reellement les nouveaux appels - un calcul
+  // refait ici a partir des /logs bruts pourrait diverger (ex. en oubliant un
+  // type d'evenement) de ce qui est vraiment applique.
   function fetchBudget() {
-    fetch(`${API_BASE}/settings/budget`)
-      .then((r) => (r.ok ? r.json() : { monthly_budget_usd: null }))
-      .then((data: { monthly_budget_usd: number | null }) => {
+    fetch(`${API_BASE}/settings/budget/status`)
+      .then((r) =>
+        r.ok ? r.json() : { monthly_budget_usd: null, spent_usd: 0, exceeded: false },
+      )
+      .then((data: { monthly_budget_usd: number | null; spent_usd: number; exceeded: boolean }) => {
         setBudget(data.monthly_budget_usd);
         setBudgetInput(data.monthly_budget_usd);
+        setSpentThisMonth(data.spent_usd);
+        setBudgetExceeded(data.exceeded);
       })
       .catch(() => {
         // API hors ligne : le budget reste tel quel
@@ -261,6 +272,7 @@ export function LogsSettings() {
   function refresh() {
     setLoading(true);
     fetchLogs();
+    fetchBudget();
   }
 
   function loadAll() {
@@ -278,7 +290,10 @@ export function LogsSettings() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ monthly_budget_usd: budgetInput }),
       });
-      if (res.ok) setBudget(budgetInput);
+      if (res.ok) {
+        setBudget(budgetInput);
+        fetchBudget();
+      }
     } finally {
       setSavingBudget(false);
     }
@@ -302,13 +317,6 @@ export function LogsSettings() {
     () => costEvents.reduce((sum, e) => sum + (e.cost_usd ?? 0), 0),
     [costEvents],
   );
-
-  const currentMonthCost = useMemo(() => {
-    const monthKey = new Date().toISOString().slice(0, 7);
-    return costEvents
-      .filter((e) => e.timestamp.startsWith(monthKey))
-      .reduce((sum, e) => sum + (e.cost_usd ?? 0), 0);
-  }, [costEvents]);
 
   const days = useDailyStats(costEvents);
 
@@ -406,8 +414,6 @@ export function LogsSettings() {
     },
   ];
 
-  const budgetExceeded = budget !== null && currentMonthCost > budget;
-
   return (
     <div>
       <div className="mb-4 flex items-center justify-between">
@@ -430,11 +436,11 @@ export function LogsSettings() {
         />
       ) : (
         <>
-          {budgetExceeded && (
+          {budgetExceeded && budget !== null && (
             <Banner
               status="warning"
               title="Budget mensuel dépassé"
-              description={`${formatCost(currentMonthCost)} dépensés ce mois-ci, pour un budget de ${formatCost(budget)}.`}
+              description={`${formatCost(spentThisMonth)} dépensés ce mois-ci, pour un budget de ${formatCost(budget)} - nouveaux messages bloqués jusqu'au mois prochain (ajuste-le ci-dessous pour continuer).`}
               className="mb-6"
             />
           )}
@@ -468,7 +474,7 @@ export function LogsSettings() {
               onClick={() => { void saveBudget(); }}
             />
             <Text size="2xs" color="secondary" className="ml-auto">
-              Dépensé ce mois-ci : {formatCost(currentMonthCost)}
+              Dépensé ce mois-ci : {formatCost(spentThisMonth)}
             </Text>
           </div>
 

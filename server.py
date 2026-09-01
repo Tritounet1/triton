@@ -34,7 +34,7 @@ from triton.llm.chat_loop import (
     to_tool_call_params,
 )
 from triton.llm.model_roles import ROLE_MODELS
-from triton.storage.logs import LOGS_FILE, log_event
+from triton.storage.logs import LOGS_FILE, current_month_cost, log_event
 from triton.storage.projects import (
     Project,
     create_project,
@@ -303,6 +303,18 @@ def run_chat_stream(
         )
         return
 
+    budget = load_monthly_budget()
+    if budget is not None and current_month_cost() > budget:
+        yield sse(
+            "error",
+            {
+                "message": f"Budget mensuel de {budget:.2f} $ dépassé - nouveaux messages "
+                "bloqués jusqu'au mois prochain. Augmente-le ou retire-le dans les Paramètres "
+                "(Logs & coûts) pour continuer.",
+            },
+        )
+        return
+
     project_id = load_session_project(session_id)
     project = get_project(project_id) if project_id else None
     session_model = load_session_model(session_id)
@@ -537,6 +549,28 @@ def get_monthly_budget() -> dict[str, float | None]:
 def set_monthly_budget(body: BudgetUpdate) -> dict[str, float | None]:
     save_monthly_budget(body.monthly_budget_usd)
     return {"monthly_budget_usd": body.monthly_budget_usd}
+
+
+class BudgetStatus(BaseModel):
+    monthly_budget_usd: float | None
+    spent_usd: float
+    exceeded: bool
+
+
+@app.get("/settings/budget/status", tags=["Settings"])
+def get_budget_status() -> BudgetStatus:
+    """The single source of truth for "is the monthly budget exceeded" -
+    the same current_month_cost() run_chat_stream/dispatch_orchestrator
+    actually gate new calls on, rather than a client recomputing its own
+    version from raw /logs events (which could drift from what's really
+    being enforced, e.g. by missing an event type)."""
+    budget = load_monthly_budget()
+    spent = current_month_cost()
+    return BudgetStatus(
+        monthly_budget_usd=budget,
+        spent_usd=spent,
+        exceeded=budget is not None and spent > budget,
+    )
 
 
 class ApiKeyUpdate(BaseModel):
@@ -1182,6 +1216,14 @@ def dispatch_orchestrator(body: OrchestratorDispatch) -> dict[str, str]:
     once it finishes, its own exchange is appended there too (see
     orchestrator._append_result_to_session), so the conversation reads
     seamlessly afterward instead of needing a separate view."""
+    budget = load_monthly_budget()
+    if budget is not None and current_month_cost() > budget:
+        raise HTTPException(
+            402,
+            f"monthly budget of ${budget:.2f} exceeded - raise or clear it in Settings "
+            "(Logs & costs) to keep running multi-agent tasks",
+        )
+
     session_path, messages, is_new = resolve_session(body.session_id, body.project_id)
     session_id = session_path.stem
     messages.append({"role": "user", "content": body.task})
