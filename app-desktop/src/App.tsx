@@ -618,6 +618,22 @@ function WriteFileDiff({
   return <EditFileDiff oldString={oldContent ?? ""} newString={newContent} />;
 }
 
+// web_search prefixe son resultat d'un marqueur "[source: ...]" (voir
+// tools/web.py) pour que l'app puisse afficher quelle API a repondu sans
+// que l'utilisateur ait a deplier l'appel - jamais montre tel quel dans
+// le detail du resultat, extrait puis retire par les deux fonctions
+// ci-dessous (reutilisees pour les appels normaux et ceux d'une
+// sous-tache multi-agent, voir multiAgentSubtaskDetail plus bas).
+const WEB_SEARCH_SOURCE_RE = /^\[source: (Tavily|DuckDuckGo)\]\n\n?/;
+
+function webSearchSource(result: string): string | undefined {
+  return WEB_SEARCH_SOURCE_RE.exec(result)?.[1];
+}
+
+function stripWebSearchSource(result: string): string {
+  return result.replace(WEB_SEARCH_SOURCE_RE, "");
+}
+
 function toolResultDetail(t: ToolMsg): ReactNode {
   const { old_string: oldString, new_string: newString } = t.args;
   if (
@@ -627,9 +643,10 @@ function toolResultDetail(t: ToolMsg): ReactNode {
   ) {
     return <EditFileDiff oldString={oldString} newString={newString} />;
   }
+  const result = t.tool === "web_search" ? stripWebSearchSource(t.result) : t.result;
   return (
     <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap text-xs">
-      {t.result}
+      {result}
     </pre>
   );
 }
@@ -649,10 +666,11 @@ function multiAgentSubtaskDetail(t: ToolMsg): ReactNode {
           calls={calls.map((c) => ({
             name: c.tool,
             status: toolCallStatus(c.result),
+            node: c.tool === "web_search" ? webSearchSource(c.result) : undefined,
             target: formatArgs(c.args),
             resultDetail: (
               <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap text-xs">
-                {c.result}
+                {c.tool === "web_search" ? stripWebSearchSource(c.result) : c.result}
               </pre>
             ),
           }))}
@@ -2321,7 +2339,12 @@ function App() {
                               return {
                                 name: t.tool,
                                 status,
-                                node: isSubtask && typeof t.args.model === "string" ? t.args.model : undefined,
+                                node:
+                                  isSubtask && typeof t.args.model === "string"
+                                    ? t.args.model
+                                    : t.tool === "web_search"
+                                      ? webSearchSource(t.result)
+                                      : undefined,
                                 target: isSubtask ? t.subtaskDescription : formatArgs(t.args),
                                 stats:
                                   isSubtask && status === "running" && callCount > 0

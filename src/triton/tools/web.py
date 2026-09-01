@@ -135,8 +135,13 @@ def web_search(query: str) -> str:
     if api_key:
         result = _tavily_search(query, api_key)
         if result is not None:
-            return result
-    return _duckduckgo_search(query)
+            return f"[source: Tavily]\n\n{result}"
+    # tagged the same way even on an error string (e.g. DuckDuckGo's own
+    # bot-detection message) - the desktop app strips this line for
+    # display and turns it into a small "Tavily"/"DuckDuckGo" pill next to
+    # the call instead (see webSearchSource() in App.tsx), so which
+    # backend actually answered is visible without expanding the call.
+    return f"[source: DuckDuckGo]\n\n{_duckduckgo_search(query)}"
 
 
 REGISTRY: dict[str, Tool] = {

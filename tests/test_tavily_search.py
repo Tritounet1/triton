@@ -117,7 +117,9 @@ def test_web_search_uses_tavily_when_configured_and_available(monkeypatch):
         lambda query: (_ for _ in ()).throw(AssertionError("must not fall back to DuckDuckGo")),
     )
 
-    assert web.web_search("query") == "tavily result"
+    # tagged with its source (see webSearchSource() in App.tsx, which
+    # strips this same marker for display and turns it into a pill badge)
+    assert web.web_search("query") == "[source: Tavily]\n\ntavily result"
 
 
 def test_web_search_falls_back_to_duckduckgo_when_tavily_unavailable(monkeypatch):
@@ -125,7 +127,7 @@ def test_web_search_falls_back_to_duckduckgo_when_tavily_unavailable(monkeypatch
     monkeypatch.setattr(web, "_tavily_search", lambda query, api_key: None)
     monkeypatch.setattr(web, "_duckduckgo_search", lambda query: "duckduckgo result")
 
-    assert web.web_search("query") == "duckduckgo result"
+    assert web.web_search("query") == "[source: DuckDuckGo]\n\nduckduckgo result"
 
 
 def test_web_search_skips_tavily_entirely_without_a_key(monkeypatch):
@@ -138,7 +140,7 @@ def test_web_search_skips_tavily_entirely_without_a_key(monkeypatch):
     )
     monkeypatch.setattr(web, "_duckduckgo_search", lambda query: "duckduckgo result")
 
-    assert web.web_search("query") == "duckduckgo result"
+    assert web.web_search("query") == "[source: DuckDuckGo]\n\nduckduckgo result"
 
 
 def test_web_search_duckduckgo_path_still_works_end_to_end(monkeypatch):
