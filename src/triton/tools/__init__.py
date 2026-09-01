@@ -9,7 +9,7 @@ exactly as it did before.
 - filesystem.py read/write/edit/delete/move a file, list a directory
 - search.py     grep, glob
 - git.py        status/diff/commit
-- process.py    run_shell, run_tests
+- process.py    run_shell, run_tests, run_code
 - web.py        fetch_url, web_search
 - memory.py     todo_write (in-process), remember (writes only - see
                  storage/sessions.py, storage/projects.py, storage/memory.py

@@ -35,9 +35,10 @@ selected, "code" stays exactly as read-only as every other role. This is
 still unsupervised: nothing here goes through the confirmation flow a
 live conversation has, so a code subtask can write/edit/delete files with
 no human review in the loop - the project scope is the only safety net,
-not a substitute for one. run_shell and git_commit are withheld from
-every role regardless: arbitrary command execution and committing
-autonomously are a different order of blast radius than file edits.
+not a substitute for one. run_shell, run_code, and git_commit are
+withheld from every role regardless: arbitrary command/code execution
+and committing autonomously are a different order of blast radius than
+file edits.
 """
 
 import json

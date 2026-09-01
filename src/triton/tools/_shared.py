@@ -78,6 +78,7 @@ SANDBOXED_PATH_ARGS: dict[str, list[str]] = {
     "git_commit": ["directory", "paths"],
     "run_shell": ["directory"],
     "run_tests": ["path", "directory"],
+    "run_code": ["directory"],
     "start_background_task": ["directory"],
 }
 
@@ -95,6 +96,7 @@ DEFAULTABLE_PATH_ARGS = {
     "git_commit",
     "run_shell",
     "run_tests",
+    "run_code",
     "start_background_task",
 }
 

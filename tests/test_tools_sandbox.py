@@ -48,6 +48,20 @@ def test_run_tests_path_and_directory_both_checked(tmp_path):
     assert bad_path is not None
 
 
+def test_run_code_directory_defaults_to_project_root(tmp_path):
+    project = _project(tmp_path)
+    args: dict[str, object] = {"code": "print(1)"}
+    assert enforce_project_sandbox("run_code", args, project) is None
+    assert args["directory"] == str((tmp_path / "myproject").resolve())
+
+
+def test_run_code_directory_outside_project_is_rejected(tmp_path):
+    project = _project(tmp_path)
+    args: dict[str, object] = {"code": "print(1)", "directory": str(tmp_path)}
+    error = enforce_project_sandbox("run_code", args, project)
+    assert error is not None
+
+
 def test_path_inside_project_is_allowed(tmp_path):
     project = _project(tmp_path)
     args: dict[str, object] = {"path": str(tmp_path / "myproject" / "notes.md")}
