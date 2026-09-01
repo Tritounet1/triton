@@ -63,15 +63,17 @@ def invoke_tool(tool: Tool, name: str, args: dict[str, object], session_id: str)
 # (unknown schemas) are deliberately not covered here, and remain
 # unrestricted regardless of project - a separate, pre-existing gap.
 #
-# run_shell/run_tests only get a `directory` check, not a command-content
-# one: this confines their *working directory* to the project (so a
-# relative path in the command resolves where it should, and this was
-# actually a bug before - subprocess.run's default cwd is the harness's
-# own process directory, not the project's), but a command that
-# deliberately does `cd .. && rm -rf` still escapes, same as it would in
-# a real terminal. There's no practical way to make arbitrary shell text
-# itself un-escapable without a real sandbox (container/chroot), which is
-# out of scope here.
+# run_shell/run_tests/run_code only get a `directory` check here, not a
+# command-content one: this confines their *starting* working directory
+# to the project (so a relative path in the command resolves where it
+# should, and this was actually a bug before - subprocess.run's default
+# cwd is the harness's own process directory, not the project's). A
+# command that deliberately does `cd .. && rm -rf` would still reach
+# outside the project on just this check alone - on macOS that gap is
+# closed one level down, in process.py's _run_confined (a real
+# sandbox-exec/Seatbelt confinement of filesystem writes, wrapped around
+# the subprocess itself); Linux/Windows have no equivalent primitive and
+# keep only this directory-argument check.
 SANDBOXED_PATH_ARGS: dict[str, list[str]] = {
     "read_file": ["path"],
     "list_files": ["directory"],

@@ -9,10 +9,21 @@ All three take an (optional) `directory` argument that _shared.py's
 DEFAULTABLE_PATH_ARGS defaults to the active project's folder - without
 it, subprocess.run's own default cwd is this harness's own process
 directory, not the project's, so a command like `ls` would list the
-wrong folder entirely for a project-scoped conversation. This is a
-sandboxing improvement, not a jailbreak-proof sandbox: a command that
-deliberately does `cd .. && rm -rf` still escapes, the same way it would
-in a real terminal - see enforce_project_sandbox's module docstring."""
+wrong folder entirely for a project-scoped conversation. On its own that
+only confines the *starting* directory: a command that deliberately does
+`cd .. && rm -rf` (confirmed live - a real conversation tried exactly
+this) still reaches outside the project, the same way it would in a
+real terminal. _run_confined below closes that specific gap on macOS via
+sandbox-exec (Seatbelt), confining actual filesystem *writes* to the
+project folder regardless of what the command/code text itself does -
+see its own docstring for what it does and doesn't cover, and why
+several directories beyond the project folder had to be allow-listed
+(found by testing real commands against a first draft, not guessed:
+plain `git status` needs /dev/null, Python's own tempfile module needs
+the resolved TMPDIR, `npm install` needs ~/.npm's cache - each broke
+outright until added). No such primitive exists on Linux/Windows, so
+they keep only the `directory`-argument confinement described above -
+see PLAN.md's "Vrai bac a sable pour run_shell" entry."""
 
 import shutil
 import subprocess
@@ -22,13 +33,113 @@ from pathlib import Path
 
 from triton.tools._shared import Tool
 
+# devices real commands routinely write to (`> /dev/null`, git's own
+# internal checks, prompts written to /dev/tty, /dev/urandom for
+# anything needing randomness, /dev/dtracehelper - some tools probe it
+# even when not actually tracing) - found the same way as the
+# directories below: a command failed until the specific device it
+# needed was added.
+_MACOS_SANDBOX_DEVICES = (
+    "/dev/null",
+    "/dev/zero",
+    "/dev/tty",
+    "/dev/urandom",
+    "/dev/dtracehelper",
+)
+
+# a Seatbelt (sandbox-exec) profile confining filesystem *writes* to
+# whatever PROJECT_ROOT is bound to via -D, plus a handful of well-known
+# cache/temp directories real tools legitimately write to outside any
+# project (npm's package cache, Python's tempfile module, ...) -
+# TMP_DIR/NPM_CACHE/GENERIC_CACHE/LIBRARY_CACHES are bound the same way,
+# computed fresh per call in _macos_sandbox_argv since TMPDIR in
+# particular is session-specific. Reads are deliberately left
+# unrestricted: run_shell's command text (or run_code's code) can still
+# read anywhere, same as it always could - a full read sandbox would
+# risk breaking far more (the dynamic linker, interpreter stdlibs, DNS
+# resolution, ~/.ssh for git operations over SSH, ...) than closing that
+# separate, pre-existing gap is worth in this pass. Every bound path
+# must already be fully resolved by the caller (_macos_sandbox_argv):
+# Seatbelt matches the canonical path, and macOS symlinks
+# /tmp -> /private/tmp and /var -> /private/var, so an unresolved "/tmp"
+# silently wouldn't match what's actually checked at write time
+# (confirmed directly - tempfile writes kept failing until this was
+# fixed). Paths are passed via -D/(param ...) rather than interpolated
+# into the profile text, so a path containing a stray '"' can't affect
+# the profile's own syntax.
+_MACOS_SANDBOX_PROFILE = (
+    "(version 1)\n"
+    "(deny default)\n"
+    "(allow process-fork)\n"
+    "(allow process-exec)\n"
+    "(allow file-read*)\n"
+    "(allow file-write*\n"
+    '  (subpath (param "PROJECT_ROOT"))\n'
+    '  (subpath (param "TMP_DIR"))\n'
+    '  (subpath (param "NPM_CACHE"))\n'
+    '  (subpath (param "GENERIC_CACHE"))\n'
+    '  (subpath (param "LIBRARY_CACHES"))\n'
+    + "\n".join(f'  (literal "{device}")' for device in _MACOS_SANDBOX_DEVICES)
+    + ")\n"
+    "(allow network*)\n"
+    "(allow mach-lookup)\n"
+    "(allow sysctl-read)\n"
+    "(allow signal (target self))\n"
+)
+
+
+def _macos_sandbox_argv(directory: Path) -> list[str]:
+    home = Path.home()
+    return [
+        "/usr/bin/sandbox-exec",
+        "-p",
+        _MACOS_SANDBOX_PROFILE,
+        "-D",
+        f"PROJECT_ROOT={directory}",
+        "-D",
+        f"TMP_DIR={Path(tempfile.gettempdir()).resolve()}",
+        "-D",
+        f"NPM_CACHE={home / '.npm'}",
+        "-D",
+        f"GENERIC_CACHE={home / '.cache'}",
+        "-D",
+        f"LIBRARY_CACHES={home / 'Library' / 'Caches'}",
+    ]
+
+
+def _run_confined(
+    command: str | list[str], directory: str, timeout: float
+) -> subprocess.CompletedProcess[str]:
+    """subprocess.run, transparently wrapped with sandbox-exec on macOS
+    whenever a directory is given - see _MACOS_SANDBOX_PROFILE for what
+    that confines and why. `command` is either a shell command string
+    (run_shell, executed via `/bin/sh -c` either way) or an argv list
+    (run_code/run_tests, a real interpreter/executable + arguments) -
+    both need to reach this the same way since sandbox-exec has to wrap
+    whichever one actually runs. A no-op beyond the existing cwd
+    confinement everywhere else: sandbox-exec doesn't exist outside
+    macOS."""
+    is_shell_string = isinstance(command, str)
+    if sys.platform == "darwin" and directory:
+        argv = ["/bin/sh", "-c", command] if is_shell_string else command
+        full_argv = [*_macos_sandbox_argv(Path(directory).resolve()), *argv]
+        return subprocess.run(
+            full_argv, cwd=directory, capture_output=True, text=True, timeout=timeout
+        )
+    return subprocess.run(
+        command,
+        shell=is_shell_string,
+        cwd=directory or None,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
 
 def run_shell(command: str, directory: str = "") -> str:
     # no confirmation before execution here, that comes at step 7
     try:
-        result = subprocess.run(
-            command, shell=True, cwd=directory or None, capture_output=True, text=True, timeout=10
-        )
+        result = _run_confined(command, directory, timeout=10)
     except subprocess.TimeoutExpired:
         return "error: command took too long (10s timeout)"
     output = (result.stdout + result.stderr).strip()
@@ -40,9 +151,7 @@ def run_tests(path: str = "", directory: str = "") -> str:
     if path:
         args.append(path)
     try:
-        result = subprocess.run(
-            args, cwd=directory or None, capture_output=True, text=True, timeout=120
-        )
+        result = _run_confined(args, directory, timeout=120)
     except subprocess.TimeoutExpired:
         return "error: test run took too long (120s timeout)"
     except OSError as e:
@@ -112,12 +221,8 @@ def run_code(code: str, language: str = "python", directory: str = "") -> str:
             f.write(code)
             script_path = f.name
         try:
-            result = subprocess.run(
-                [*interpreter, script_path],
-                cwd=directory or None,
-                capture_output=True,
-                text=True,
-                timeout=RUN_CODE_TIMEOUT_SECONDS,
+            result = _run_confined(
+                [*interpreter, script_path], directory, timeout=RUN_CODE_TIMEOUT_SECONDS
             )
         finally:
             Path(script_path).unlink(missing_ok=True)
@@ -140,7 +245,9 @@ REGISTRY: dict[str, Tool] = {
                 "name": "run_shell",
                 "description": "Runs a shell command and returns its output. Do not use this "
                 "to create or edit files (no echo/cat/heredoc redirection) — use write_file "
-                "or edit_file instead, which don't require shell quoting.",
+                "or edit_file instead, which don't require shell quoting. Filesystem writes "
+                "are confined to the project folder even via `cd ..` or an absolute path - "
+                "don't try to work around this, it won't succeed.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -197,7 +304,9 @@ REGISTRY: dict[str, Tool] = {
                 "a real interpreter and returns its output (stdout+stderr) - for one-shot "
                 "calculations or scripts, not for creating/editing project files (use "
                 "write_file/edit_file for that) and not a persistent REPL: each call is a "
-                "fresh process, nothing (variables, imports) carries over to the next call.",
+                "fresh process, nothing (variables, imports) carries over to the next call. "
+                "Filesystem writes are confined to the project folder, whatever the code "
+                "itself tries to do.",
                 "parameters": {
                     "type": "object",
                     "properties": {
