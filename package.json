@@ -5,7 +5,7 @@
   "main": "main.py",
   "scripts": {
     "start": "concurrently \"uv run server.py\" \"cd app-desktop/ && pnpm tauri dev\"",
-    "dev": "concurrently \"uv run uvicorn server:app --reload\" \"cd app-desktop/ && pnpm tauri dev\""
+    "dev": "concurrently \"uv run uvicorn server:app --reload --reload-exclude .venv --reload-exclude app-desktop --reload-exclude node_modules\" \"cd app-desktop/ && pnpm tauri dev\""
   },
   "keywords": [],
   "author": "",
