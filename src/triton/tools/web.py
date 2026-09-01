@@ -44,6 +44,14 @@ def fetch_url(url: str) -> str:
     return text
 
 
+DEFAULT_MAX_RESULTS = 8
+# defensive clamp against a hallucinated value (e.g. the model passing
+# 500) - Tavily itself doesn't error past this, it just returns fewer
+# results than asked for once relevance runs out (verified live: asking
+# for 25 returned 19), so this is only a ceiling, not a real API limit.
+MAX_MAX_RESULTS = 20
+
+
 def _effective_tavily_key() -> str | None:
     return load_tavily_api_key() or os.getenv("TAVILY_API_KEY")
 
@@ -58,7 +66,7 @@ def is_tavily_configured() -> bool:
     return _effective_tavily_key() is not None
 
 
-def _tavily_search(query: str, api_key: str) -> str | None:
+def _tavily_search(query: str, api_key: str, max_results: int) -> str | None:
     """None means "unavailable right now" - web_search falls back to
     _duckduckgo_search below rather than surfacing this as a hard error,
     since that free fallback already exists. Never raises: a free-tier
@@ -66,7 +74,7 @@ def _tavily_search(query: str, api_key: str) -> str | None:
     most likely case day to day, but any failure here degrades the same
     way rather than taking web_search down entirely."""
     try:
-        response = TavilyClient(api_key=api_key).search(query, max_results=8)
+        response = TavilyClient(api_key=api_key).search(query, max_results=max_results)
     except (
         UsageLimitExceededError,
         InvalidAPIKeyError,
@@ -86,7 +94,7 @@ def _tavily_search(query: str, api_key: str) -> str | None:
     return "\n\n".join(lines)
 
 
-def _duckduckgo_search(query: str) -> str:
+def _duckduckgo_search(query: str, max_results: int) -> str:
     # scrapes DuckDuckGo's no-JS HTML endpoint (no API key required); the
     # regex parsing is brittle to markup changes but keeps this dependency-free
     try:
@@ -123,17 +131,18 @@ def _duckduckgo_search(query: str) -> str:
         return "(no results)"
 
     lines: list[str] = []
-    for href, title in raw_results[:8]:
+    for href, title in raw_results[:max_results]:
         clean_title = re.sub(r"<[^>]+>", "", title).strip()
         target_url = parse_qs(urlparse(href).query).get("uddg", [href])[0]
         lines.append(f"{clean_title}\n{unquote(target_url)}")
     return "\n\n".join(lines)
 
 
-def web_search(query: str) -> str:
+def web_search(query: str, max_results: int = DEFAULT_MAX_RESULTS) -> str:
+    max_results = max(1, min(max_results, MAX_MAX_RESULTS))
     api_key = _effective_tavily_key()
     if api_key:
-        result = _tavily_search(query, api_key)
+        result = _tavily_search(query, api_key, max_results)
         if result is not None:
             return f"[source: Tavily]\n\n{result}"
     # tagged the same way even on an error string (e.g. DuckDuckGo's own
@@ -141,7 +150,7 @@ def web_search(query: str) -> str:
     # display and turns it into a small "Tavily"/"DuckDuckGo" pill next to
     # the call instead (see webSearchSource() in App.tsx), so which
     # backend actually answered is visible without expanding the call.
-    return f"[source: DuckDuckGo]\n\n{_duckduckgo_search(query)}"
+    return f"[source: DuckDuckGo]\n\n{_duckduckgo_search(query, max_results)}"
 
 
 REGISTRY: dict[str, Tool] = {
@@ -180,6 +189,13 @@ REGISTRY: dict[str, Tool] = {
                         "query": {
                             "type": "string",
                             "description": "Search query.",
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Number of results to return. Default and "
+                            "recommended: 8 - only ask for more on a genuinely broad or "
+                            "exhaustive research query, since each extra result adds real "
+                            "page content to your context, not just a link.",
                         },
                     },
                     "required": ["query"],

@@ -69,9 +69,26 @@ def test_tavily_search_formats_title_url_content(monkeypatch):
 
     monkeypatch.setattr(web, "TavilyClient", FakeClient)
 
-    result = web._tavily_search("query", "tvly-xxx")
+    result = web._tavily_search("query", "tvly-xxx", 8)
 
     assert result == "Result A\nhttps://a.example\nAbout A\n\nResult B\nhttps://b.example\nAbout B"
+
+
+def test_tavily_search_passes_max_results_through_to_the_client(monkeypatch):
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, api_key):
+            pass
+
+        def search(self, query, max_results=8):
+            captured["max_results"] = max_results
+            return {"results": []}
+
+    monkeypatch.setattr(web, "TavilyClient", FakeClient)
+    web._tavily_search("query", "tvly-xxx", 15)
+
+    assert captured["max_results"] == 15
 
 
 def test_tavily_search_returns_none_on_empty_results(monkeypatch):
@@ -83,7 +100,7 @@ def test_tavily_search_returns_none_on_empty_results(monkeypatch):
             return {"results": []}
 
     monkeypatch.setattr(web, "TavilyClient", FakeClient)
-    assert web._tavily_search("query", "tvly-xxx") is None
+    assert web._tavily_search("query", "tvly-xxx", 8) is None
 
 
 @pytest.mark.parametrize(
@@ -102,19 +119,21 @@ def test_tavily_search_returns_none_instead_of_raising(monkeypatch, exc):
             raise exc
 
     monkeypatch.setattr(web, "TavilyClient", FakeClient)
-    assert web._tavily_search("query", "tvly-xxx") is None
+    assert web._tavily_search("query", "tvly-xxx", 8) is None
 
 
-# --- web_search: which path it takes ---
+# --- web_search: which path it takes, and max_results handling ---
 
 
 def test_web_search_uses_tavily_when_configured_and_available(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-xxx")
-    monkeypatch.setattr(web, "_tavily_search", lambda query, api_key: "tavily result")
+    monkeypatch.setattr(web, "_tavily_search", lambda query, api_key, max_results: "tavily result")
     monkeypatch.setattr(
         web,
         "_duckduckgo_search",
-        lambda query: (_ for _ in ()).throw(AssertionError("must not fall back to DuckDuckGo")),
+        lambda query, max_results: (_ for _ in ()).throw(
+            AssertionError("must not fall back to DuckDuckGo")
+        ),
     )
 
     # tagged with its source (see webSearchSource() in App.tsx, which
@@ -124,8 +143,8 @@ def test_web_search_uses_tavily_when_configured_and_available(monkeypatch):
 
 def test_web_search_falls_back_to_duckduckgo_when_tavily_unavailable(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-xxx")
-    monkeypatch.setattr(web, "_tavily_search", lambda query, api_key: None)
-    monkeypatch.setattr(web, "_duckduckgo_search", lambda query: "duckduckgo result")
+    monkeypatch.setattr(web, "_tavily_search", lambda query, api_key, max_results: None)
+    monkeypatch.setattr(web, "_duckduckgo_search", lambda query, max_results: "duckduckgo result")
 
     assert web.web_search("query") == "[source: DuckDuckGo]\n\nduckduckgo result"
 
@@ -136,11 +155,50 @@ def test_web_search_skips_tavily_entirely_without_a_key(monkeypatch):
     monkeypatch.setattr(
         web,
         "_tavily_search",
-        lambda query, api_key: (_ for _ in ()).throw(AssertionError("must not call Tavily at all")),
+        lambda query, api_key, max_results: (_ for _ in ()).throw(
+            AssertionError("must not call Tavily at all")
+        ),
     )
-    monkeypatch.setattr(web, "_duckduckgo_search", lambda query: "duckduckgo result")
+    monkeypatch.setattr(web, "_duckduckgo_search", lambda query, max_results: "duckduckgo result")
 
     assert web.web_search("query") == "[source: DuckDuckGo]\n\nduckduckgo result"
+
+
+def test_web_search_default_max_results_is_8(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        web,
+        "_duckduckgo_search",
+        lambda query, max_results: captured.setdefault("max_results", max_results) and "r",
+    )
+    web.web_search("query")
+    assert captured["max_results"] == 8
+
+
+def test_web_search_passes_a_custom_max_results_through(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        web,
+        "_duckduckgo_search",
+        lambda query, max_results: captured.setdefault("max_results", max_results) and "r",
+    )
+    web.web_search("query", max_results=3)
+    assert captured["max_results"] == 3
+
+
+def test_web_search_clamps_an_unreasonably_high_max_results(monkeypatch):
+    """Defends against a hallucinated value (e.g. the model passing 500) -
+    Tavily itself doesn't error past MAX_MAX_RESULTS, it just quietly
+    returns fewer results than asked (verified live), so this clamp is
+    purely to keep a single call's context/cost bounded."""
+    captured = {}
+    monkeypatch.setattr(
+        web,
+        "_duckduckgo_search",
+        lambda query, max_results: captured.setdefault("max_results", max_results) and "r",
+    )
+    web.web_search("query", max_results=500)
+    assert captured["max_results"] == web.MAX_MAX_RESULTS
 
 
 def test_web_search_duckduckgo_path_still_works_end_to_end(monkeypatch):
@@ -154,6 +212,6 @@ def test_web_search_duckduckgo_path_still_works_end_to_end(monkeypatch):
     )
     monkeypatch.setattr(web.requests, "get", lambda *a, **k: _duckduckgo_response(html))
 
-    result = web._duckduckgo_search("query")
+    result = web._duckduckgo_search("query", 8)
 
     assert result == "Example Title\nhttps://example.com"
