@@ -41,7 +41,7 @@ def _isolated_storage(tmp_path, monkeypatch):
 
 
 def test_ensure_snapshot_does_nothing_without_a_project():
-    snap.ensure_snapshot(None, "session1")
+    assert snap.ensure_snapshot(None, "session1") is False
     assert snapshots.get_snapshot("session1") is None
 
 
@@ -77,11 +77,11 @@ def test_ensure_snapshot_is_a_noop_once_a_session_already_has_one(tmp_path):
     project = _git_repo(tmp_path)
     root = tmp_path / "repo"
 
-    snap.ensure_snapshot(project, "session1")
+    assert snap.ensure_snapshot(project, "session1") is True
     first = snapshots.get_snapshot("session1")
 
     (root / "tracked.txt").write_text("changed after the first snapshot")
-    snap.ensure_snapshot(project, "session1")
+    assert snap.ensure_snapshot(project, "session1") is False
     second = snapshots.get_snapshot("session1")
 
     assert first == second
@@ -141,6 +141,62 @@ def test_restore_snapshot_on_a_non_git_folder_undoes_every_change_since(tmp_path
 
     assert (root / "a.txt").read_text() == "original"
     assert not (root / "b.txt").exists()
+
+
+def test_diff_snapshot_on_a_git_repo_classifies_every_change(tmp_path):
+    project = _git_repo(tmp_path)
+    root = tmp_path / "repo"
+    (root / "to_be_deleted.txt").write_text("present at snapshot time")
+    (root / "untouched.txt").write_text("never changes")
+
+    snap.ensure_snapshot(project, "session1")
+    snapshot = snapshots.get_snapshot("session1")
+    assert snapshot is not None
+
+    (root / "tracked.txt").write_text("edited by the agent")
+    (root / "created_by_agent.txt").write_text("new")
+    (root / "to_be_deleted.txt").unlink()
+
+    diff = snap.diff_snapshot(project, snapshot)
+
+    assert diff.created == ["created_by_agent.txt"]
+    assert diff.deleted == ["to_be_deleted.txt"]
+    assert diff.modified == ["tracked.txt"]
+
+
+def test_diff_snapshot_on_a_git_repo_with_no_changes_is_empty(tmp_path):
+    project = _git_repo(tmp_path)
+    snap.ensure_snapshot(project, "session1")
+    snapshot = snapshots.get_snapshot("session1")
+    assert snapshot is not None
+
+    diff = snap.diff_snapshot(project, snapshot)
+
+    assert diff.created == []
+    assert diff.deleted == []
+    assert diff.modified == []
+
+
+def test_diff_snapshot_on_a_non_git_folder_classifies_every_change(tmp_path):
+    root = tmp_path / "plain"
+    root.mkdir()
+    (root / "a.txt").write_text("original")
+    (root / "to_be_deleted.txt").write_text("present at snapshot time")
+    project = Project(id="proj2", name="plain", folder_path=str(root))
+
+    snap.ensure_snapshot(project, "session2")
+    snapshot = snapshots.get_snapshot("session2")
+    assert snapshot is not None
+
+    (root / "a.txt").write_text("edited")
+    (root / "b.txt").write_text("new")
+    (root / "to_be_deleted.txt").unlink()
+
+    diff = snap.diff_snapshot(project, snapshot)
+
+    assert diff.created == ["b.txt"]
+    assert diff.deleted == ["to_be_deleted.txt"]
+    assert diff.modified == ["a.txt"]
 
 
 def test_discard_snapshot_removes_the_record_and_the_backup(tmp_path):

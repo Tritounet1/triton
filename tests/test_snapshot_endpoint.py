@@ -48,6 +48,30 @@ def test_get_snapshot_returns_kind_and_created_at(tmp_path, client):
     assert body["created_at"]
 
 
+def test_diff_404_when_none_exists(client):
+    r = client.get("/sessions/no-such-session/snapshot/diff")
+    assert r.status_code == 404
+
+
+def test_diff_reports_created_deleted_and_modified(tmp_path, client):
+    project = _project(tmp_path)
+    root = tmp_path / "myproject"
+    (root / "a.txt").write_text("original")
+    (root / "to_be_deleted.txt").write_text("present at snapshot time")
+
+    snap.ensure_snapshot(project, "session1")
+    (root / "a.txt").write_text("edited by the agent")
+    (root / "b.txt").write_text("created by the agent")
+    (root / "to_be_deleted.txt").unlink()
+
+    r = client.get("/sessions/session1/snapshot/diff")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["created"] == ["b.txt"]
+    assert body["deleted"] == ["to_be_deleted.txt"]
+    assert body["modified"] == ["a.txt"]
+
+
 def test_restore_404_when_no_snapshot(client):
     r = client.post("/sessions/no-such-session/snapshot/restore")
     assert r.status_code == 404

@@ -33,6 +33,7 @@ import subprocess
 import tempfile
 import threading
 import uuid
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -124,29 +125,34 @@ def _take_copy_snapshot(root: Path, session_id: str) -> str:
     return str(backup_dir)
 
 
-def ensure_snapshot(project: Project | None, session_id: str) -> None:
+def ensure_snapshot(project: Project | None, session_id: str) -> bool:
     """Takes a snapshot of the project folder if this session hasn't had
     one yet. Silently does nothing without a project, for a session that
     already has a snapshot, or if the snapshot attempt itself fails (a
     missing/broken git binary shouldn't block the write the model was
     actually trying to make - this is a best-effort safety net, not a
-    precondition for writing)."""
+    precondition for writing). Returns whether a snapshot was actually
+    just taken by this call - server.py's run_chat_stream uses this to
+    surface a one-time "safety net is now active" notice in the
+    conversation itself instead of only in the project file panel (see
+    SnapshotSection.tsx), which required knowing the feature existed at
+    all to go find it."""
     if project is None:
-        return
+        return False
 
     with _LOCK:
         if get_snapshot(session_id) is not None:
-            return
+            return False
 
         root = Path(project.folder_path).resolve()
         if not root.is_dir():
-            return
+            return False
 
         try:
             if _is_git_repo(root):
                 sha = _take_git_snapshot(root, session_id)
                 if sha is None:
-                    return
+                    return False
                 snapshot = Snapshot(
                     session_id=session_id,
                     project_id=project.id,
@@ -164,9 +170,10 @@ def ensure_snapshot(project: Project | None, session_id: str) -> None:
                     created_at=datetime.now(UTC).isoformat(),
                 )
         except OSError:
-            return
+            return False
 
         save_snapshot(snapshot)
+        return True
 
 
 def restore_snapshot(project: Project, snapshot: Snapshot) -> None:
@@ -208,6 +215,103 @@ def restore_snapshot(project: Project, snapshot: Snapshot) -> None:
                 shutil.copytree(entry, dest)
             else:
                 shutil.copy2(entry, dest)
+
+
+@dataclass
+class SnapshotDiff:
+    """What restore_snapshot would actually do, from the session's own
+    point of view rather than the snapshot's: a path this session created
+    (didn't exist at snapshot time, exists now - restore deletes it), one
+    it deleted (existed then, doesn't now - restore recreates it), or one
+    it modified (exists both times with different content - restore
+    reverts it). Paths are relative to the project folder."""
+
+    created: list[str] = field(default_factory=list)
+    deleted: list[str] = field(default_factory=list)
+    modified: list[str] = field(default_factory=list)
+
+
+def _diff_git_snapshot(root: Path, snapshot_sha: str) -> SnapshotDiff:
+    """Same scratch-index trick as _take_git_snapshot (see the module
+    docstring): builds a tree object for the working tree's current state
+    without touching the real index, then `git diff --name-status` against
+    the snapshot to classify every path that changed since. No rename
+    detection (`-M`) - a rename shows up as a delete + a create, which is
+    still an accurate (if less elegant) description of what restore would
+    do to those two paths."""
+    scratch_index = Path(tempfile.gettempdir()) / f"triton-snapshot-diff-{uuid.uuid4().hex}"
+    try:
+        env = {"GIT_INDEX_FILE": str(scratch_index)}
+        added = _git(["add", "-A"], root, env=env)
+        if added.returncode != 0:
+            raise RestoreError(added.stderr.strip() or "git add failed")
+        tree = _git(["write-tree"], root, env=env)
+        if tree.returncode != 0 or not tree.stdout.strip():
+            raise RestoreError(tree.stderr.strip() or "git write-tree failed")
+        current_tree_sha = tree.stdout.strip()
+    finally:
+        scratch_index.unlink(missing_ok=True)
+
+    diff = _git(["diff", "--name-status", snapshot_sha, current_tree_sha], root)
+    if diff.returncode != 0:
+        raise RestoreError(diff.stderr.strip() or "git diff failed")
+
+    result = SnapshotDiff()
+    for line in diff.stdout.splitlines():
+        if not line.strip():
+            continue
+        status, _, path = line.partition("\t")
+        # status can carry a similarity score (e.g. "M100") - only the
+        # first letter matters here
+        if status[:1] == "A":
+            result.created.append(path)
+        elif status[:1] == "D":
+            result.deleted.append(path)
+        else:
+            result.modified.append(path)
+    return result
+
+
+def _diff_copy_snapshot(root: Path, backup_dir: Path) -> SnapshotDiff:
+    """Walks both trees and compares file content directly - no git
+    machinery available for the non-git backend, and these backups are
+    already a full recursive copy (see _take_copy_snapshot), so the trees
+    involved are assumed small enough for this to be cheap."""
+    if not backup_dir.is_dir():
+        raise RestoreError(f"backup no longer exists: {backup_dir}")
+
+    def relative_files(base: Path) -> dict[str, Path]:
+        return {
+            p.relative_to(base).as_posix(): p
+            for p in base.rglob("*")
+            if p.is_file() and ".git" not in p.relative_to(base).parts
+        }
+
+    current = relative_files(root)
+    snapshot = relative_files(backup_dir)
+
+    result = SnapshotDiff(
+        created=sorted(set(current) - set(snapshot)),
+        deleted=sorted(set(snapshot) - set(current)),
+        modified=sorted(
+            rel
+            for rel in set(current) & set(snapshot)
+            if current[rel].read_bytes() != snapshot[rel].read_bytes()
+        ),
+    )
+    return result
+
+
+def diff_snapshot(project: Project, snapshot: Snapshot) -> SnapshotDiff:
+    """A preview of what restore_snapshot would change, for the
+    confirmation prompt (see server.py's GET /sessions/{id}/snapshot/diff)
+    - computed on demand rather than cached, since it has to reflect
+    whatever the session has written up to the moment the user is about
+    to confirm, not a stale snapshot-time view."""
+    root = Path(project.folder_path).resolve()
+    if snapshot.kind == "git":
+        return _diff_git_snapshot(root, snapshot.location)
+    return _diff_copy_snapshot(root, Path(snapshot.location))
 
 
 def discard_snapshot(session_id: str) -> None:

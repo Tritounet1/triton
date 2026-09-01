@@ -40,6 +40,8 @@ from triton.tools._shared import (
 from triton.tools.snapshot import (
     WRITE_TOOL_NAMES,
     RestoreError,
+    SnapshotDiff,
+    diff_snapshot,
     discard_snapshot,
     ensure_snapshot,
     restore_snapshot,
@@ -55,7 +57,9 @@ __all__ = [
     "TOOLS_REGISTRY",
     "WRITE_TOOL_NAMES",
     "RestoreError",
+    "SnapshotDiff",
     "Tool",
+    "diff_snapshot",
     "discard_snapshot",
     "enforce_project_sandbox",
     "ensure_snapshot",

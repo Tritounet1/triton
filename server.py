@@ -77,6 +77,7 @@ from triton.tools import (
     TOOLS_REGISTRY,
     WRITE_TOOL_NAMES,
     RestoreError,
+    diff_snapshot,
     discard_snapshot,
     enforce_project_sandbox,
     ensure_snapshot,
@@ -394,13 +395,31 @@ def run_chat_stream(
                     sandbox_error = enforce_project_sandbox(name, args, project)
                     tool = TOOLS_REGISTRY.get(name)
 
-                    if sandbox_error is None and tool is not None and name in WRITE_TOOL_NAMES:
-                        # snapshot before the write actually runs, not after
-                        # approval below - taking it is harmless even if this
-                        # particular call ends up denied, and it guarantees
-                        # the safety net is in place before any write from
-                        # this session could have landed (see tools/snapshot.py)
-                        ensure_snapshot(project, session_id)
+                    # snapshot before the write actually runs, not after
+                    # approval below - taking it is harmless even if this
+                    # particular call ends up denied, and it guarantees the
+                    # safety net is in place before any write from this
+                    # session could have landed (see tools/snapshot.py).
+                    # ensure_snapshot's own return is only true the one time
+                    # this session's snapshot actually gets taken - surfaced
+                    # here instead of only in the project file panel
+                    # (SnapshotSection.tsx), which needed knowing the
+                    # feature existed at all to go find.
+                    if (
+                        sandbox_error is None
+                        and tool is not None
+                        and name in WRITE_TOOL_NAMES
+                        and ensure_snapshot(project, session_id)
+                    ):
+                        yield sse(
+                            "info",
+                            {
+                                "message": "Filet de sécurité activé pour cette "
+                                "conversation : l'état actuel du dossier du projet vient "
+                                "d'être sauvegardé, avant sa première écriture. Utilise "
+                                "/undo pour tout annuler d'un coup si besoin.",
+                            },
+                        )
 
                     if sandbox_error is not None:
                         result = sandbox_error
@@ -1116,6 +1135,37 @@ def get_session_snapshot(session_id: str) -> SnapshotInfo:
     if snapshot is None:
         raise HTTPException(404, "no snapshot for this session")
     return SnapshotInfo(kind=snapshot.kind, created_at=snapshot.created_at)
+
+
+class SnapshotDiffResponse(BaseModel):
+    created: list[str]
+    deleted: list[str]
+    modified: list[str]
+
+
+@app.get("/sessions/{session_id}/snapshot/diff", tags=["Sessions"])
+def get_session_snapshot_diff(session_id: str) -> SnapshotDiffResponse:
+    """A preview of what restoring this session's snapshot would actually
+    change - which files it created (restore deletes them), deleted
+    (restore recreates them), or modified (restore reverts them). The
+    desktop app fetches this when the restore confirmation dialog opens,
+    not eagerly on every session load - it's real work (a git diff, or
+    reading every shared file's bytes for the non-git backend) that only
+    matters right before the user is about to commit to it."""
+    snapshot = get_snapshot(session_id)
+    if snapshot is None:
+        raise HTTPException(404, "no snapshot for this session")
+
+    project = get_project(snapshot.project_id)
+    if project is None:
+        raise HTTPException(404, "the project this snapshot belongs to no longer exists")
+
+    try:
+        diff = diff_snapshot(project, snapshot)
+    except RestoreError as e:
+        raise HTTPException(500, f"could not compute diff: {e}") from e
+
+    return SnapshotDiffResponse(created=diff.created, deleted=diff.deleted, modified=diff.modified)
 
 
 @app.post("/sessions/{session_id}/snapshot/restore", tags=["Sessions"])

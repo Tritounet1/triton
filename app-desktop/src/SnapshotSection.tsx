@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Button } from "@astryxdesign/core/Button";
 import { Text } from "@astryxdesign/core/Text";
+import { describeSnapshotDiff, fetchSnapshotDiff, type SnapshotDiff } from "./snapshotDiff";
 
 const API_BASE = "http://127.0.0.1:8000";
 
@@ -26,6 +27,11 @@ export function SnapshotSection({ sessionId, onRestored }: SnapshotSectionProps)
   const [snapshot, setSnapshot] = useState<SnapshotInfo | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  // charge en arriere-plan des l'ouverture de la confirmation, pas au
+  // montage du composant : c'est un vrai travail cote serveur (git diff,
+  // ou lire le contenu de chaque fichier partage pour le backend non-git)
+  // qui n'a de sens que juste avant que l'utilisateur ne s'engage vraiment.
+  const [diff, setDiff] = useState<SnapshotDiff | null>(null);
 
   // pas d'appel synchrone a setSnapshot() ici (seulement dans les
   // callbacks) : react-hooks (set-state-in-effect) interdit setState
@@ -76,7 +82,9 @@ export function SnapshotSection({ sessionId, onRestored }: SnapshotSectionProps)
             variant="ghost"
             size="sm"
             onClick={() => {
+              setDiff(null);
               setConfirmOpen(true);
+              void fetchSnapshotDiff(sessionId).then(setDiff);
             }}
           >
             Restaurer
@@ -88,7 +96,7 @@ export function SnapshotSection({ sessionId, onRestored }: SnapshotSectionProps)
         isOpen={confirmOpen}
         onOpenChange={setConfirmOpen}
         title="Restaurer l'état d'avant cette session ?"
-        description="Annule tous les fichiers créés, modifiés ou supprimés par cette conversation dans le dossier du projet, en revenant à l'état capturé juste avant sa première écriture. Cette action est irréversible."
+        description={`Annule tous les fichiers créés, modifiés ou supprimés par cette conversation dans le dossier du projet, en revenant à l'état capturé juste avant sa première écriture. Cette action est irréversible.${describeSnapshotDiff(diff)}`}
         actionLabel="Restaurer"
         isActionLoading={restoring}
         onAction={() => {

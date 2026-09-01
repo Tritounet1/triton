@@ -74,6 +74,7 @@ import { ProjectFilePanel } from "./ProjectFilePanel";
 import { SearchPage } from "./SearchPage";
 import { SettingsModal } from "./SettingsModal";
 import { parseSSE } from "./sse";
+import { describeSnapshotDiff, fetchSnapshotDiff, type SnapshotDiff } from "./snapshotDiff";
 import { SubagentsPanel } from "./SubagentsPanel";
 import { TaskView } from "./TaskView";
 
@@ -879,6 +880,9 @@ function App() {
   // pas de raccourci sans confirmation meme depuis le composer.
   const [undoConfirmOpen, setUndoConfirmOpen] = useState(false);
   const [undoing, setUndoing] = useState(false);
+  // meme diff que SnapshotSection.tsx pour la meme confirmation - chargee
+  // des l'ouverture, pas au montage (voir snapshotDiff.ts).
+  const [undoDiff, setUndoDiff] = useState<SnapshotDiff | null>(null);
   const [collapsedProjectIds, setCollapsedProjectIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -1575,7 +1579,9 @@ function App() {
       ]);
       return;
     }
+    setUndoDiff(null);
     setUndoConfirmOpen(true);
+    void fetchSnapshotDiff(sessionId).then(setUndoDiff);
   }
 
   async function confirmUndo() {
@@ -2866,7 +2872,7 @@ function App() {
           if (!isOpen) setUndoConfirmOpen(false);
         }}
         title="Restaurer l'état d'avant cette session ?"
-        description="Annule tous les fichiers créés, modifiés ou supprimés par cette conversation dans le dossier du projet, en revenant à l'état capturé juste avant sa première écriture. Cette action est irréversible."
+        description={`Annule tous les fichiers créés, modifiés ou supprimés par cette conversation dans le dossier du projet, en revenant à l'état capturé juste avant sa première écriture. Cette action est irréversible.${describeSnapshotDiff(undoDiff)}`}
         actionLabel="Restaurer"
         isActionLoading={undoing}
         onAction={() => {
