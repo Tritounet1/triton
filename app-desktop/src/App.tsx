@@ -2197,16 +2197,18 @@ function App() {
     .sort((a, b) => Number(b.pinned) - Number(a.pinned));
 
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
-  // affiche un message assistant "vide" avec un loader tant que rien n'est
-  // encore arrive pour ce tour (ni texte, ni tool_call) : une fois le
-  // premier evenement traite, le dernier message devient "assistant" ou
-  // "tool" et ce placeholder disparait de lui-meme.
+  // affiche un message assistant "vide" avec un loader tant qu'aucun texte
+  // n'est en train d'arriver pour ce tour. Volontairement PAS exclu quand
+  // le dernier message est "tool" (contrairement a une version precedente
+  // qui le cachait des le premier appel d'outil) : un tour a plusieurs
+  // outils d'affilee a un vrai temps mort entre la fin d'un appel et le
+  // debut du suivant (le modele "reflechit" a nouveau), pendant lequel
+  // plus aucun indicateur ne s'affichait - voir la conversation "Triton
+  // Folder" pour un exemple ou 20 appels d'outils s'enchainent sans loader
+  // entre chacun.
   const lastMessage = messages[messages.length - 1];
   const showTypingPlaceholder =
-    sending &&
-    !pendingConfirmation &&
-    lastMessage?.kind !== "assistant" &&
-    lastMessage?.kind !== "tool";
+    sending && !pendingConfirmation && lastMessage?.kind !== "assistant";
   // le modele de CETTE conversation, une fois la surcharge /model prise en
   // compte - c'est celui-ci qui doit determiner l'affichage (badge, avatar,
   // capacites de piece jointe), pas le defaut global apiModel seul.
