@@ -1852,6 +1852,13 @@ function App() {
       (!text && !isEdit && pendingAttachments.length === 0 && pendingTextAttachments.length === 0) ||
       sending
     ) {
+      // the composer stays typable while a response is in flight (see
+      // ChatComposer's isDisabled below) so an Enter press here is a real
+      // possibility, not just a stray event - but ChatComposerInput's own
+      // Enter-to-submit clears its value unconditionally the moment it
+      // calls onSubmit (this function), before it can know sending was
+      // actually true. Put the text back instead of silently losing it.
+      if (!isEdit && sending) setInput(rawText);
       return;
     }
 
@@ -2582,7 +2589,15 @@ function App() {
                   onStop={cancelMessage}
                   isStopShown={sending}
                   placeholder="Écrire un message..."
-                  isDisabled={sending || !!pendingConfirmation}
+                  // sending is deliberately NOT here: isDisabled greys the
+                  // whole composer out (opacity 0.6) and makes its input
+                  // non-editable (contentEditable=false) - there's no
+                  // reason typing ahead while a response streams should be
+                  // blocked. Actually sending a new message meanwhile is
+                  // still guarded inside sendMessage itself. A
+                  // confirmation prompt is different: genuinely blocking,
+                  // has to be resolved first.
+                  isDisabled={!!pendingConfirmation}
                   elevation="none"
                   input={<ChatComposerInput triggers={composerTriggers} />}
                   style={
