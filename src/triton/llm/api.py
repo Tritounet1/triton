@@ -1,9 +1,10 @@
 import os
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI, RateLimitError
 from openai.types.chat import (
     ChatCompletionMessageFunctionToolCall,
     ChatCompletionMessageParam,
@@ -45,7 +46,56 @@ def _client() -> OpenAI:
     return OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=_effective_api_key() or "not-configured",
+        # the SDK's own default (2, silent, not logged) is disabled in
+        # favor of the single explicit retry layer below (_with_retry) -
+        # two uncoordinated retry loops stacked on top of each other would
+        # make the real number of attempts, and the total wait time before
+        # a failure actually surfaces, unpredictable.
+        max_retries=0,
     )
+
+
+# how many times a call gets retried after a manifestly transient failure
+# (network error, rate limit, 5xx) before giving up and letting it raise -
+# see call_chat (below MAX_TOKENS) - both a bit deep to read at a glance
+# here, but immediately obvious once TOKENS or RETRIES is the search term.
+MAX_RETRIES = 3
+# doubles each attempt: 1s, 2s, 4s - generous enough to ride out a brief
+# rate-limit window without the client feeling stuck for tens of seconds.
+RETRY_BASE_DELAY_SECONDS = 1.0
+
+
+def _is_transient_error(exc: Exception) -> bool:
+    """A connection failure, timeout, or rate limit is always worth
+    retrying; a 5xx from the provider usually is too (its own problem, not
+    this request's). Anything else - a bad request, an unknown model, an
+    invalid API key - retrying would just get the exact same rejection
+    again, so it's left to raise immediately instead of wasting the retry
+    budget and the wait."""
+    if isinstance(exc, (APIConnectionError, APITimeoutError, RateLimitError)):
+        return True
+    return isinstance(exc, APIStatusError) and exc.status_code >= 500
+
+
+def _with_retry[T](make_request: Callable[[], T]) -> T:
+    """Calls make_request(), retrying with exponential backoff on a
+    manifestly transient error - see _is_transient_error. Used for both
+    call_chat and the call that establishes stream_chat's stream: in both
+    cases nothing has reached the caller yet at the point this runs, so a
+    retry from scratch is always safe. NOT used once a streamed response
+    has actually started yielding content (stream_chat's own for-loop
+    below): tokens already relayed to the client as SSE can't be
+    un-sent, so a failure partway through a stream is left to raise as-is
+    rather than silently restarting the whole response."""
+    attempt = 0
+    while True:
+        try:
+            return make_request()
+        except Exception as exc:
+            attempt += 1
+            if attempt > MAX_RETRIES or not _is_transient_error(exc):
+                raise
+            time.sleep(RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1)))
 
 
 # 1024 was too low for tool calls carrying a full file as their "content"
@@ -96,17 +146,21 @@ def call_chat(
     does."""
     model = model or get_model()
     if tools:
-        resp = _client().chat.completions.create(
-            model=model,
-            messages=messages,
-            tools=tools,
-            max_tokens=MAX_TOKENS,
+        resp = _with_retry(
+            lambda: _client().chat.completions.create(
+                model=model,
+                messages=messages,
+                tools=tools,
+                max_tokens=MAX_TOKENS,
+            )
         )
     else:
-        resp = _client().chat.completions.create(
-            model=model,
-            messages=messages,
-            max_tokens=MAX_TOKENS,
+        resp = _with_retry(
+            lambda: _client().chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=MAX_TOKENS,
+            )
         )
 
     choice = resp.choices[0]
@@ -136,21 +190,25 @@ def stream_chat(
     override set via the /model command."""
     model = model or get_model()
     if tools:
-        stream = _client().chat.completions.create(
-            model=model,
-            messages=messages,
-            tools=tools,
-            max_tokens=MAX_TOKENS,
-            stream=True,
-            stream_options={"include_usage": True},
+        stream = _with_retry(
+            lambda: _client().chat.completions.create(
+                model=model,
+                messages=messages,
+                tools=tools,
+                max_tokens=MAX_TOKENS,
+                stream=True,
+                stream_options={"include_usage": True},
+            )
         )
     else:
-        stream = _client().chat.completions.create(
-            model=model,
-            messages=messages,
-            max_tokens=MAX_TOKENS,
-            stream=True,
-            stream_options={"include_usage": True},
+        stream = _with_retry(
+            lambda: _client().chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=MAX_TOKENS,
+                stream=True,
+                stream_options={"include_usage": True},
+            )
         )
 
     content_parts: list[str] = []

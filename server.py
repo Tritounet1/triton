@@ -19,6 +19,7 @@ from fastapi.responses import (
     Response,
     StreamingResponse,
 )
+from openai import APIError
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 from scalar_fastapi import get_scalar_api_reference
@@ -394,14 +395,31 @@ def run_chat_stream(
         content_parts: list[str] = []
         reply: ChatResult | None = None
 
-        for event in timed_stream_chat(
-            messages, tools=TOOLS, model=session_model, session_id=session_id
-        ):
-            if isinstance(event, str):
-                content_parts.append(event)
-                yield sse("token", {"text": event})
-            else:
-                reply = event
+        try:
+            for event in timed_stream_chat(
+                messages, tools=TOOLS, model=session_model, session_id=session_id
+            ):
+                if isinstance(event, str):
+                    content_parts.append(event)
+                    yield sse("token", {"text": event})
+                else:
+                    reply = event
+        except APIError as exc:
+            # llm/api.py's _with_retry already retried a manifestly
+            # transient failure (network error, rate limit, 5xx) a few
+            # times with backoff before giving up - this is what reaches
+            # here: either that retry budget is exhausted, or the error
+            # was never transient to begin with (bad model name, invalid
+            # key...). Either way, surface it as a normal chat error
+            # instead of letting it crash the SSE response uncaught (which
+            # the client would just see as a dropped connection, same as
+            # a genuine network failure on its own end).
+            yield sse(
+                "error",
+                {"message": f"l'appel au modèle a échoué : {exc}"},
+            )
+            done = True
+            continue
 
         assert reply is not None
 
