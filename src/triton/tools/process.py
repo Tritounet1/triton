@@ -236,12 +236,23 @@ def _run_confined(
     )
 
 
+# raised from 10: real one-off commands this tool is meant for (per its
+# own schema description - package installs, scaffolding a new project
+# with create-next-app, git clone...) routinely take much longer than
+# that, especially the first time a registry/package needs fetching -
+# 10s made a completely ordinary `npx create-next-app` fail outright.
+# Matches run_tests's own timeout below: a genuinely long-running process
+# (a dev server, a watcher) belongs in start_background_task instead,
+# never here - see its own tool description.
+RUN_SHELL_TIMEOUT_SECONDS = 120
+
+
 def run_shell(command: str, directory: str = "") -> str:
     # no confirmation before execution here, that comes at step 7
     try:
-        result = _run_confined(command, directory, timeout=10)
+        result = _run_confined(command, directory, timeout=RUN_SHELL_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        return "error: command took too long (10s timeout)"
+        return f"error: command took too long ({RUN_SHELL_TIMEOUT_SECONDS}s timeout)"
     output = (result.stdout + result.stderr).strip()
     return output or f"(no output, exit code {result.returncode})"
 
