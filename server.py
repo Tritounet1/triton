@@ -294,6 +294,29 @@ def sse(event: str, data: dict[str, object]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+def _is_tool_error(result: str) -> bool:
+    """Same convention the frontend already infers a failed tool call
+    from, with no separate structured status field (see App.tsx's
+    toolCallStatus) - plus "unknown tool: ...", not in that convention
+    (App.tsx never sees it happen live: the model hallucinating a tool
+    name that isn't in TOOLS is exactly the kind of stuck-in-a-loop
+    behavior MAX_CONSECUTIVE_TOOL_ERRORS exists to catch)."""
+    return (
+        result.startswith("error")
+        or result.startswith("unknown tool:")
+        or result.startswith("action denied")
+    )
+
+
+# stops the agentic loop once this many tool calls in a row have failed -
+# the model repeating the same broken call is a much stronger "genuinely
+# stuck" signal than a plain iteration count, and catches it long before
+# MAX_ITERATIONS (deliberately generous - see chat_loop.py) would. Not
+# reset per iteration: a failure streak spanning several separate model
+# calls is exactly the case this exists to catch.
+MAX_CONSECUTIVE_TOOL_ERRORS = 6
+
+
 def turn_index_of(messages: list[ChatCompletionMessageParam]) -> int:
     """Which turn `messages` is currently on (the nth "user" message,
     1-based) - the write-tool safety net's snapshot key (tools/snapshot.py's
@@ -386,6 +409,7 @@ def run_chat_stream(
     iteration = 0
     done = False
     cancelled = False
+    consecutive_tool_errors = 0
 
     while iteration < MAX_ITERATIONS and not done:
         if session_id in CANCELLED_SESSIONS:
@@ -511,6 +535,22 @@ def run_chat_stream(
                 )
 
                 messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": result})
+
+                if _is_tool_error(result):
+                    consecutive_tool_errors += 1
+                    if consecutive_tool_errors >= MAX_CONSECUTIVE_TOOL_ERRORS:
+                        yield sse(
+                            "error",
+                            {
+                                "message": f"{consecutive_tool_errors} appels d'outils ont "
+                                "échoué d'affilée - arrêt pour éviter une boucle bloquée "
+                                "plutôt que de continuer à réessayer indéfiniment.",
+                            },
+                        )
+                        done = True
+                        break
+                else:
+                    consecutive_tool_errors = 0
 
             continue
 

@@ -24,11 +24,15 @@ from triton.storage.projects import Project, load_project_memory
 from triton.storage.sessions import load_session_memory
 
 SYSTEM_PROMPT = "You are a concise and clear assistant."
-# raised from 10: a single non-trivial task (e.g. building a multi-section
-# styled page) can genuinely need this many tool calls, and the
-# length-truncation retry in run_chat_stream now also spends an iteration
-# each time it happens, both of which made 10 too tight in practice.
-MAX_ITERATIONS = 25
+# raised from 10, then from 25: a single non-trivial task (e.g. scaffolding
+# a whole small app - one real conversation needed 20+ tool calls just to
+# get a Next.js project past `pnpm build`) can genuinely need this many,
+# and the length-truncation retry in run_chat_stream also spends an
+# iteration each time it happens. Kept generous on purpose: the real
+# safety net against a genuinely stuck loop is run_chat_stream's own
+# MAX_CONSECUTIVE_TOOL_ERRORS, not this count - a long but successful task
+# shouldn't need a manual "Continue" click partway through.
+MAX_ITERATIONS = 100
 
 
 def build_system_message(
