@@ -18,6 +18,9 @@ exactly as it did before.
 - background.py dispatch_subagent/check_subagent, start/stop/list
                  background tasks - thin wrappers, the real logic lives in
                  triton.agents.subagents / triton.background_tasks
+- mcp.py        add_mcp_server - thin wrapper around triton.mcp_client,
+                 imported lazily inside the function body (see its own
+                 module docstring for why)
 - snapshot.py   the write-tool safety net (ensure_snapshot/restore_snapshot) -
                  not a tool category itself (registers nothing in
                  TOOLS_REGISTRY), called around write_file/edit_file/
@@ -26,7 +29,7 @@ exactly as it did before.
 
 from openai.types.chat import ChatCompletionToolParam
 
-from triton.tools import background, filesystem, git, memory, process, search, web
+from triton.tools import background, filesystem, git, mcp, memory, process, search, web
 from triton.tools._shared import (
     DEFAULTABLE_PATH_ARGS,
     SANDBOXED_PATH_ARGS,
@@ -84,6 +87,7 @@ TOOLS_REGISTRY: dict[str, Tool] = {
     **web.REGISTRY,
     **memory.REGISTRY,
     **background.REGISTRY,
+    **mcp.REGISTRY,
 }
 
 TOOLS: list[ChatCompletionToolParam] = [tool.schema for tool in TOOLS_REGISTRY.values()]
