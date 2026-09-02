@@ -14,16 +14,21 @@ only confines the *starting* directory: a command that deliberately does
 `cd .. && rm -rf` (confirmed live - a real conversation tried exactly
 this) still reaches outside the project, the same way it would in a
 real terminal. _run_confined below closes that specific gap on macOS via
-sandbox-exec (Seatbelt), confining actual filesystem *writes* to the
-project folder regardless of what the command/code text itself does -
-see its own docstring for what it does and doesn't cover, and why
-several directories beyond the project folder had to be allow-listed
-(found by testing real commands against a first draft, not guessed:
-plain `git status` needs /dev/null, Python's own tempfile module needs
-the resolved TMPDIR, `npm install` needs ~/.npm's cache - each broke
-outright until added). No such primitive exists on Linux/Windows, so
-they keep only the `directory`-argument confinement described above -
-see PLAN.md's "Vrai bac a sable pour run_shell" entry."""
+sandbox-exec (Seatbelt): filesystem *writes* are confined to the project
+folder (plus a small set of well-known cache/temp dirs real tools
+legitimately need, found by testing real commands against a first draft,
+not guessed - plain `git status` needs /dev/null, Python's own tempfile
+module needs the resolved TMPDIR, `npm install` needs ~/.npm's cache,
+each broke outright until added) regardless of what the command/code
+text itself does; *reads* stay broadly allowed, with a short deny-list
+of specific credential stores (~/.ssh, ~/.aws, ...) and the harness's
+own data (settings.json, sessions/, ...) - see _MACOS_SANDBOX_PROFILE
+for the full reasoning, including why a project-only read sandbox and a
+whole-ROOT_DIR deny were each tried and abandoned. No such primitive
+exists on Linux/Windows, so they keep only the `directory`-argument
+confinement described above - see PLAN.md for the tracked gaps this
+still leaves (a shell command's own text can still read most of the
+filesystem; nothing at all on Linux/Windows)."""
 
 import shutil
 import subprocess
@@ -31,6 +36,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from triton.paths import ROOT_DIR
 from triton.tools._shared import Tool
 
 # devices real commands routinely write to (`> /dev/null`, git's own
@@ -47,31 +53,113 @@ _MACOS_SANDBOX_DEVICES = (
     "/dev/dtracehelper",
 )
 
+# well-known credential/secret stores under the user's home directory -
+# a shell command has no legitimate reason to read these as part of a
+# project-scoped task, denied even though reads are otherwise left
+# broadly allowed (see _MACOS_SANDBOX_PROFILE's own comment for why a
+# *full* read sandbox isn't attempted here). Not exhaustive -
+# .npmrc/.pypirc-style per-tool credential files are deliberately left
+# readable since package managers legitimately need them (a private
+# registry's auth token) more often than this harness needs to worry
+# about a model reading them - but the clearest, most
+# universally-recognized ones are covered.
+_MACOS_SANDBOX_DENIED_HOME_DIRS = (
+    ".ssh",
+    ".aws",
+    ".gnupg",
+    ".docker",
+    "Library/Keychains",
+)
+_MACOS_SANDBOX_DENIED_HOME_FILES = (
+    ".netrc",
+    ".git-credentials",
+)
+
+# the harness's own *data*, as opposed to its source code (server.py,
+# src/, ...) - the same directories/files enforce_project_sandbox
+# already refuses every path-argument tool for anywhere under ROOT_DIR,
+# but that check never sees run_shell's command text or run_code's code,
+# so without this a shell command could still read settings.json/
+# sessions/API keys straight through. Denying all of ROOT_DIR wholesale
+# (with a carve-out allowing .venv back in) was tried first and
+# abandoned: in dev, launched via `uv run` per the README, .venv/bin is
+# what's actually at the front of PATH, so it's where run_code's own
+# Python interpreter and run_tests' pytest binary actually live - but a
+# subpath deny covering an ancestor of a subpath allow (.venv, nested
+# inside ROOT_DIR) didn't reliably yield to the allow no matter which
+# order the two rules were declared in (confirmed by testing both:
+# python3 could sometimes launch but then crashed on its own import
+# machinery - a strictly worse and more confusing failure than just
+# enumerating what's actually sensitive here). Listing the sensitive
+# paths as siblings of .venv instead sidesteps the overlap entirely, and
+# is arguably the more correct threat model besides: the harness's own
+# source isn't a secret, only its data is.
+_MACOS_SANDBOX_DENIED_HARNESS_DIRS = (
+    "sessions",
+    "snapshot_backups",
+    "project_memory",
+    "logs",
+    "background_tasks_state",
+    "orchestrator_runs",
+)
+_MACOS_SANDBOX_DENIED_HARNESS_FILES = (
+    ".env",
+    "settings.json",
+    "mcp_servers.json",
+    "snapshots.json",
+    "projects.json",
+    "memory_global.md",
+)
+
+_MACOS_SANDBOX_DENIED_DIR_COUNT = len(_MACOS_SANDBOX_DENIED_HOME_DIRS) + len(
+    _MACOS_SANDBOX_DENIED_HARNESS_DIRS
+)
+_MACOS_SANDBOX_DENIED_FILE_COUNT = len(_MACOS_SANDBOX_DENIED_HOME_FILES) + len(
+    _MACOS_SANDBOX_DENIED_HARNESS_FILES
+)
+
 # a Seatbelt (sandbox-exec) profile confining filesystem *writes* to
 # whatever PROJECT_ROOT is bound to via -D, plus a handful of well-known
 # cache/temp directories real tools legitimately write to outside any
 # project (npm's package cache, Python's tempfile module, ...) -
 # TMP_DIR/NPM_CACHE/GENERIC_CACHE/LIBRARY_CACHES are bound the same way,
 # computed fresh per call in _macos_sandbox_argv since TMPDIR in
-# particular is session-specific. Reads are deliberately left
-# unrestricted: run_shell's command text (or run_code's code) can still
-# read anywhere, same as it always could - a full read sandbox would
-# risk breaking far more (the dynamic linker, interpreter stdlibs, DNS
-# resolution, ~/.ssh for git operations over SSH, ...) than closing that
-# separate, pre-existing gap is worth in this pass. Every bound path
-# must already be fully resolved by the caller (_macos_sandbox_argv):
-# Seatbelt matches the canonical path, and macOS symlinks
-# /tmp -> /private/tmp and /var -> /private/var, so an unresolved "/tmp"
-# silently wouldn't match what's actually checked at write time
-# (confirmed directly - tempfile writes kept failing until this was
-# fixed). Paths are passed via -D/(param ...) rather than interpolated
-# into the profile text, so a path containing a stray '"' can't affect
-# the profile's own syntax.
+# particular is session-specific.
+#
+# Reads are broadly allowed (file-read*), with the specific deny-lists
+# above as the exception. Genuinely restricting reads to *only* the
+# project folder was tried and rejected too: it broke the dynamic
+# linker, interpreter stdlibs, DNS resolution, and ~/.ssh for a real
+# `git clone` over SSH - allow-listing everything genuinely needed for
+# normal tool operation converges on "most of the filesystem" anyway, at
+# which point a deny-list of actually-sensitive locations is both more
+# maintainable and closer to the real threat model (protect secrets, not
+# "read nothing").
+#
+# The deny rules are listed before the broad file-read* allow - verified
+# empirically, not assumed: the reverse order let the allow win and the
+# deny had no effect at all. Every bound path must already be fully
+# resolved by the caller (_macos_sandbox_argv): Seatbelt matches the
+# canonical path, and macOS symlinks /tmp -> /private/tmp and
+# /var -> /private/var, so an unresolved "/tmp" silently wouldn't match
+# what's actually checked at write time (confirmed directly - tempfile
+# writes kept failing until this was fixed). Paths are passed via
+# -D/(param ...) rather than interpolated into the profile text, so a
+# path containing a stray '"' can't affect the profile's own syntax.
 _MACOS_SANDBOX_PROFILE = (
     "(version 1)\n"
     "(deny default)\n"
     "(allow process-fork)\n"
     "(allow process-exec)\n"
+    "(deny file-read*\n"
+    + "\n".join(
+        f'  (subpath (param "DENY_DIR_{i}"))' for i in range(_MACOS_SANDBOX_DENIED_DIR_COUNT)
+    )
+    + "\n"
+    + "\n".join(
+        f'  (literal (param "DENY_FILE_{i}"))' for i in range(_MACOS_SANDBOX_DENIED_FILE_COUNT)
+    )
+    + ")\n"
     "(allow file-read*)\n"
     "(allow file-write*\n"
     '  (subpath (param "PROJECT_ROOT"))\n'
@@ -90,7 +178,8 @@ _MACOS_SANDBOX_PROFILE = (
 
 def _macos_sandbox_argv(directory: Path) -> list[str]:
     home = Path.home()
-    return [
+    harness_root = ROOT_DIR.resolve()
+    argv = [
         "/usr/bin/sandbox-exec",
         "-p",
         _MACOS_SANDBOX_PROFILE,
@@ -105,6 +194,17 @@ def _macos_sandbox_argv(directory: Path) -> list[str]:
         "-D",
         f"LIBRARY_CACHES={home / 'Library' / 'Caches'}",
     ]
+    denied_dirs = [home / rel for rel in _MACOS_SANDBOX_DENIED_HOME_DIRS] + [
+        harness_root / rel for rel in _MACOS_SANDBOX_DENIED_HARNESS_DIRS
+    ]
+    denied_files = [home / rel for rel in _MACOS_SANDBOX_DENIED_HOME_FILES] + [
+        harness_root / rel for rel in _MACOS_SANDBOX_DENIED_HARNESS_FILES
+    ]
+    for i, p in enumerate(denied_dirs):
+        argv += ["-D", f"DENY_DIR_{i}={p}"]
+    for i, p in enumerate(denied_files):
+        argv += ["-D", f"DENY_FILE_{i}={p}"]
+    return argv
 
 
 def _run_confined(
