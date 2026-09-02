@@ -232,6 +232,22 @@ SKIP_DIR_NAMES = {
     ".mypy_cache",
     ".ruff_cache",
     ".pytest_cache",
+    # framework build/cache dirs - can hold thousands of generated files,
+    # easily exhausting the project file panel's MAX_TREE_ENTRIES budget
+    # before it ever reaches real source files (found via a real Next.js
+    # project where .next/.pnpm-store alone consumed the whole budget,
+    # leaving src/, package.json etc. missing from the panel entirely -
+    # see server.py's _build_tree, depth-first and dot-prefixed dirs sort
+    # first, so these were always walked before anything else)
+    ".next",
+    ".nuxt",
+    ".svelte-kit",
+    ".turbo",
+    ".vercel",
+    ".cache",
+    ".parcel-cache",
+    ".pnpm-store",
+    "coverage",
 }
 
 
