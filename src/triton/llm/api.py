@@ -4,7 +4,14 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
-from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI, RateLimitError
+from openai import (
+    APIConnectionError,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    OpenAI,
+    RateLimitError,
+)
 from openai.types.chat import (
     ChatCompletionMessageFunctionToolCall,
     ChatCompletionMessageParam,
@@ -75,10 +82,23 @@ def is_transient_error(exc: Exception) -> bool:
     stream_chat's own retry-if-nothing-produced-yet loop below, and by
     server.py's run_chat_stream to decide whether an error that reached it
     uncaught was even worth retrying in the first place, for its own
-    diagnostics."""
+    diagnostics.
+
+    A bare APIError (exact type, not one of the subclasses checked below)
+    is also treated as transient: found via a real, repeated case -
+    message "The operation was aborted", no HTTP status at all. The SDK
+    raises this exact class (openai._streaming.Stream.__stream__) only
+    when it finds an inline {"error": ...} object embedded inside an
+    otherwise-200 SSE stream - the provider aborting generation
+    mid-response with no HTTP-level status to signal it, distinct from
+    every named failure mode (bad request, auth, not found...), which all
+    arrive as a more specific subclass via the normal HTTP-status path
+    instead and are correctly left alone below."""
     if isinstance(exc, (APIConnectionError, APITimeoutError, RateLimitError)):
         return True
-    return isinstance(exc, APIStatusError) and exc.status_code >= 500
+    if isinstance(exc, APIStatusError) and exc.status_code >= 500:
+        return True
+    return type(exc) is APIError
 
 
 def _with_retry[T](make_request: Callable[[], T]) -> T:

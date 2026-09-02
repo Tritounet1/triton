@@ -12,6 +12,7 @@ import httpx2
 import pytest
 from openai import (
     APIConnectionError,
+    APIError,
     APITimeoutError,
     AuthenticationError,
     InternalServerError,
@@ -60,6 +61,32 @@ def test_transient_errors_are_recognized(exc):
     ],
 )
 def test_non_transient_errors_are_not_retried(exc):
+    assert api.is_transient_error(exc) is False
+
+
+def test_a_bare_apierror_is_treated_as_transient():
+    """Real, repeated case: message "The operation was aborted", no HTTP
+    status at all. The SDK raises this exact class (not one of the
+    subclasses above) only when it finds an inline {"error": ...} object
+    embedded inside an otherwise-200 SSE stream - see
+    openai._streaming.Stream.__stream__ - the provider aborting
+    generation mid-response with nothing at the HTTP level to signal it.
+    Missed by the original isinstance checks above (none of them match
+    the bare base class), which is exactly why this kept surfacing
+    unretried even after _with_retry/stream_chat's own retry loop existed."""
+    exc = APIError("The operation was aborted", request=_REQUEST, body=None)
+    assert type(exc) is APIError
+    assert api.is_transient_error(exc) is True
+
+
+def test_a_named_apierror_subclass_is_not_swallowed_by_the_bare_check():
+    """type(exc) is APIError must stay an exact-type check, not
+    isinstance - every named failure (bad request, auth, not found...)
+    is itself a subclass of APIError, and none of those should suddenly
+    become "transient" just because they inherit from it."""
+    exc = AuthenticationError("invalid api key", response=_response(401), body=None)
+    assert isinstance(exc, APIError)
+    assert type(exc) is not APIError
     assert api.is_transient_error(exc) is False
 
 
