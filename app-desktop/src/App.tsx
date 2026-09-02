@@ -59,6 +59,7 @@ import {
     PencilIcon,
     PinIcon,
     PlusIcon,
+    RefreshIcon,
     SearchIcon,
     SidebarIcon,
     SunIcon,
@@ -336,6 +337,40 @@ function isPdfDataUrl(dataUrl: string): boolean {
   return dataUrl.startsWith("data:application/pdf");
 }
 
+/** Meme convention que server.py's truncate_before_turn : coupe `msgs` juste
+ * avant le message utilisateur qui demarre `turnIndex` (1-based), pour que
+ * l'affichage local reflete immediatement ce que edit_turn_index va faire
+ * cote serveur (pas d'attente du prochain evenement SSE pour voir
+ * disparaitre les anciens tours). turnIndex introuvable (deja hors bornes) :
+ * no-op, retourne msgs tel quel. */
+function truncateBeforeTurn(msgs: ChatMsg[], turnIndex: number): ChatMsg[] {
+  let count = 0;
+  for (let i = 0; i < msgs.length; i++) {
+    if (msgs[i]?.kind === "user") {
+      count += 1;
+      if (count === turnIndex) return msgs.slice(0, i);
+    }
+  }
+  return msgs;
+}
+
+/** Le message utilisateur qui demarre `turnIndex` (1-based) - utilise par
+ * "regenerer" pour retrouver le texte/pieces jointes du tour a renvoyer
+ * tel quel. */
+function userMessageAtTurn(
+  msgs: ChatMsg[],
+  turnIndex: number,
+): Extract<ChatMsg, { kind: "user" }> | undefined {
+  let count = 0;
+  for (const m of msgs) {
+    if (m.kind === "user") {
+      count += 1;
+      if (count === turnIndex) return m;
+    }
+  }
+  return undefined;
+}
+
 /** id de session au format 2026-08-28_101500 -> "28/08/2026 10:15" */
 function formatSessionLabel(id: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})$/.exec(id);
@@ -524,18 +559,27 @@ type AssistantMsg = Extract<ChatMsg, { kind: "assistant" }>;
 type ToolMsg = Extract<ChatMsg, { kind: "tool" }>;
 
 type RenderGroup =
-  | { type: "user"; msg: Extract<ChatMsg, { kind: "user" }> }
+  // turnIndex : le meme "1-based nth user message" que turn_index_of cote
+  // serveur (voir server.py) - c'est ce qu'edit_turn_index attend, donc
+  // calcule ici une bonne fois plutot que recompte a chaque clic sur
+  // "modifier".
+  | { type: "user"; msg: Extract<ChatMsg, { kind: "user" }>; turnIndex: number }
   | { type: "system"; msg: Extract<ChatMsg, { kind: "info" | "error" }> }
-  | { type: "assistant"; items: (AssistantMsg | ToolMsg)[] };
+  // precedingTurnIndex : le tour utilisateur qui a produit ce groupe -
+  // c'est ce que "regenerer" renvoie comme edit_turn_index pour redemander
+  // exactement la meme reponse.
+  | { type: "assistant"; items: (AssistantMsg | ToolMsg)[]; precedingTurnIndex: number };
 
 /** Regroupe les messages consécutifs d'assistant/outil sous un seul avatar
  * (comme un vrai fil de discussion), plutôt qu'un avatar répété à chaque
  * morceau de la réponse. */
 function groupMessages(msgs: ChatMsg[]): RenderGroup[] {
   const groups: RenderGroup[] = [];
+  let turnIndex = 0;
   for (const m of msgs) {
     if (m.kind === "user") {
-      groups.push({ type: "user", msg: m });
+      turnIndex += 1;
+      groups.push({ type: "user", msg: m, turnIndex });
     } else if (m.kind === "info" || m.kind === "error") {
       groups.push({ type: "system", msg: m });
     } else {
@@ -543,7 +587,7 @@ function groupMessages(msgs: ChatMsg[]): RenderGroup[] {
       if (last?.type === "assistant") {
         last.items.push(m);
       } else {
-        groups.push({ type: "assistant", items: [m] });
+        groups.push({ type: "assistant", items: [m], precedingTurnIndex: turnIndex });
       }
     }
   }
@@ -909,6 +953,11 @@ function App() {
   );
   const [sidebarPeeking, setSidebarPeeking] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  // turnIndex (1-based, voir groupMessages) du message utilisateur en cours
+  // d'edition, null si aucun - un seul a la fois, edite en place dans sa
+  // propre bulle (voir le rendu du groupe "user" plus bas).
+  const [editingTurnIndex, setEditingTurnIndex] = useState<number | null>(null);
+  const [editingText, setEditingText] = useState("");
   const [pendingConfirmation, setPendingConfirmation] =
     useState<PendingConfirmation | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -1350,6 +1399,39 @@ function App() {
     }, 1500);
   }
 
+  function startEditingMessage(turnIndex: number, text: string) {
+    setEditingTurnIndex(turnIndex);
+    setEditingText(text);
+  }
+
+  function cancelEditingMessage() {
+    setEditingTurnIndex(null);
+    setEditingText("");
+  }
+
+  async function submitEditedMessage() {
+    if (editingTurnIndex === null) return;
+    const turnIndex = editingTurnIndex;
+    const text = editingText;
+    setEditingTurnIndex(null);
+    setEditingText("");
+    await sendMessage(text, turnIndex);
+  }
+
+  /** Renvoie exactement le meme tour (meme texte, memes pieces jointes) -
+   * turnIndex/msg viennent du groupe "user" precedant la reponse a
+   * regenerer (voir precedingTurnIndex dans groupMessages). */
+  async function regenerateResponse(
+    turnIndex: number,
+    msg: Extract<ChatMsg, { kind: "user" }>,
+  ) {
+    const attachments: PendingAttachment[] = [
+      ...(msg.images ?? []).map((dataUrl) => ({ name: "", dataUrl })),
+      ...(msg.files ?? []).map((f) => ({ name: f.name, dataUrl: f.dataUrl })),
+    ];
+    await sendMessage(msg.text, turnIndex, attachments);
+  }
+
   // sonde un run multi-agent jusqu'a ce qu'il termine, en mettant a jour
   // (pas en empilant) une entree "tool" par sous-tache au fil de l'eau :
   // meme rendu que de vrais appels d'outils (ChatToolCalls), juste avec un
@@ -1752,43 +1834,57 @@ function App() {
     }
   }
 
-  async function sendMessage(rawText: string) {
+  /** `editTurnIndex` set (from "modifier" on a past user message, or
+   * "regenerer" on the last response - see the RenderGroup rendering below)
+   * means this isn't fresh composer input: rawText is either the edited
+   * text or the original turn's unchanged text, `attachments` (if any)
+   * are that turn's own, and slash-commands/the composer's pending state
+   * are skipped entirely - the composer might have an unrelated draft
+   * sitting in it. */
+  async function sendMessage(
+    rawText: string,
+    editTurnIndex?: number,
+    attachmentsOverride?: PendingAttachment[],
+  ) {
     const text = rawText.trim();
+    const isEdit = editTurnIndex !== undefined;
     if (
-      (!text && pendingAttachments.length === 0 && pendingTextAttachments.length === 0) ||
+      (!text && !isEdit && pendingAttachments.length === 0 && pendingTextAttachments.length === 0) ||
       sending
     ) {
       return;
     }
 
-    if (text.toLowerCase().startsWith(MULTI_AGENT_PREFIX)) {
-      await dispatchMultiAgent(text);
-      return;
-    }
-    if (text === COST_COMMAND) {
-      await handleCostCommand();
-      return;
-    }
-    if (text.toLowerCase().startsWith(MODEL_COMMAND_PREFIX)) {
-      await handleModelCommand(text);
-      return;
-    }
-    if (text === UNDO_COMMAND) {
-      await handleUndoCommand();
-      return;
-    }
-    if (text.toLowerCase().startsWith(REMEMBER_PREFIX)) {
-      await handleRememberCommand(text);
-      return;
-    }
-    if (text === COMPACT_COMMAND) {
-      await handleCompactCommand();
-      return;
+    if (!isEdit) {
+      if (text.toLowerCase().startsWith(MULTI_AGENT_PREFIX)) {
+        await dispatchMultiAgent(text);
+        return;
+      }
+      if (text === COST_COMMAND) {
+        await handleCostCommand();
+        return;
+      }
+      if (text.toLowerCase().startsWith(MODEL_COMMAND_PREFIX)) {
+        await handleModelCommand(text);
+        return;
+      }
+      if (text === UNDO_COMMAND) {
+        await handleUndoCommand();
+        return;
+      }
+      if (text.toLowerCase().startsWith(REMEMBER_PREFIX)) {
+        await handleRememberCommand(text);
+        return;
+      }
+      if (text === COMPACT_COMMAND) {
+        await handleCompactCommand();
+        return;
+      }
     }
 
     const startTime = performance.now();
-    const attachments = pendingAttachments;
-    const textAttachments = pendingTextAttachments;
+    const attachments = isEdit ? (attachmentsOverride ?? []) : pendingAttachments;
+    const textAttachments = isEdit ? [] : pendingTextAttachments;
 
     const sentImages = attachments.filter((a) => !isPdfDataUrl(a.dataUrl)).map((a) => a.dataUrl);
     const sentFiles = attachments.filter((a) => isPdfDataUrl(a.dataUrl));
@@ -1804,19 +1900,24 @@ function App() {
       .filter(Boolean)
       .join("\n\n");
 
-    setInput("");
-    setPendingAttachments([]);
-    setPendingTextAttachments([]);
-    setMessages((prev) => [
-      ...prev,
-      {
-        kind: "user",
-        text: outgoingText,
-        time: Date.now(),
-        images: sentImages.length ? sentImages : undefined,
-        files: sentFiles.length ? sentFiles : undefined,
-      },
-    ]);
+    if (!isEdit) {
+      setInput("");
+      setPendingAttachments([]);
+      setPendingTextAttachments([]);
+    }
+    setMessages((prev) => {
+      const base = isEdit ? truncateBeforeTurn(prev, editTurnIndex) : prev;
+      return [
+        ...base,
+        {
+          kind: "user",
+          text: outgoingText,
+          time: Date.now(),
+          images: sentImages.length ? sentImages : undefined,
+          files: sentFiles.length ? sentFiles : undefined,
+        },
+      ];
+    });
     setSending(true);
 
     // suivi local plutot que l'etat React sessionId : ce dernier reste sur sa
@@ -1864,6 +1965,7 @@ function App() {
           message: outgoingText,
           project_id: activeProjectId,
           attachments: attachments.map((a) => ({ name: a.name, data_url: a.dataUrl })),
+          edit_turn_index: editTurnIndex ?? null,
         }),
         signal: controller.signal,
       });
@@ -2581,8 +2683,11 @@ function App() {
               }
             >
               <ChatMessageList isStreaming={sending}>
-                {groupMessages(messages).map((group, gi) => {
+                {(() => {
+                const groups = groupMessages(messages);
+                return groups.map((group, gi) => {
                   if (group.type === "user") {
+                    const isEditingThis = editingTurnIndex === group.turnIndex;
                     return (
                       <ChatMessage key={gi} sender="user" className="animate-fade-in">
                         <ChatMessageBubble
@@ -2595,6 +2700,19 @@ function App() {
                                 />
                               }
                               status="sent"
+                              footer={
+                                !isEditingThis && !sending ? (
+                                  <button
+                                    onClick={() => {
+                                      startEditingMessage(group.turnIndex, group.msg.text);
+                                    }}
+                                    className="inline-flex items-center gap-1 text-secondary hover:text-primary"
+                                    title="Modifier"
+                                  >
+                                    <PencilIcon className="h-3.5 w-3.5" />
+                                  </button>
+                                ) : undefined
+                              }
                             />
                           }
                         >
@@ -2623,7 +2741,47 @@ function App() {
                               ))}
                             </div>
                           )}
-                          {group.msg.text}
+                          {isEditingThis ? (
+                            <div className="flex flex-col gap-2">
+                              <textarea
+                                value={editingText}
+                                onChange={(e) => {
+                                  setEditingText(e.target.value);
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" && !e.shiftKey) {
+                                    e.preventDefault();
+                                    void submitEditedMessage();
+                                  } else if (e.key === "Escape") {
+                                    cancelEditingMessage();
+                                  }
+                                }}
+                                // ouvert par un clic explicite de l'utilisateur (pas au chargement de la page)
+                                autoFocus
+                                rows={Math.min(8, editingText.split("\n").length + 1)}
+                                className="w-full resize-none rounded-md border border-border bg-transparent p-2 text-sm"
+                              />
+                              <div className="flex justify-end gap-2">
+                                <Button
+                                  label="Annuler"
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={cancelEditingMessage}
+                                />
+                                <Button
+                                  label="Renvoyer"
+                                  variant="primary"
+                                  size="sm"
+                                  isDisabled={!editingText.trim()}
+                                  onClick={() => {
+                                    void submitEditedMessage();
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          ) : (
+                            group.msg.text
+                          )}
                         </ChatMessageBubble>
                       </ChatMessage>
                     );
@@ -2728,25 +2886,49 @@ function App() {
                         }
                         footer={
                           lastIsText && lastItem.text ? (
-                            <button
-                              onClick={() => {
-                                void copyToClipboard(lastItem.text, gi);
-                              }}
-                              className="inline-flex items-center gap-1 text-secondary hover:text-primary"
-                              title="Copier"
-                            >
-                              {copiedIndex === gi ? (
-                                <CheckIcon className="h-3.5 w-3.5" />
-                              ) : (
-                                <CopyIcon className="h-3.5 w-3.5" />
+                            <div className="inline-flex items-center gap-3">
+                              <button
+                                onClick={() => {
+                                  void copyToClipboard(lastItem.text, gi);
+                                }}
+                                className="inline-flex items-center gap-1 text-secondary hover:text-primary"
+                                title="Copier"
+                              >
+                                {copiedIndex === gi ? (
+                                  <CheckIcon className="h-3.5 w-3.5" />
+                                ) : (
+                                  <CopyIcon className="h-3.5 w-3.5" />
+                                )}
+                              </button>
+                              {/* regenerer n'a de sens que sur la toute
+                                  derniere reponse - regenerer une reponse
+                                  plus ancienne ecraserait tout ce qui suit,
+                                  pas juste elle */}
+                              {gi === groups.length - 1 && !sending && (
+                                <button
+                                  onClick={() => {
+                                    const userMsg = userMessageAtTurn(
+                                      messages,
+                                      group.precedingTurnIndex,
+                                    );
+                                    if (userMsg) {
+                                      void regenerateResponse(group.precedingTurnIndex, userMsg);
+                                    }
+                                  }}
+                                  className="inline-flex items-center gap-1 text-secondary hover:text-primary"
+                                  title="Regenerer"
+                                >
+                                  <RefreshIcon className="h-3.5 w-3.5" />
+                                </button>
                               )}
-                            </button>
+                            </div>
                           ) : undefined
                         }
                       />
                     </ChatMessage>
                   );
-                })}
+                });
+                })()}
 
                 {showTypingPlaceholder && (
                   <ChatMessage

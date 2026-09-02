@@ -32,6 +32,7 @@ from triton.llm.chat_loop import (
     compress_history_if_needed,
     timed_stream_chat,
     to_tool_call_params,
+    turn_start_indices,
 )
 from triton.llm.model_roles import ROLE_MODELS
 from triton.storage.logs import LOGS_FILE, current_month_cost, log_event
@@ -207,6 +208,14 @@ class ChatRequest(BaseModel):
     message: str
     project_id: str | None = None
     attachments: list[Attachment] = []
+    # 1-based turn index (same convention as turn_index_of/ensure_snapshot):
+    # when set, the turn it points to and everything after it is dropped
+    # before appending `message` as a fresh user turn - see
+    # truncate_before_turn. Used for both editing an earlier message (the
+    # client resends its new text) and regenerating the last response (the
+    # client resends the same text unchanged): from the server's
+    # perspective these are the same operation.
+    edit_turn_index: int | None = None
 
 
 class ConfirmRequest(BaseModel):
@@ -887,10 +896,28 @@ def build_user_content(text: str, attachments: list[Attachment]) -> str | list[d
     return parts
 
 
+def truncate_before_turn(
+    messages: list[ChatCompletionMessageParam], turn_index: int
+) -> list[ChatCompletionMessageParam]:
+    """Drops the user message that starts `turn_index` (1-based, same
+    convention as turn_index_of/ensure_snapshot) and everything after it -
+    used by POST /chat's edit_turn_index (edit/regenerate) to discard a
+    turn before resending it. Snapshots already taken for that turn_index
+    (tools/snapshot.py's ensure_snapshot) are left as-is: they still
+    describe the project's state right before this turn, which stays
+    correct no matter how many times the turn itself gets redone."""
+    starts = turn_start_indices(messages)
+    if turn_index < 1 or turn_index > len(starts):
+        raise HTTPException(400, f"invalid edit_turn_index: {turn_index}")
+    return messages[: starts[turn_index - 1]]
+
+
 @app.post("/chat", tags=["Chat"])
 def chat(body: ChatRequest) -> StreamingResponse:
     validate_attachments(body.attachments)
     session_path, messages, is_new = resolve_session(body.session_id, body.project_id)
+    if body.edit_turn_index is not None:
+        messages = truncate_before_turn(messages, body.edit_turn_index)
     messages.append(
         cast(
             ChatCompletionMessageParam,
