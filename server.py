@@ -322,6 +322,13 @@ def _is_tool_error(result: str) -> bool:
 # calls is exactly the case this exists to catch.
 MAX_CONSECUTIVE_TOOL_ERRORS = 6
 
+# same idea, for a reply with neither content nor a tool call (run_chat_stream's
+# own "if reply.content is None" branch) - kept lower than
+# MAX_CONSECUTIVE_TOOL_ERRORS since each attempt here is a full model
+# round-trip (occasionally a slow one - a real one took 74s), not a cheap
+# local check.
+MAX_CONSECUTIVE_EMPTY_REPLIES = 4
+
 
 def turn_index_of(messages: list[ChatCompletionMessageParam]) -> int:
     """Which turn `messages` is currently on (the nth "user" message,
@@ -416,6 +423,7 @@ def run_chat_stream(
     done = False
     cancelled = False
     consecutive_tool_errors = 0
+    consecutive_empty_replies = 0
 
     while iteration < MAX_ITERATIONS and not done:
         if session_id in CANCELLED_SESSIONS:
@@ -465,6 +473,9 @@ def run_chat_stream(
             continue
 
         assert reply is not None
+
+        if reply.tool_calls or reply.content is not None:
+            consecutive_empty_replies = 0
 
         if reply.tool_calls:
             messages.append(
@@ -574,13 +585,32 @@ def run_chat_stream(
             continue
 
         if reply.content is None:
+            # a reasoning model can burn its whole output-token budget on
+            # hidden reasoning and hit finish_reason == "length" with
+            # nothing visible to show for it - but a provider can also
+            # just return a genuinely empty completion (no content, no
+            # tool call, often finish_reason == "stop", zero usage
+            # reported) with no exception raised at all, so llm/api.py's
+            # own retrying never sees it - found via a real conversation,
+            # google/gemini-3.7-flash, twice in one session. Both are
+            # recoverable the same way (nudge and let the loop retry) -
+            # bounded by MAX_CONSECUTIVE_EMPTY_REPLIES so a model that's
+            # genuinely stuck returning nothing doesn't retry silently
+            # forever, each attempt a full (sometimes slow - one observed
+            # case took 74s) round-trip.
+            consecutive_empty_replies += 1
+            if consecutive_empty_replies > MAX_CONSECUTIVE_EMPTY_REPLIES:
+                yield sse(
+                    "error",
+                    {
+                        "message": f"the model returned an empty response "
+                        f"{consecutive_empty_replies} times in a row - giving up "
+                        "instead of continuing to retry.",
+                    },
+                )
+                done = True
+                continue
             if reply.finish_reason == "length":
-                # the model hit the output token limit before producing any
-                # visible content or tool call at all (common with reasoning
-                # models, which can burn the whole budget on hidden
-                # reasoning tokens) - recoverable, unlike a genuinely empty
-                # response: nudge it and let the loop retry, bounded by the
-                # same MAX_ITERATIONS as everything else.
                 yield sse(
                     "info",
                     {
@@ -597,9 +627,22 @@ def run_chat_stream(
                         "caused it (e.g. write large files in smaller edits).",
                     }
                 )
-                continue
-            yield sse("error", {"message": "the model returned neither text nor a tool call."})
-            done = True
+            else:
+                yield sse(
+                    "info",
+                    {
+                        "message": "the model returned an empty response - asking it to "
+                        f"continue (attempt {consecutive_empty_replies}/"
+                        f"{MAX_CONSECUTIVE_EMPTY_REPLIES}).",
+                    },
+                )
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": "Your last response was empty - no text, no tool call. "
+                        "Please continue.",
+                    }
+                )
             continue
 
         messages.append(
