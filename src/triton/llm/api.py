@@ -65,13 +65,17 @@ MAX_RETRIES = 3
 RETRY_BASE_DELAY_SECONDS = 1.0
 
 
-def _is_transient_error(exc: Exception) -> bool:
+def is_transient_error(exc: Exception) -> bool:
     """A connection failure, timeout, or rate limit is always worth
     retrying; a 5xx from the provider usually is too (its own problem, not
     this request's). Anything else - a bad request, an unknown model, an
     invalid API key - retrying would just get the exact same rejection
     again, so it's left to raise immediately instead of wasting the retry
-    budget and the wait."""
+    budget and the wait. Not private (no leading underscore): reused by
+    stream_chat's own retry-if-nothing-produced-yet loop below, and by
+    server.py's run_chat_stream to decide whether an error that reached it
+    uncaught was even worth retrying in the first place, for its own
+    diagnostics."""
     if isinstance(exc, (APIConnectionError, APITimeoutError, RateLimitError)):
         return True
     return isinstance(exc, APIStatusError) and exc.status_code >= 500
@@ -79,21 +83,19 @@ def _is_transient_error(exc: Exception) -> bool:
 
 def _with_retry[T](make_request: Callable[[], T]) -> T:
     """Calls make_request(), retrying with exponential backoff on a
-    manifestly transient error - see _is_transient_error. Used for both
+    manifestly transient error - see is_transient_error. Used for both
     call_chat and the call that establishes stream_chat's stream: in both
     cases nothing has reached the caller yet at the point this runs, so a
-    retry from scratch is always safe. NOT used once a streamed response
-    has actually started yielding content (stream_chat's own for-loop
-    below): tokens already relayed to the client as SSE can't be
-    un-sent, so a failure partway through a stream is left to raise as-is
-    rather than silently restarting the whole response."""
+    retry from scratch is always safe. NOT used directly once a streamed
+    response has actually started yielding content - see stream_chat's own
+    retry loop below for that finer-grained case."""
     attempt = 0
     while True:
         try:
             return make_request()
         except Exception as exc:
             attempt += 1
-            if attempt > MAX_RETRIES or not _is_transient_error(exc):
+            if attempt > MAX_RETRIES or not is_transient_error(exc):
                 raise
             time.sleep(RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1)))
 
@@ -187,11 +189,24 @@ def stream_chat(
     there's no point displaying them partially). `model` overrides the
     currently selected model for this call only - same convention as
     call_chat, used by server.py for a conversation with a per-session
-    override set via the /model command."""
+    override set via the /model command.
+
+    Found via a real conversation: a stream can die (observed message:
+    "The operation was aborted") right after opening, before a single
+    chunk carrying real content/tool-call data ever arrives - past
+    _with_retry's scope (that only covers the .create() call that opens
+    the stream, not reading its body) and past the point call sites like
+    run_chat_stream could safely retry themselves, since by their level
+    tokens may already be relayed to the client as SSE. Handled here
+    instead: retried from scratch, same as _with_retry, but the boundary
+    is "has this attempt produced any real output yet" rather than "has
+    the request been sent yet" - once true, a failure is left to raise
+    as-is, same reasoning _with_retry documents for why it stops there."""
     model = model or get_model()
-    if tools:
-        stream = _with_retry(
-            lambda: _client().chat.completions.create(
+
+    def _open_stream():
+        if tools:
+            return _client().chat.completions.create(
                 model=model,
                 messages=messages,
                 tools=tools,
@@ -199,54 +214,68 @@ def stream_chat(
                 stream=True,
                 stream_options={"include_usage": True},
             )
-        )
-    else:
-        stream = _with_retry(
-            lambda: _client().chat.completions.create(
-                model=model,
-                messages=messages,
-                max_tokens=MAX_TOKENS,
-                stream=True,
-                stream_options={"include_usage": True},
-            )
+        return _client().chat.completions.create(
+            model=model,
+            messages=messages,
+            max_tokens=MAX_TOKENS,
+            stream=True,
+            stream_options={"include_usage": True},
         )
 
+    attempt = 0
     content_parts: list[str] = []
     tool_call_parts: dict[int, dict[str, str]] = {}
     model_name = model
     prompt_tokens = completion_tokens = total_tokens = 0
     finish_reason: str | None = None
 
-    for chunk in stream:
-        model_name = chunk.model
-        if chunk.usage:
-            prompt_tokens = chunk.usage.prompt_tokens
-            completion_tokens = chunk.usage.completion_tokens
-            total_tokens = chunk.usage.total_tokens
+    while True:
+        stream = _with_retry(_open_stream)
+        content_parts = []
+        tool_call_parts = {}
+        produced_output = False
 
-        if not chunk.choices:
+        try:
+            for chunk in stream:
+                model_name = chunk.model
+                if chunk.usage:
+                    prompt_tokens = chunk.usage.prompt_tokens
+                    completion_tokens = chunk.usage.completion_tokens
+                    total_tokens = chunk.usage.total_tokens
+
+                if not chunk.choices:
+                    continue
+
+                if chunk.choices[0].finish_reason:
+                    finish_reason = chunk.choices[0].finish_reason
+
+                delta = chunk.choices[0].delta
+
+                if delta.content:
+                    produced_output = True
+                    content_parts.append(delta.content)
+                    yield delta.content
+
+                for tool_call_delta in delta.tool_calls or []:
+                    produced_output = True
+                    entry = tool_call_parts.setdefault(
+                        tool_call_delta.index, {"id": "", "name": "", "arguments": ""}
+                    )
+                    if tool_call_delta.id:
+                        entry["id"] = tool_call_delta.id
+                    if tool_call_delta.function:
+                        if tool_call_delta.function.name:
+                            entry["name"] += tool_call_delta.function.name
+                        if tool_call_delta.function.arguments:
+                            entry["arguments"] += tool_call_delta.function.arguments
+        except Exception as exc:
+            attempt += 1
+            if produced_output or attempt > MAX_RETRIES or not is_transient_error(exc):
+                raise
+            time.sleep(RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1)))
             continue
 
-        if chunk.choices[0].finish_reason:
-            finish_reason = chunk.choices[0].finish_reason
-
-        delta = chunk.choices[0].delta
-
-        if delta.content:
-            content_parts.append(delta.content)
-            yield delta.content
-
-        for tool_call_delta in delta.tool_calls or []:
-            entry = tool_call_parts.setdefault(
-                tool_call_delta.index, {"id": "", "name": "", "arguments": ""}
-            )
-            if tool_call_delta.id:
-                entry["id"] = tool_call_delta.id
-            if tool_call_delta.function:
-                if tool_call_delta.function.name:
-                    entry["name"] += tool_call_delta.function.name
-                if tool_call_delta.function.arguments:
-                    entry["arguments"] += tool_call_delta.function.arguments
+        break
 
     tool_calls: list[ChatCompletionMessageToolCallUnion] = [
         ChatCompletionMessageFunctionToolCall(

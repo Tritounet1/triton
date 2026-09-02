@@ -26,7 +26,13 @@ from scalar_fastapi import get_scalar_api_reference
 
 from triton import background_tasks, mcp_client
 from triton.agents import orchestrator, subagents
-from triton.llm.api import ChatResult, call_chat, get_model, is_api_key_configured
+from triton.llm.api import (
+    ChatResult,
+    call_chat,
+    get_model,
+    is_api_key_configured,
+    is_transient_error,
+)
 from triton.llm.chat_loop import (
     MAX_ITERATIONS,
     build_system_message,
@@ -429,18 +435,31 @@ def run_chat_stream(
                 else:
                     reply = event
         except APIError as exc:
-            # llm/api.py's _with_retry already retried a manifestly
-            # transient failure (network error, rate limit, 5xx) a few
-            # times with backoff before giving up - this is what reaches
-            # here: either that retry budget is exhausted, or the error
-            # was never transient to begin with (bad model name, invalid
-            # key...). Either way, surface it as a normal chat error
-            # instead of letting it crash the SSE response uncaught (which
-            # the client would just see as a dropped connection, same as
-            # a genuine network failure on its own end).
+            # llm/api.py's own retrying (_with_retry, and stream_chat's
+            # own retry-if-nothing-produced-yet loop) already retried a
+            # manifestly transient failure (network error, rate limit,
+            # 5xx) a few times with backoff before giving up - this is
+            # what reaches here: either that retry budget is exhausted, or
+            # the failure happened after real content had already started
+            # streaming out (unsafe to silently retry - see stream_chat's
+            # own docstring), or it was never transient to begin with (bad
+            # model name, invalid key...). Either way, surface it as a
+            # normal chat error instead of letting it crash the SSE
+            # response uncaught (which the client would just see as a
+            # dropped connection, same as a genuine network failure on its
+            # own end). The exception's own type name is included since
+            # "l'appel au modèle a échoué" alone gives no way to tell a
+            # one-off transient blip apart from a real, actionable one
+            # (bad key, wrong model...) - logged too, for the same reason.
+            log_event(
+                type="model_call_error",
+                error_type=type(exc).__name__,
+                transient=is_transient_error(exc),
+                message=str(exc),
+            )
             yield sse(
                 "error",
-                {"message": f"l'appel au modèle a échoué : {exc}"},
+                {"message": f"l'appel au modèle a échoué ({type(exc).__name__}) : {exc}"},
             )
             done = True
             continue

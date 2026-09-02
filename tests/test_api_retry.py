@@ -35,7 +35,7 @@ def _no_real_sleep(monkeypatch):
     monkeypatch.setattr(api.time, "sleep", lambda _seconds: None)
 
 
-# --- _is_transient_error ---
+# --- is_transient_error ---
 
 
 @pytest.mark.parametrize(
@@ -49,7 +49,7 @@ def _no_real_sleep(monkeypatch):
     ],
 )
 def test_transient_errors_are_recognized(exc):
-    assert api._is_transient_error(exc) is True
+    assert api.is_transient_error(exc) is True
 
 
 @pytest.mark.parametrize(
@@ -60,7 +60,7 @@ def test_transient_errors_are_recognized(exc):
     ],
 )
 def test_non_transient_errors_are_not_retried(exc):
-    assert api._is_transient_error(exc) is False
+    assert api.is_transient_error(exc) is False
 
 
 # --- _with_retry ---
