@@ -89,45 +89,53 @@ export function SnapshotSection({ sessionId, onRestored }: SnapshotSectionProps)
   return (
     <>
       <div className="border-b border-border px-2 py-2">
-        <div className="flex items-center gap-2 rounded-md px-2 py-1.5">
-          <Text size="sm" color="secondary" className="min-w-0 flex-1">
+        {/* pile verticale plutot qu'une seule ligne : le panneau lateral
+            est trop etroit pour la phrase + 1-2 boutons cote a cote sans
+            que le texte se retrouve compresse en une colonne d'un mot par
+            ligne et chevauche les boutons - voir la conversation ou le
+            bandeau s'affichait sur 3 "colonnes" superposees dans un
+            panneau etroit */}
+        <div className="flex flex-col gap-1.5 rounded-md px-2 py-1.5">
+          <Text size="sm" color="secondary">
             Filet de sécurité actif pour cette session
           </Text>
-          {hasMultiplePoints ? (
-            <>
+          <div className="flex flex-wrap items-center gap-2">
+            {hasMultiplePoints ? (
+              <>
+                <Button
+                  label="Annuler le dernier message"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    openConfirm(newest);
+                  }}
+                >
+                  Dernier message
+                </Button>
+                <Button
+                  label="Annuler toute la session"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    openConfirm(oldest);
+                  }}
+                >
+                  Toute la session
+                </Button>
+              </>
+            ) : (
               <Button
-                label="Annuler le dernier message"
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  openConfirm(newest);
-                }}
-              >
-                Dernier message
-              </Button>
-              <Button
-                label="Annuler toute la session"
+                label="Restaurer"
                 variant="ghost"
                 size="sm"
                 onClick={() => {
                   openConfirm(oldest);
                 }}
               >
-                Toute la session
+                Restaurer
               </Button>
-            </>
-          ) : (
-            <Button
-              label="Restaurer"
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                openConfirm(oldest);
-              }}
-            >
-              Restaurer
-            </Button>
-          )}
+            )}
+          </div>
         </div>
       </div>
 
