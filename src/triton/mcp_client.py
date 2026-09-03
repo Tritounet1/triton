@@ -170,8 +170,23 @@ class MCPManager:
                     )
                 await stop.wait()
         except Exception as e:
+            error = f"{type(e).__name__}: {e}"
             if not ready.done():
-                ready.set_result(ServerConnection(config=config, error=f"{type(e).__name__}: {e}"))
+                # failed during the initial handshake - connect()/_start()
+                # is still waiting on `ready` and will store its result
+                # into self.connections itself once this resolves.
+                ready.set_result(ServerConnection(config=config, error=error))
+            else:
+                # already connected (ready resolved successfully above)
+                # when this task died - the underlying process crashing
+                # mid-session, not a failed handshake. Nothing is waiting
+                # on `ready` anymore at this point, so without this the
+                # stale entry in self.connections would keep claiming
+                # connected=True with a now-dead tool list: a call
+                # against one of them would just hang until CALL_TIMEOUT
+                # instead of failing immediately with a clear reason.
+                self.connections[config.name] = ServerConnection(config=config, error=error)
+                self._clear_tools(config.name)
 
     async def _start(self, config: MCPServerConfig) -> ServerConnection:
         ready: asyncio.Future[ServerConnection] = self._loop.create_future()
