@@ -118,6 +118,31 @@ def set_pinned(session_id: str, pinned: bool) -> None:
         pinned_path(session_id).unlink(missing_ok=True)
 
 
+def yolo_path(session_id: str) -> Path:
+    return SESSIONS_DIR / f"{session_id}.yolo"
+
+
+def is_yolo_enabled(session_id: str) -> bool:
+    """The /yolo command's own state (see server.py's POST
+    /sessions/{id}/yolo): while on, run_chat_stream skips the
+    confirmation prompt for every non-read-only tool call in THIS
+    conversation only, the same way an individual tool already skipped
+    with "always allow" does (load_always_allowed). Doesn't touch
+    enforce_project_sandbox at all - a project-less conversation, a path
+    outside the project, ROOT_DIR... all stay blocked exactly as before,
+    this only ever removes the confirmation step itself. Same
+    marker-file-presence convention as is_pinned."""
+    return yolo_path(session_id).exists()
+
+
+def set_yolo_enabled(session_id: str, enabled: bool) -> None:
+    if enabled:
+        SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+        yolo_path(session_id).touch()
+    else:
+        yolo_path(session_id).unlink(missing_ok=True)
+
+
 def model_path(session_id: str) -> Path:
     return SESSIONS_DIR / f"{session_id}.model.txt"
 
@@ -166,8 +191,8 @@ def session_path(session_id: str) -> Path:
 
 def delete_session(session_id: str) -> bool:
     """Deletes a conversation (history + title + permissions + project
-    link + pin + model override + memory). Returns False if it didn't
-    exist."""
+    link + pin + model override + yolo mode + memory). Returns False if
+    it didn't exist."""
     path = session_path(session_id)
     if not path.exists():
         return False
@@ -176,6 +201,7 @@ def delete_session(session_id: str) -> bool:
     permissions_path(session_id).unlink(missing_ok=True)
     pinned_path(session_id).unlink(missing_ok=True)
     model_path(session_id).unlink(missing_ok=True)
+    yolo_path(session_id).unlink(missing_ok=True)
     memory_path(session_id).unlink(missing_ok=True)
     clear_session_project(session_id)
     return True

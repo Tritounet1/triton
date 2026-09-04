@@ -111,6 +111,7 @@ const REMEMBER_PREFIX = "/remember ";
 const REMEMBER_SESSION_PREFIX = "session ";
 const REMEMBER_GLOBAL_PREFIX = "global ";
 const COMPACT_COMMAND = "/compact";
+const YOLO_COMMAND = "/yolo";
 
 // menu declenche par "/" dans le composer (style Notion/Discord), via le
 // mecanisme de trigger deja fourni par ChatComposerInput.
@@ -162,6 +163,13 @@ const SLASH_COMMANDS: SearchableItem<{ description: string }>[] = [
     label: "compact",
     auxiliaryData: {
       description: "Résume les échanges les plus anciens dès maintenant, sans attendre que le contexte soit plein",
+    },
+  },
+  {
+    id: "yolo",
+    label: "yolo",
+    auxiliaryData: {
+      description: "Active/désactive le mode YOLO pour cette conversation : plus de demande d'autorisation avant une action (écriture, commande...)",
     },
   },
 ];
@@ -892,6 +900,11 @@ function App() {
   // global) tant qu'il est defini. null = pas de surcharge, la conversation
   // suit le modele global comme avant l'existence de cette commande.
   const [sessionModelOverride, setSessionModelOverride] = useState<string | null>(null);
+  // /yolo pour CETTE conversation (voir GET/POST /sessions/{id}/yolo) :
+  // affiche un bandeau persistant tant qu'actif (pas juste un toast au
+  // moment du bascule), puisque ca change silencieusement ce que fait
+  // chaque message suivant.
+  const [yoloEnabled, setYoloEnabled] = useState(false);
   // catalogue OpenRouter (id + capacites), recupere une fois au demarrage,
   // pour savoir si le modele actuel accepte des images et/ou des PDF
   // (active/desactive et filtre le bouton "joindre" du composer) sans
@@ -1243,6 +1256,21 @@ function App() {
       });
   }, [sessionId]);
 
+  // meme principe que l'effet ci-dessus pour sessionModelOverride (pas de
+  // reset synchrone ici, fait dans switchSession/startNewSession/
+  // startProjectSession a la place).
+  useEffect(() => {
+    if (!sessionId) return;
+    fetch(`${API_BASE}/sessions/${sessionId}/yolo`)
+      .then((r) => (r.ok ? r.json() : { enabled: false }))
+      .then((data: { enabled: boolean }) => {
+        setYoloEnabled(data.enabled);
+      })
+      .catch(() => {
+        setYoloEnabled(false);
+      });
+  }, [sessionId]);
+
   function openTask(id: string) {
     setActiveTaskId(id);
     setView("task");
@@ -1273,6 +1301,7 @@ function App() {
     setBackgroundTasks([]);
     setOpenFile(null);
     setSessionModelOverride(null);
+    setYoloEnabled(false);
     loadHistory(id);
   }
 
@@ -1291,6 +1320,7 @@ function App() {
     setBackgroundTasks([]);
     setOpenFile(null);
     setSessionModelOverride(null);
+    setYoloEnabled(false);
   }, [sending]);
 
   function startProjectSession(projectId: string) {
@@ -1304,6 +1334,7 @@ function App() {
     setBackgroundTasks([]);
     setOpenFile(null);
     setSessionModelOverride(null);
+    setYoloEnabled(false);
   }
 
   function toggleProjectCollapsed(projectId: string) {
@@ -1834,6 +1865,47 @@ function App() {
     }
   }
 
+  /** /yolo : bascule le mode YOLO pour cette conversation (POST
+   * /sessions/{id}/yolo, un simple toggle cote serveur - re-executer la
+   * commande desactive) - tant qu'actif, run_chat_stream saute la demande
+   * de confirmation pour tout outil non read-only (voir le bandeau
+   * persistant affiche pres du composer plus bas, pas juste ce message
+   * ponctuel). */
+  async function handleYoloCommand() {
+    setInput("");
+    setMessages((prev) => [...prev, { kind: "user", text: YOLO_COMMAND, time: Date.now() }]);
+
+    if (!sessionId) {
+      setMessages((prev) => [
+        ...prev,
+        { kind: "error", text: "Aucune conversation active pour l'instant.", time: Date.now() },
+      ]);
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/sessions/${sessionId}/yolo`, { method: "POST" });
+      if (!res.ok) throw new Error(String(res.status));
+      const data = (await res.json()) as { enabled: boolean };
+      setYoloEnabled(data.enabled);
+      setMessages((prev) => [
+        ...prev,
+        {
+          kind: "info",
+          text: data.enabled
+            ? "Mode YOLO activé pour cette conversation : les demandes d'autorisation sont sautées pour toute action (écriture, commande...). Retape /yolo pour désactiver."
+            : "Mode YOLO désactivé - les demandes d'autorisation sont de retour.",
+          time: Date.now(),
+        },
+      ]);
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        { kind: "error", text: "impossible de changer le mode YOLO.", time: Date.now() },
+      ]);
+    }
+  }
+
   /** `editTurnIndex` set (from "modifier" on a past user message, or
    * "regenerer" on the last response - see the RenderGroup rendering below)
    * means this isn't fresh composer input: rawText is either the edited
@@ -1885,6 +1957,10 @@ function App() {
       }
       if (text === COMPACT_COMMAND) {
         await handleCompactCommand();
+        return;
+      }
+      if (text === YOLO_COMMAND) {
+        await handleYoloCommand();
         return;
       }
     }
@@ -2599,6 +2675,14 @@ function App() {
                   // has to be resolved first.
                   isDisabled={!!pendingConfirmation}
                   elevation="none"
+                  headerContext={
+                    yoloEnabled ? (
+                      <Badge
+                        variant="warning"
+                        label="YOLO actif - /yolo pour désactiver"
+                      />
+                    ) : undefined
+                  }
                   input={<ChatComposerInput triggers={composerTriggers} />}
                   style={
                     { "--_chat-composer-padding": "24px" } as CSSProperties

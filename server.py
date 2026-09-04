@@ -58,6 +58,7 @@ from triton.storage.sessions import (
     clear_session_project,
     delete_session,
     is_pinned,
+    is_yolo_enabled,
     load_always_allowed,
     load_session,
     load_session_model,
@@ -69,6 +70,7 @@ from triton.storage.sessions import (
     save_session_project,
     save_title,
     set_pinned,
+    set_yolo_enabled,
 )
 from triton.storage.settings import (
     DEFAULT_MAX_SUBTASKS,
@@ -531,7 +533,11 @@ def run_chat_stream(
                         result = sandbox_error
                     elif tool is None:
                         result = f"unknown tool: {name}"
-                    elif tool.read_only or name in load_always_allowed(session_id):
+                    elif (
+                        tool.read_only
+                        or name in load_always_allowed(session_id)
+                        or is_yolo_enabled(session_id)
+                    ):
                         result = invoke_tool(tool, name, args, session_id)
                     else:
                         confirmation_id = str(uuid.uuid4())
@@ -1100,6 +1106,35 @@ def pin_session(session_id: str, body: PinRequest) -> dict[str, bool]:
         raise HTTPException(404, "session not found")
     set_pinned(session_id, body.pinned)
     return {"ok": True}
+
+
+@app.get("/sessions/{session_id}/yolo", tags=["Sessions"])
+def get_session_yolo(session_id: str) -> dict[str, bool]:
+    """Whether the /yolo command is active for this conversation (see
+    is_yolo_enabled) - the desktop app reads this on session switch/load
+    to show a persistent warning, not just a one-off toast when toggled,
+    since it silently changes what every following message does."""
+    path = SESSIONS_DIR / f"{session_id}.json"
+    if not path.exists():
+        raise HTTPException(404, "session not found")
+    return {"enabled": is_yolo_enabled(session_id)}
+
+
+@app.post("/sessions/{session_id}/yolo", tags=["Sessions"])
+def toggle_session_yolo(session_id: str) -> dict[str, bool]:
+    """The /yolo command's backend: toggles whether this conversation
+    skips the confirmation prompt for every non-read-only tool call (see
+    run_chat_stream's own check) - running /yolo again turns it back off,
+    no separate command for that. Doesn't touch enforce_project_sandbox
+    at all: a project-less conversation, a path outside the project,
+    ROOT_DIR... all stay blocked exactly as before, this only ever
+    removes the confirmation step itself."""
+    path = SESSIONS_DIR / f"{session_id}.json"
+    if not path.exists():
+        raise HTTPException(404, "session not found")
+    enabled = not is_yolo_enabled(session_id)
+    set_yolo_enabled(session_id, enabled)
+    return {"enabled": enabled}
 
 
 class ModelRequest(BaseModel):
