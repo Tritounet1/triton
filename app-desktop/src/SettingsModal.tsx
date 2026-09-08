@@ -5,12 +5,22 @@ import { Item } from "@astryxdesign/core/Item";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { ApiKeySettings } from "./ApiKeySettings";
-import { ChartBarIcon, CpuIcon, KeyIcon, NetworkIcon, PlugIcon, SearchIcon, XIcon } from "./icons";
+import {
+  ChartBarIcon,
+  ClockIcon,
+  CpuIcon,
+  KeyIcon,
+  NetworkIcon,
+  PlugIcon,
+  SearchIcon,
+  XIcon,
+} from "./icons";
 import { LogsSettings } from "./LogsSettings";
 import { McpSettings } from "./McpSettings";
 import { ModelSettings } from "./ModelSettings";
 import { MultiAgentRolesSettings } from "./MultiAgentRolesSettings";
 import { RoleModelsSettings } from "./RoleModelsSettings";
+import { ScheduledTasksSettings } from "./ScheduledTasksSettings";
 
 type SettingsCategory =
   | "api_key"
@@ -18,6 +28,7 @@ type SettingsCategory =
   | "role_models"
   | "multi_agent_roles"
   | "mcp"
+  | "scheduled_tasks"
   | "logs";
 
 interface CategoryDef {
@@ -40,6 +51,11 @@ const CATEGORIES: CategoryDef[] = [
     icon: <NetworkIcon className="h-4 w-4" />,
   },
   { id: "mcp", label: "Serveurs MCP", icon: <PlugIcon className="h-4 w-4" /> },
+  {
+    id: "scheduled_tasks",
+    label: "Tâches récurrentes",
+    icon: <ClockIcon className="h-4 w-4" />,
+  },
   { id: "logs", label: "Logs & coûts", icon: <ChartBarIcon className="h-4 w-4" /> },
 ];
 
@@ -124,6 +140,7 @@ export function SettingsModal({ isOpen, onClose, onModelChanged }: SettingsModal
             {category === "multi_agent_roles" && <MultiAgentRolesSettings />}
             {category === "role_models" && <RoleModelsSettings />}
             {category === "mcp" && <McpSettings />}
+            {category === "scheduled_tasks" && <ScheduledTasksSettings />}
             {category === "logs" && <LogsSettings />}
           </div>
         </div>

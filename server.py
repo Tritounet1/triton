@@ -6,8 +6,9 @@ import uuid
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import Literal, TypedDict, cast
 
 import requests
 from fastapi import FastAPI, HTTPException
@@ -42,6 +43,7 @@ from triton.llm.chat_loop import (
     turn_start_indices,
 )
 from triton.llm.model_roles import ROLE_MODELS
+from triton.storage import scheduled_tasks
 from triton.storage.logs import LOGS_FILE, current_month_cost, log_event
 from triton.storage.memory import append_global_memory
 from triton.storage.projects import (
@@ -143,8 +145,68 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         logging.getLogger("uvicorn").info(
             "purged %d snapshot(s) older than %d days", purged, SNAPSHOT_MAX_AGE_DAYS
         )
+    scheduler_thread = threading.Thread(target=_scheduled_tasks_poll_loop, daemon=True)
+    scheduler_thread.start()
     yield
+    _scheduler_stop_event.set()
     mcp_client.manager.disconnect_all()
+
+
+# checked only while the backend happens to be running (no OS-level cron) -
+# a few minutes' slack on exactly when a task fires is an acceptable
+# tradeoff for not needing a real scheduler process. See
+# storage/scheduled_tasks.py's own module docstring for the "no catch-up"
+# design this poll loop relies on.
+SCHEDULED_TASKS_POLL_INTERVAL_SECONDS = 60
+_scheduler_stop_event = threading.Event()
+
+
+def _run_scheduled_task(task: scheduled_tasks.ScheduledTask) -> None:
+    """Resends a scheduled task's prompt into its own dedicated session
+    (created once when the task was set up - see POST /scheduled_tasks)
+    and drains run_chat_stream to completion. force_yolo=True: nobody is
+    watching to answer a confirmation prompt for an unattended run, so
+    without it every write/run_shell call would just sit until
+    PENDING_CONFIRMATIONS' 300s timeout denies it by default."""
+    session_path = SESSIONS_DIR / f"{task.session_id}.json"
+    if not session_path.exists():
+        logging.getLogger("uvicorn").warning(
+            "scheduled task %s: session %s no longer exists, skipping",
+            task.id,
+            task.session_id,
+        )
+        return
+    try:
+        messages = load_session(session_path)
+    except (OSError, ValueError):
+        logging.getLogger("uvicorn").exception(
+            "scheduled task %s: could not load session %s", task.id, task.session_id
+        )
+        return
+    messages.append(cast(ChatCompletionMessageParam, {"role": "user", "content": task.prompt}))
+    try:
+        for _ in run_chat_stream(session_path, messages, force_yolo=True):
+            pass
+    except Exception:
+        logging.getLogger("uvicorn").exception("scheduled task %s failed", task.id)
+
+
+def _scheduled_tasks_poll_loop() -> None:
+    """Runs in its own daemon thread (started from lifespan), never as an
+    asyncio task on the main event loop: run_chat_stream is a plain
+    blocking generator (real network calls) - driving it directly on the
+    event loop would stall every other request for as long as a task
+    takes to run. Same threading.Thread pattern agents/subagents.py and
+    agents/orchestrator.py already use for background agentic work."""
+    while not _scheduler_stop_event.is_set():
+        try:
+            now = datetime.now(UTC)
+            for task in scheduled_tasks.due_tasks(now):
+                scheduled_tasks.mark_fired(task.id, now)
+                _run_scheduled_task(task)
+        except Exception:
+            logging.getLogger("uvicorn").exception("scheduled task poll failed")
+        _scheduler_stop_event.wait(SCHEDULED_TASKS_POLL_INTERVAL_SECONDS)
 
 
 # route-grouping metadata for /docs (Swagger UI) and /redoc - purely
@@ -171,6 +233,12 @@ OPENAPI_TAGS = [
         "description": "Long-running processes started by the model (start_background_task).",
     },
     {"name": "MCP", "description": "Configured MCP servers: list, add, toggle, remove."},
+    {
+        "name": "Scheduled Tasks",
+        "description": "Recurring prompts (hourly/daily/weekly), each resent into its own "
+        "dedicated session by a poll loop that only runs while the backend is up - no "
+        "catch-up for a missed occurrence, and no OS-level cron dependency.",
+    },
     {
         "name": "Memory",
         "description": "The /remember global command's write path - the session/project "
@@ -378,6 +446,7 @@ def run_chat_stream(
     session_path: Path,
     messages: list[ChatCompletionMessageParam],
     first_message: str | None = None,
+    force_yolo: bool = False,
 ) -> Iterator[str]:
     session_id = session_path.stem
 
@@ -547,6 +616,7 @@ def run_chat_stream(
                         tool.read_only
                         or name in load_always_allowed(session_id)
                         or is_yolo_enabled(session_id)
+                        or force_yolo
                     ):
                         result = invoke_tool(tool, name, args, session_id)
                     else:
@@ -1566,6 +1636,72 @@ def toggle_mcp_server(name: str, body: MCPServerToggle) -> list[mcp_client.Serve
 def remove_mcp_server(name: str) -> list[mcp_client.ServerStatus]:
     mcp_client.manager.remove_server(name)
     return mcp_client.manager.status()
+
+
+class ScheduledTaskCreate(BaseModel):
+    prompt: str
+    frequency: Literal["hourly", "daily", "weekly"]
+    time_of_day: str
+    project_id: str
+    # 0=Monday..6=Sunday - required for "weekly", ignored otherwise
+    day_of_week: int | None = None
+
+
+class ScheduledTaskToggle(BaseModel):
+    enabled: bool
+
+
+@app.get("/scheduled_tasks", tags=["Scheduled Tasks"])
+def list_scheduled_tasks() -> list[scheduled_tasks.ScheduledTask]:
+    return scheduled_tasks.load_tasks()
+
+
+@app.post("/scheduled_tasks", tags=["Scheduled Tasks"])
+def create_scheduled_task(body: ScheduledTaskCreate) -> scheduled_tasks.ScheduledTask:
+    project = get_project(body.project_id)
+    if project is None:
+        raise HTTPException(404, "project not found")
+    if body.frequency == "weekly" and body.day_of_week is None:
+        raise HTTPException(400, "day_of_week is required for a weekly task")
+    if not body.prompt.strip():
+        raise HTTPException(400, "prompt cannot be empty")
+
+    # a dedicated session, created once here and reused for every future
+    # occurrence (see storage/scheduled_tasks.py's own docstring) - its
+    # history accumulates across runs the same way an ordinary
+    # conversation's would.
+    session_path = new_session_path()
+    session_id = session_path.stem
+    save_session(session_path, [build_system_message(session_id, project)])
+    save_session_project(session_id, project.id)
+    save_title(session_id, f"[Récurrent] {body.prompt.strip()[:60]}")
+
+    return scheduled_tasks.create_task(
+        prompt=body.prompt.strip(),
+        frequency=body.frequency,
+        time_of_day=body.time_of_day,
+        project_id=body.project_id,
+        session_id=session_id,
+        day_of_week=body.day_of_week,
+    )
+
+
+@app.put("/scheduled_tasks/{task_id}", tags=["Scheduled Tasks"])
+def toggle_scheduled_task(task_id: str, body: ScheduledTaskToggle) -> scheduled_tasks.ScheduledTask:
+    task = scheduled_tasks.set_enabled(task_id, body.enabled)
+    if task is None:
+        raise HTTPException(404, "scheduled task not found")
+    return task
+
+
+@app.delete("/scheduled_tasks/{task_id}", tags=["Scheduled Tasks"])
+def remove_scheduled_task(task_id: str) -> dict[str, bool]:
+    """Only removes the schedule itself - its dedicated session (and
+    whatever history it accumulated) is left alone, same as deleting a
+    project only unlinks its conversations rather than erasing them."""
+    if not scheduled_tasks.delete_task(task_id):
+        raise HTTPException(404, "scheduled task not found")
+    return {"ok": True}
 
 
 @app.get("/projects", tags=["Projects"])
