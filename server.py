@@ -380,10 +380,20 @@ def run_chat_stream(
     first_message: str | None = None,
 ) -> Iterator[str]:
     session_id = session_path.stem
-    yield sse("session", {"session_id": session_id})
+
+    def emit(event: str, data: dict[str, object]) -> str:
+        # every event tagged with the session it belongs to, so a client
+        # that's switched away to a different conversation mid-stream can
+        # tell this apart from whatever it's currently displaying instead
+        # of blindly applying it (see App.tsx's sendMessage) - this is
+        # what actually makes switching conversations while a response is
+        # still streaming safe.
+        return sse(event, {**data, "session_id": session_id})
+
+    yield emit("session", {"session_id": session_id})
 
     if not is_api_key_configured():
-        yield sse(
+        yield emit(
             "error",
             {
                 "message": "Aucune clé API OpenRouter configurée. Ouvre les Paramètres "
@@ -394,7 +404,7 @@ def run_chat_stream(
 
     budget = load_monthly_budget()
     if budget is not None and current_month_cost() > budget:
-        yield sse(
+        yield emit(
             "error",
             {
                 "message": f"Budget mensuel de {budget:.2f} $ dépassé - nouveaux messages "
@@ -414,12 +424,12 @@ def run_chat_stream(
     if first_message is not None:
         title = generate_conversation_title(first_message)
         save_title(session_path.stem, title)
-        yield sse("title", {"title": title})
+        yield emit("title", {"title": title})
 
     compressed, compress_message = compress_history_if_needed(messages)
     messages[:] = compressed
     if compress_message:
-        yield sse("info", {"message": compress_message})
+        yield emit("info", {"message": compress_message})
 
     iteration = 0
     done = False
@@ -441,7 +451,7 @@ def run_chat_stream(
             ):
                 if isinstance(event, str):
                     content_parts.append(event)
-                    yield sse("token", {"text": event})
+                    yield emit("token", {"text": event})
                 else:
                     reply = event
         except APIError as exc:
@@ -467,7 +477,7 @@ def run_chat_stream(
                 transient=is_transient_error(exc),
                 message=str(exc),
             )
-            yield sse(
+            yield emit(
                 "error",
                 {"message": f"l'appel au modèle a échoué ({type(exc).__name__}) : {exc}"},
             )
@@ -520,7 +530,7 @@ def run_chat_stream(
                         and name in WRITE_TOOL_NAMES
                         and ensure_snapshot(project, session_id, turn_index)
                     ):
-                        yield sse(
+                        yield emit(
                             "info",
                             {
                                 "message": "Point de restauration créé pour ce message : "
@@ -544,7 +554,7 @@ def run_chat_stream(
                         pending = PendingConfirmation()
                         PENDING_CONFIRMATIONS[confirmation_id] = pending
 
-                        yield sse(
+                        yield emit(
                             "confirmation_required",
                             {"confirmation_id": confirmation_id, "tool": name, "args": args},
                         )
@@ -559,7 +569,7 @@ def run_chat_stream(
                         else:
                             result = "action denied by the user"
 
-                yield sse("tool_call", {"tool": name, "args": args, "result": result})
+                yield emit("tool_call", {"tool": name, "args": args, "result": result})
 
                 log_event(
                     type="tool_call",
@@ -575,7 +585,7 @@ def run_chat_stream(
                 if _is_tool_error(result):
                     consecutive_tool_errors += 1
                     if consecutive_tool_errors >= MAX_CONSECUTIVE_TOOL_ERRORS:
-                        yield sse(
+                        yield emit(
                             "error",
                             {
                                 "message": f"{consecutive_tool_errors} appels d'outils ont "
@@ -606,7 +616,7 @@ def run_chat_stream(
             # case took 74s) round-trip.
             consecutive_empty_replies += 1
             if consecutive_empty_replies > MAX_CONSECUTIVE_EMPTY_REPLIES:
-                yield sse(
+                yield emit(
                     "error",
                     {
                         "message": f"the model returned an empty response "
@@ -617,7 +627,7 @@ def run_chat_stream(
                 done = True
                 continue
             if reply.finish_reason == "length":
-                yield sse(
+                yield emit(
                     "info",
                     {
                         "message": "the model's response was cut off by the output length "
@@ -634,7 +644,7 @@ def run_chat_stream(
                     }
                 )
             else:
-                yield sse(
+                yield emit(
                     "info",
                     {
                         "message": "the model returned an empty response - asking it to "
@@ -657,7 +667,7 @@ def run_chat_stream(
                 {"role": "assistant", "content": reply.content, "model": reply.model},
             )
         )
-        yield sse(
+        yield emit(
             "done",
             {
                 "content": reply.content,
@@ -672,7 +682,7 @@ def run_chat_stream(
     CANCELLED_SESSIONS.discard(session_id)
 
     if not done and not cancelled:
-        yield sse("error", {"message": f"limit of {MAX_ITERATIONS} iterations reached."})
+        yield emit("error", {"message": f"limit of {MAX_ITERATIONS} iterations reached."})
 
     save_session(session_path, messages)
 

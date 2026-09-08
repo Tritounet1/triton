@@ -274,6 +274,10 @@ interface PendingConfirmation {
   id: string;
   tool: string;
   args: Record<string, unknown>;
+  // conversation this confirmation belongs to - lets respondToConfirmation/
+  // cancelMessage clean up the right entry in pendingConfirmationsRef, and
+  // lets switching sessions show/hide the right one (see sendMessage).
+  sessionId: string;
 }
 
 interface PendingAttachment {
@@ -893,7 +897,15 @@ function multiAgentSubtaskDetail(t: ToolMsg): ReactNode {
 function App() {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
-  const [sending, setSending] = useState(false);
+  // ids des conversations avec un envoi en cours ("" pour une toute
+  // nouvelle conversation pas encore identifiee par le serveur - voir
+  // sendMessage) - permet de changer de conversation pendant qu'une
+  // reponse arrive en streaming (comme ChatGPT/Claude) sans que ca la
+  // bloque : chaque sendMessage() suit son propre envoi independamment de
+  // celle affichee a l'ecran. `sending` (defini plus bas, une fois
+  // sessionId disponible ; utilise partout ailleurs dans l'UI) ne reflete
+  // que celui de la conversation actuellement affichee.
+  const [sendingSessionIds, setSendingSessionIds] = useState<Set<string>>(() => new Set());
   const [apiModel, setApiModel] = useState<string | null>(null);
   // modele propre a la conversation en cours, mis via la commande /model
   // (PUT /sessions/{id}/model) - prend le pas sur apiModel (le defaut
@@ -927,6 +939,7 @@ function App() {
   const [sessionId, setSessionId] = useState<string | null>(() =>
     localStorage.getItem("triton_session_id"),
   );
+  const sending = sendingSessionIds.has(sessionId ?? "");
   const [sessions, setSessions] = useState<Session[]>([]);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState("");
@@ -973,7 +986,17 @@ function App() {
   const [editingText, setEditingText] = useState("");
   const [pendingConfirmation, setPendingConfirmation] =
     useState<PendingConfirmation | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
+  // un AbortController/une confirmation en attente par conversation (cle :
+  // sessionId, ou "" pour une toute nouvelle pas encore identifiee - meme
+  // convention que sendingSessionIds) plutot qu'une seule valeur globale :
+  // sendMessage() pour une conversation qui n'est plus affichee doit
+  // rester annulable/repondable une fois qu'on y revient, sans se faire
+  // ecraser par l'envoi d'une autre conversation entre-temps. Des refs
+  // (pas du state) : rien ici n'a besoin de re-rendu tant que la
+  // conversation en question n'est pas celle affichee - voir sendMessage/
+  // cancelMessage/respondToConfirmation.
+  const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
+  const pendingConfirmationsRef = useRef<Map<string, PendingConfirmation>>(new Map());
   // ids des sous-agents dispatches dans la conversation ACTIVE (remis a
   // zero au changement de conversation) : permet de relancer le modele
   // automatiquement une fois l'un d'eux termine, plutot que de rester en
@@ -987,10 +1010,20 @@ function App() {
   // le rendu interdite par react-hooks/refs, d'ou l'effet.
   const sendingRef = useRef(sending);
   const inputRef = useRef(input);
+  // conversation actuellement affichee, lue par un sendMessage() en cours
+  // (potentiellement pour une AUTRE conversation, lancee avant qu'on s'en
+  // eloigne) pour savoir a chaque evenement SSE recu si son propre
+  // session_id correspond encore a ce qui est affiche - sinon il continue
+  // de tourner en fond, sans toucher `messages` (voir sendMessage). Une
+  // ref plutot qu'un simple acces a `sessionId` : la fermeture d'un
+  // sendMessage deja lance a capture sa propre valeur figee de sessionId,
+  // celle-ci reste a jour meme apres qu'on ait navigue ailleurs.
+  const displayedSessionIdRef = useRef(sessionId);
   const sendMessageRef = useRef((_text: string): void => undefined);
   useEffect(() => {
     sendingRef.current = sending;
     inputRef.current = input;
+    displayedSessionIdRef.current = sessionId;
     sendMessageRef.current = (text: string) => {
       void sendMessage(text);
     };
@@ -1290,9 +1323,14 @@ function App() {
     });
   }
 
+  // `sending` n'est plus une raison de bloquer le changement de
+  // conversation (voir sendMessage) : une reponse en cours pour la
+  // conversation qu'on quitte continue de tourner en fond, filtree par
+  // son propre session_id plutot que d'ecrire dans `messages` de celle
+  // qu'on affiche desormais.
   function switchSession(id: string) {
     setView("chat");
-    if (id === sessionId || sending) return;
+    if (id === sessionId) return;
     setSessionId(id);
     localStorage.setItem("triton_session_id", id);
     setMessages([]);
@@ -1302,16 +1340,16 @@ function App() {
     setOpenFile(null);
     setSessionModelOverride(null);
     setYoloEnabled(false);
+    // restaure une confirmation d'outil laissee en attente si cette
+    // conversation en a une (voir pendingConfirmationsRef dans sendMessage) -
+    // null sinon, pour ne pas garder affichee celle de la conversation
+    // qu'on quitte.
+    setPendingConfirmation(pendingConfirmationsRef.current.get(id) ?? null);
     loadHistory(id);
   }
 
-  // useCallback (plutot qu'une simple fonction, comme switchSession /
-  // startProjectSession) : referencee dans les dependances du raccourci
-  // clavier global cmd/ctrl+N plus bas, qui n'a besoin de se rattacher que
-  // lorsque `sending` change, pas a chaque rendu.
   const startNewSession = useCallback(() => {
     setView("chat");
-    if (sending) return;
     setSessionId(null);
     localStorage.removeItem("triton_session_id");
     setMessages([]);
@@ -1321,11 +1359,11 @@ function App() {
     setOpenFile(null);
     setSessionModelOverride(null);
     setYoloEnabled(false);
-  }, [sending]);
+    setPendingConfirmation(null);
+  }, []);
 
   function startProjectSession(projectId: string) {
     setView("chat");
-    if (sending) return;
     setSessionId(null);
     localStorage.removeItem("triton_session_id");
     setMessages([]);
@@ -1335,6 +1373,7 @@ function App() {
     setOpenFile(null);
     setSessionModelOverride(null);
     setYoloEnabled(false);
+    setPendingConfirmation(null);
   }
 
   function toggleProjectCollapsed(projectId: string) {
@@ -1467,7 +1506,16 @@ function App() {
   // (pas en empilant) une entree "tool" par sous-tache au fil de l'eau :
   // meme rendu que de vrais appels d'outils (ChatToolCalls), juste avec un
   // statut connu directement plutot qu'inferre du texte (voir ChatMsg).
-  function pollMultiAgentRun(runId: string): Promise<void> {
+  // `targetSessionId` : la conversation ce run appartient a, pour filtrer
+  // les mises a jour de `messages` par rapport a celle affichee - meme
+  // principe que isDisplayed() dans sendMessage, necessaire ici aussi
+  // depuis que changer de conversation pendant un envoi est permis (un
+  // run multi-agent lance dans une conversation qu'on a quittee ne doit
+  // pas ecrire dans celle qu'on regarde desormais).
+  function pollMultiAgentRun(runId: string, targetSessionId: string | null): Promise<void> {
+    function isDisplayed(): boolean {
+      return displayedSessionIdRef.current === targetSessionId;
+    }
     return new Promise((resolve) => {
       const interval = setInterval(() => {
         fetch(`${API_BASE}/orchestrator/${runId}`)
@@ -1475,7 +1523,7 @@ function App() {
           .then((run: MultiAgentRun | null) => {
             if (!run) return;
 
-            if (run.subtasks.length > 0) {
+            if (run.subtasks.length > 0 && isDisplayed()) {
               setMessages((prev) => {
                 const next = [...prev];
                 for (const s of run.subtasks) {
@@ -1500,14 +1548,16 @@ function App() {
 
             if (run.status === "done" || run.status === "error") {
               clearInterval(interval);
-              const finalText =
-                run.status === "done"
-                  ? (run.final_result ?? "(le planificateur n'a rien synthétisé)")
-                  : (run.error ?? "le run multi-agent a échoué");
-              setMessages((prev) => [
-                ...prev,
-                { kind: "assistant", text: finalText, time: Date.now() },
-              ]);
+              if (isDisplayed()) {
+                const finalText =
+                  run.status === "done"
+                    ? (run.final_result ?? "(le planificateur n'a rien synthétisé)")
+                    : (run.error ?? "le run multi-agent a échoué");
+                setMessages((prev) => [
+                  ...prev,
+                  { kind: "assistant", text: finalText, time: Date.now() },
+                ]);
+              }
               resolve();
             }
           })
@@ -1522,37 +1572,53 @@ function App() {
     const task = rawCommand.slice(MULTI_AGENT_PREFIX.length).trim();
     if (!task) return;
 
+    const startSessionId = sessionId;
+    const sessionKey = startSessionId ?? "";
+    let currentSessionId = startSessionId;
+    function isDisplayed(): boolean {
+      return displayedSessionIdRef.current === currentSessionId;
+    }
+
     setInput("");
-    setMessages((prev) => [...prev, { kind: "user", text: rawCommand, time: Date.now() }]);
-    setSending(true);
+    if (isDisplayed()) {
+      setMessages((prev) => [...prev, { kind: "user", text: rawCommand, time: Date.now() }]);
+    }
+    markSending(sessionKey, true);
 
     try {
       const res = await fetch(`${API_BASE}/orchestrator`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ task, session_id: sessionId, project_id: activeProjectId }),
+        body: JSON.stringify({ task, session_id: startSessionId, project_id: activeProjectId }),
       });
       if (!res.ok) throw new Error(String(res.status));
       const data = (await res.json()) as { run_id: string; session_id: string };
 
-      if (data.session_id !== sessionId) {
-        setSessionId(data.session_id);
-        localStorage.setItem("triton_session_id", data.session_id);
+      if (data.session_id !== startSessionId) {
+        moveSendingKey(sessionKey, data.session_id);
+        currentSessionId = data.session_id;
+        if (displayedSessionIdRef.current === startSessionId) {
+          setSessionId(data.session_id);
+          localStorage.setItem("triton_session_id", data.session_id);
+          displayedSessionIdRef.current = data.session_id;
+        }
       }
       void loadSessions();
 
-      await pollMultiAgentRun(data.run_id);
+      await pollMultiAgentRun(data.run_id, currentSessionId);
     } catch {
-      setMessages((prev) => [
-        ...prev,
-        {
-          kind: "error",
-          text: "impossible de contacter l'API Triton (127.0.0.1:8000).",
-          time: Date.now(),
-        },
-      ]);
+      if (isDisplayed()) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            kind: "error",
+            text: "impossible de contacter l'API Triton (127.0.0.1:8000).",
+            time: Date.now(),
+          },
+        ]);
+      }
     } finally {
-      setSending(false);
+      markSending(currentSessionId ?? sessionKey, false);
       void loadSessions();
     }
   }
@@ -1913,6 +1979,32 @@ function App() {
    * are that turn's own, and slash-commands/the composer's pending state
    * are skipped entirely - the composer might have an unrelated draft
    * sitting in it. */
+  function markSending(key: string, isSending: boolean) {
+    setSendingSessionIds((prev) => {
+      if (isSending === prev.has(key)) return prev;
+      const next = new Set(prev);
+      if (isSending) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }
+
+  /** Deplace une entree de sendingSessionIds d'une cle vers une autre, en
+   * une seule mise a jour d'etat (pas un delete + un add separes) - une
+   * toute nouvelle conversation passe de la cle "" a son vrai id des que
+   * le serveur l'annonce (evenement "session"), et faire ca en deux temps
+   * risquerait un rendu intermediaire ou aucune des deux cles n'est
+   * presente (le composer clignoterait "pas en cours d'envoi"). */
+  function moveSendingKey(oldKey: string, newKey: string) {
+    setSendingSessionIds((prev) => {
+      if (!prev.has(oldKey)) return prev;
+      const next = new Set(prev);
+      next.delete(oldKey);
+      next.add(newKey);
+      return next;
+    });
+  }
+
   async function sendMessage(
     rawText: string,
     editTurnIndex?: number,
@@ -1988,26 +2080,38 @@ function App() {
       setPendingAttachments([]);
       setPendingTextAttachments([]);
     }
-    setMessages((prev) => {
-      const base = isEdit ? truncateBeforeTurn(prev, editTurnIndex) : prev;
-      return [
-        ...base,
-        {
-          kind: "user",
-          text: outgoingText,
-          time: Date.now(),
-          images: sentImages.length ? sentImages : undefined,
-          files: sentFiles.length ? sentFiles : undefined,
-        },
-      ];
-    });
-    setSending(true);
 
-    // suivi local plutot que l'etat React sessionId : ce dernier reste sur sa
-    // valeur de depart (fermeture) le temps de tout le for-await, alors que
-    // l'evenement "session" peut arriver avec un nouvel id des la premiere
-    // ligne du flux, pour une toute nouvelle conversation.
-    let currentSessionId = sessionId;
+    // la conversation ciblee par CET envoi, figee des maintenant : l'etat
+    // React sessionId peut changer sous nos pieds si l'utilisateur navigue
+    // ailleurs pendant tout le for-await plus bas (voir isDisplayed) -
+    // c'est ce qui permet de changer de conversation en plein streaming
+    // sans que les deux se melangent (chaque evenement SSE recu porte
+    // aussi son propre session_id, verifie plus bas au fil de l'eau).
+    const startSessionId = sessionId;
+    let currentSessionId = startSessionId;
+    let currentSessionKey = startSessionId ?? "";
+
+    function isDisplayed(): boolean {
+      return displayedSessionIdRef.current === currentSessionId;
+    }
+
+    if (isDisplayed()) {
+      setMessages((prev) => {
+        const base = isEdit ? truncateBeforeTurn(prev, editTurnIndex) : prev;
+        return [
+          ...base,
+          {
+            kind: "user",
+            text: outgoingText,
+            time: Date.now(),
+            images: sentImages.length ? sentImages : undefined,
+            files: sentFiles.length ? sentFiles : undefined,
+          },
+        ];
+      });
+    }
+    markSending(currentSessionKey, true);
+
     let assistantText = "";
     let flushScheduled = false;
 
@@ -2022,6 +2126,7 @@ function App() {
       flushScheduled = true;
       requestAnimationFrame(() => {
         flushScheduled = false;
+        if (!isDisplayed()) return;
         const textSoFar = assistantText;
         setMessages((prev) => {
           const last = prev[prev.length - 1];
@@ -2037,14 +2142,14 @@ function App() {
     }
 
     const controller = new AbortController();
-    abortControllerRef.current = controller;
+    abortControllersRef.current.set(currentSessionKey, controller);
 
     try {
       const res = await fetch(`${API_BASE}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          session_id: sessionId,
+          session_id: startSessionId,
           message: outgoingText,
           project_id: activeProjectId,
           attachments: attachments.map((a) => ({ name: a.name, data_url: a.dataUrl })),
@@ -2057,17 +2162,34 @@ function App() {
         switch (event) {
           case "session": {
             const id = data.session_id as string;
+            const wasNew = currentSessionId === null;
             currentSessionId = id;
-            if (id !== sessionId) {
-              setSessionId(id);
-              localStorage.setItem("triton_session_id", id);
+            if (wasNew) {
+              // cette conversation vient d'obtenir son vrai id du serveur -
+              // deplace son suivi (envoi/annulation) de la cle "" vers celui-ci
+              moveSendingKey(currentSessionKey, id);
+              const controllerForThis = abortControllersRef.current.get(currentSessionKey);
+              abortControllersRef.current.delete(currentSessionKey);
+              currentSessionKey = id;
+              if (controllerForThis) abortControllersRef.current.set(id, controllerForThis);
+              // ne navigue vers cette toute nouvelle conversation que si
+              // l'utilisateur regarde encore ce qu'il etait en train de
+              // composer - sinon on le laisserait la ou il est alle entre-temps
+              if (displayedSessionIdRef.current === startSessionId) {
+                setSessionId(id);
+                localStorage.setItem("triton_session_id", id);
+                displayedSessionIdRef.current = id;
+              }
             }
             break;
           }
           case "title": {
+            // toujours applique, jamais filtre par isDisplayed() : ca ne
+            // touche que la liste des conversations dans la sidebar,
+            // jamais `messages` - exactement le "mettre a jour la liste
+            // des conversations en arriere-plan" attendu pour une
+            // conversation qui n'est plus affichee.
             const title = data.title as string;
-            // le serveur envoie toujours l'evenement "session" avant "title"
-            // (voir run_chat_stream dans server.py) : currentSessionId est deja defini ici
             if (!currentSessionId) break;
             const id = currentSessionId;
             setSessions((prev) =>
@@ -2083,23 +2205,26 @@ function App() {
             break;
           }
           case "tool_call": {
-            setMessages((prev) => [
-              ...prev,
-              {
-                kind: "tool",
-                tool: data.tool as string,
-                args: data.args as Record<string, unknown>,
-                result: data.result as string,
-                time: Date.now(),
-              },
-            ]);
+            if (isDisplayed()) {
+              setMessages((prev) => [
+                ...prev,
+                {
+                  kind: "tool",
+                  tool: data.tool as string,
+                  args: data.args as Record<string, unknown>,
+                  result: data.result as string,
+                  time: Date.now(),
+                },
+              ]);
+              // un outil a pu modifier le systeme de fichiers (write_file,
+              // edit_file, run_shell...) : rafraichit le panneau de fichiers
+              // du projet actif, si affiche. Sans filtrer par nom d'outil
+              // (couvre aussi les outils MCP) : une requete GET en trop est
+              // negligeable - seulement si c'est la conversation affichee,
+              // sinon aucun rapport avec le panneau actuellement visible.
+              setFileRefreshTick((t) => t + 1);
+            }
             assistantText = "";
-            // un outil a pu modifier le systeme de fichiers (write_file,
-            // edit_file, run_shell...) : rafraichit le panneau de fichiers
-            // du projet actif, si affiche. Sans filtrer par nom d'outil
-            // (couvre aussi les outils MCP) : une requete GET en trop est
-            // negligeable.
-            setFileRefreshTick((t) => t + 1);
             if (data.tool === "dispatch_subagent") {
               const match = /\(id=([a-f0-9]+)\)/.exec(
                 (data.result as string) || "",
@@ -2113,43 +2238,57 @@ function App() {
             // (pour l'avatar), et reconcilie son texte avec la version
             // finale envoyee par le serveur au cas ou il manquerait un
             // morceau (ex. le dernier flush programme n'a pas encore tourne).
-            const model = data.model as string;
-            const content = data.content as string;
-            setMessages((prev) => {
-              const last = prev[prev.length - 1];
-              if (last?.kind === "assistant") {
+            if (isDisplayed()) {
+              const model = data.model as string;
+              const content = data.content as string;
+              setMessages((prev) => {
+                const last = prev[prev.length - 1];
+                if (last?.kind === "assistant") {
+                  return [
+                    ...prev.slice(0, -1),
+                    { ...last, text: content || last.text, model },
+                  ];
+                }
                 return [
-                  ...prev.slice(0, -1),
-                  { ...last, text: content || last.text, model },
+                  ...prev,
+                  { kind: "assistant", text: content, time: Date.now(), model },
                 ];
-              }
-              return [
-                ...prev,
-                { kind: "assistant", text: content, time: Date.now(), model },
-              ];
-            });
+              });
+            }
             break;
           }
           case "confirmation_required": {
-            setPendingConfirmation({
+            const pending: PendingConfirmation = {
               id: data.confirmation_id as string,
               tool: data.tool as string,
               args: data.args as Record<string, unknown>,
-            });
+              sessionId: currentSessionKey,
+            };
+            // toujours retenue (voir pendingConfirmationsRef), meme pour
+            // une conversation qui n'est plus affichee - sinon un outil
+            // en attente de confirmation en arriere-plan resterait bloque
+            // jusqu'au timeout serveur (300s) sans que rien ne le signale
+            // quand on y revient (voir switchSession).
+            pendingConfirmationsRef.current.set(currentSessionKey, pending);
+            if (isDisplayed()) setPendingConfirmation(pending);
             break;
           }
           case "info": {
-            setMessages((prev) => [
-              ...prev,
-              { kind: "info", text: data.message as string, time: Date.now() },
-            ]);
+            if (isDisplayed()) {
+              setMessages((prev) => [
+                ...prev,
+                { kind: "info", text: data.message as string, time: Date.now() },
+              ]);
+            }
             break;
           }
           case "error": {
-            setMessages((prev) => [
-              ...prev,
-              { kind: "error", text: data.message as string, time: Date.now() },
-            ]);
+            if (isDisplayed()) {
+              setMessages((prev) => [
+                ...prev,
+                { kind: "error", text: data.message as string, time: Date.now() },
+              ]);
+            }
             break;
           }
           default:
@@ -2158,34 +2297,39 @@ function App() {
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
-        const finalText = assistantText
-          ? `${assistantText}\n\n*(interrompu)*`
-          : "*(interrompu)*";
-        setMessages((prev) => {
-          const last = prev[prev.length - 1];
-          if (last?.kind === "assistant") {
-            return [...prev.slice(0, -1), { ...last, text: finalText }];
-          }
-          return [
-            ...prev,
-            { kind: "assistant", text: finalText, time: Date.now() },
-          ];
-        });
+        if (isDisplayed()) {
+          const finalText = assistantText
+            ? `${assistantText}\n\n*(interrompu)*`
+            : "*(interrompu)*";
+          setMessages((prev) => {
+            const last = prev[prev.length - 1];
+            if (last?.kind === "assistant") {
+              return [...prev.slice(0, -1), { ...last, text: finalText }];
+            }
+            return [
+              ...prev,
+              { kind: "assistant", text: finalText, time: Date.now() },
+            ];
+          });
+        }
       } else {
         console.error("erreur pendant l'échange avec l'API Triton :", err);
-        setMessages((prev) => [
-          ...prev,
-          {
-            kind: "error",
-            text: "impossible de contacter l'API Triton (127.0.0.1:8000).",
-            time: Date.now(),
-          },
-        ]);
+        if (isDisplayed()) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              kind: "error",
+              text: "impossible de contacter l'API Triton (127.0.0.1:8000).",
+              time: Date.now(),
+            },
+          ]);
+        }
       }
     } finally {
-      abortControllerRef.current = null;
-      setPendingConfirmation(null);
-      setSending(false);
+      abortControllersRef.current.delete(currentSessionKey);
+      pendingConfirmationsRef.current.delete(currentSessionKey);
+      markSending(currentSessionKey, false);
+      if (isDisplayed()) setPendingConfirmation(null);
       void loadSessions();
 
       if (performance.now() - startTime > LONG_RESPONSE_MS) {
@@ -2202,8 +2346,9 @@ function App() {
   const respondToConfirmation = useCallback(
     async (approved: boolean, remember = false) => {
       if (!pendingConfirmation) return;
-      const { id } = pendingConfirmation;
+      const { id, sessionId: confirmationSessionId } = pendingConfirmation;
       setPendingConfirmation(null);
+      pendingConfirmationsRef.current.delete(confirmationSessionId);
 
       await fetch(`${API_BASE}/chat/confirm`, {
         method: "POST",
@@ -2214,12 +2359,12 @@ function App() {
     [pendingConfirmation],
   );
 
-  /** Interrompt la conversation en cours : ferme le flux SSE cote client,
-   * signale au serveur d'arreter la boucle agentique avant sa prochaine
-   * iteration, et refuse une confirmation d'outil eventuellement en attente
-   * pour ne pas laisser le serveur bloque dessus jusqu'au timeout. Memoisee
-   * (useCallback) car referencee dans les dependances de l'effet echap
-   * ci-dessous. */
+  /** Interrompt la conversation en cours (celle affichee) : ferme le flux
+   * SSE cote client, signale au serveur d'arreter la boucle agentique
+   * avant sa prochaine iteration, et refuse une confirmation d'outil
+   * eventuellement en attente pour ne pas laisser le serveur bloque
+   * dessus jusqu'au timeout. Memoisee (useCallback) car referencee dans
+   * les dependances de l'effet echap ci-dessous. */
   const cancelMessage = useCallback(() => {
     if (!sending) return;
     if (pendingConfirmation) {
@@ -2232,7 +2377,7 @@ function App() {
         body: JSON.stringify({ session_id: sessionId }),
       });
     }
-    abortControllerRef.current?.abort();
+    abortControllersRef.current.get(sessionId ?? "")?.abort();
   }, [sending, pendingConfirmation, sessionId, respondToConfirmation]);
 
   // touche echap pour interrompre la reponse en cours, tant qu'une reponse
@@ -2496,18 +2641,31 @@ function App() {
                               }}
                               className="pl-4"
                               endContent={
-                                <SessionActionsMenu
-                                  session={s}
-                                  onRename={() => {
-                                    startRename(s);
-                                  }}
-                                  onTogglePin={() => {
-                                    void togglePin(s);
-                                  }}
-                                  onDelete={() => {
-                                    setDeletingSession(s);
-                                  }}
-                                />
+                                <div className="flex items-center gap-1">
+                                  {/* reponse en cours en arriere-plan (voir
+                                      sendMessage) - jamais pour celle
+                                      affichee, la vue principale montre
+                                      deja son propre etat "en cours". */}
+                                  {s.id !== sessionId && sendingSessionIds.has(s.id) && (
+                                    <Spinner
+                                      size="sm"
+                                      shade="subtle"
+                                      aria-label="Réponse en cours"
+                                    />
+                                  )}
+                                  <SessionActionsMenu
+                                    session={s}
+                                    onRename={() => {
+                                      startRename(s);
+                                    }}
+                                    onTogglePin={() => {
+                                      void togglePin(s);
+                                    }}
+                                    onDelete={() => {
+                                      setDeletingSession(s);
+                                    }}
+                                  />
+                                </div>
                               }
                             />
                           ),
@@ -2555,18 +2713,23 @@ function App() {
                       switchSession(s.id);
                     }}
                     endContent={
-                      <SessionActionsMenu
-                        session={s}
-                        onRename={() => {
-                          startRename(s);
-                        }}
-                        onTogglePin={() => {
-                          void togglePin(s);
-                        }}
-                        onDelete={() => {
-                          setDeletingSession(s);
-                        }}
-                      />
+                      <div className="flex items-center gap-1">
+                        {s.id !== sessionId && sendingSessionIds.has(s.id) && (
+                          <Spinner size="sm" shade="subtle" aria-label="Réponse en cours" />
+                        )}
+                        <SessionActionsMenu
+                          session={s}
+                          onRename={() => {
+                            startRename(s);
+                          }}
+                          onTogglePin={() => {
+                            void togglePin(s);
+                          }}
+                          onDelete={() => {
+                            setDeletingSession(s);
+                          }}
+                        />
+                      </div>
                     }
                   />
                 ),
