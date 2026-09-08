@@ -53,14 +53,16 @@ def build_system_message(
             f"\n\nYou are working inside the project folder: {project.folder_path}\n"
             "Always use absolute paths starting with this folder for file operations "
             "(read_file, write_file, edit_file, grep, glob, delete_file, move_file, "
-            "git_status, git_diff, git_commit, run_tests). This is enforced: a path "
+            "git_status, git_diff, git_commit, git_log, git_branch, git_checkout, "
+            "git_push, run_tests). This is enforced: a path "
             "outside this folder will be rejected, not just discouraged."
         )
     else:
         content += (
             "\n\nNo project is selected for this conversation: read_file, write_file, "
             "edit_file, delete_file, move_file, grep, glob, git_status, git_diff, "
-            "git_commit, run_shell, run_tests, run_code, and start_background_task "
+            "git_commit, git_log, git_branch, git_checkout, git_push, "
+            "run_shell, run_tests, run_code, and start_background_task "
             "are all unavailable - they need a project folder to be scoped to, and "
             "calling one will just return an error explaining this. If the user wants "
             "to work with local files or run commands, tell them to select or create "

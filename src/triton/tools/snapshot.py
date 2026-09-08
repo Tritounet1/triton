@@ -59,7 +59,18 @@ from triton.storage.snapshots import (
 # commit the model made stays in history - undoing that fully still needs
 # a manual `git reset`/`git revert`, this only guarantees the file
 # contents are recoverable in one action.
-WRITE_TOOL_NAMES = {"write_file", "edit_file", "delete_file", "move_file", "git_commit"}
+WRITE_TOOL_NAMES = {
+    "write_file",
+    "edit_file",
+    "delete_file",
+    "move_file",
+    "git_commit",
+    # switching branches (or creating one) changes the working tree's
+    # actual file contents on disk, same as any other entry here -
+    # git_push deliberately isn't: it only touches a remote, never the
+    # local project state a snapshot exists to protect.
+    "git_checkout",
+}
 
 BACKUP_ROOT = ROOT_DIR / "snapshot_backups"
 

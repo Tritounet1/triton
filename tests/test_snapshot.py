@@ -369,4 +369,5 @@ def test_write_tool_names_covers_the_mutating_tools():
         "delete_file",
         "move_file",
         "git_commit",
+        "git_checkout",
     } == snap.WRITE_TOOL_NAMES

@@ -56,6 +56,8 @@ SUBAGENT_TOOL_NAMES = {
     "web_search",
     "git_status",
     "git_diff",
+    "git_log",
+    "git_branch",
 }
 
 SUBAGENT_SYSTEM_PROMPT = (
