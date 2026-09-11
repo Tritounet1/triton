@@ -628,6 +628,19 @@ function toBlocks(items: (AssistantMsg | ToolMsg)[]): Block[] {
   return blocks;
 }
 
+/** "mcp__server-name__tool_name" -> { label: "tool_name", server:
+ * "server-name" } (voir mcp_client.py's tool_key/MCP_PREFIX cote serveur) ;
+ * un outil natif (write_file, run_shell...) n'a pas ce prefixe -> pas de
+ * serveur. Utilise pour le style "Claude souhaite utiliser X de Y" de la
+ * demande d'autorisation. */
+function parseToolDisplay(toolName: string): { label: string; server: string | null } {
+  if (!toolName.startsWith("mcp__")) return { label: toolName, server: null };
+  const rest = toolName.slice("mcp__".length);
+  const sepIndex = rest.indexOf("__");
+  if (sepIndex === -1) return { label: rest, server: null };
+  return { label: rest.slice(sepIndex + 2), server: rest.slice(0, sepIndex) };
+}
+
 function toolCallStatus(result: string): "complete" | "error" {
   return result.startsWith("error") || result.startsWith("action denied")
     ? "error"
@@ -986,6 +999,19 @@ function App() {
   const [editingText, setEditingText] = useState("");
   const [pendingConfirmation, setPendingConfirmation] =
     useState<PendingConfirmation | null>(null);
+  // repliee par defaut (style Claude Desktop) - args/diff caches jusqu'a
+  // ce qu'on clique pour les voir.
+  const [confirmationDetailsExpanded, setConfirmationDetailsExpanded] = useState(false);
+  // remise a false a chaque nouvelle confirmation (id different - y
+  // compris en revenant sur une conversation qui en avait une en attente,
+  // voir switchSession) : ajustement synchrone pendant le rendu (pattern
+  // React officiel "adjusting state when a prop changes"), pas dans un
+  // effet - react-hooks/set-state-in-effect l'interdirait sinon.
+  const [lastConfirmationId, setLastConfirmationId] = useState<string | null>(null);
+  if ((pendingConfirmation?.id ?? null) !== lastConfirmationId) {
+    setLastConfirmationId(pendingConfirmation?.id ?? null);
+    setConfirmationDetailsExpanded(false);
+  }
   // un AbortController/une confirmation en attente par conversation (cle :
   // sessionId, ou "" pour une toute nouvelle pas encore identifiee - meme
   // convention que sendingSessionIds) plutot qu'une seule valeur globale :
@@ -2396,6 +2422,24 @@ function App() {
     };
   }, [sending, cancelMessage]);
 
+  // cmd/ctrl+entree pour "autoriser une fois", cmd/ctrl+maj+entree pour
+  // "toujours autoriser" - memes raccourcis que la demande d'autorisation
+  // de Claude Desktop (echap = refuser vient deja de l'effet ci-dessus,
+  // cancelMessage refusant toute confirmation en attente).
+  useEffect(() => {
+    if (!pendingConfirmation) return;
+    function handleKeyDown(e: KeyboardEvent) {
+      if (!(e.metaKey || e.ctrlKey) || e.key !== "Enter") return;
+      e.preventDefault();
+      void respondToConfirmation(true, e.shiftKey);
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [pendingConfirmation, respondToConfirmation]);
+
+
   // raccourcis globaux, actifs partout dans l'app (pas seulement pendant une
   // reponse en cours, contrairement a echap ci-dessus) : cmd/ctrl+K pour la
   // recherche, cmd/ctrl+N pour une nouvelle conversation.
@@ -3213,63 +3257,132 @@ function App() {
                   </ChatMessage>
                 )}
 
-                {pendingConfirmation && (
-                  <div className="mx-auto flex max-w-2xl flex-col items-center gap-3 rounded-lg border border-warning bg-warning-muted px-4 py-3">
-                    <Text weight="medium" className="text-center">
-                      autoriser {pendingConfirmation.tool}(
-                      {pendingConfirmation.tool === "edit_file"
-                        ? editFileTarget(pendingConfirmation.args)
-                        : formatArgs(pendingConfirmation.args)}
-                      ) ?
-                    </Text>
-                    {pendingConfirmation.tool === "edit_file" &&
-                      parseEditFileEdits(pendingConfirmation.args).length > 0 && (
-                        <EditFileEdits edits={parseEditFileEdits(pendingConfirmation.args)} />
-                      )}
-                    {pendingConfirmation.tool === "write_file" &&
-                      activeProject &&
-                      typeof pendingConfirmation.args.path === "string" &&
-                      typeof pendingConfirmation.args.content === "string" && (
-                        <WriteFileDiff
-                          projectId={activeProject.id}
-                          path={pendingConfirmation.args.path}
-                          newContent={pendingConfirmation.args.content}
-                        />
-                      )}
-                    <div className="flex flex-wrap justify-center gap-2">
-                      <Button
-                        label="autoriser"
-                        variant="primary"
-                        size="sm"
-                        onClick={() => {
-                          void respondToConfirmation(true);
-                        }}
-                      >
-                        autoriser
-                      </Button>
-                      <Button
-                        label="toujours autoriser pour cette conversation"
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => {
-                          void respondToConfirmation(true, true);
-                        }}
-                      >
-                        toujours autoriser (cette conversation)
-                      </Button>
-                      <Button
-                        label="refuser"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          void respondToConfirmation(false);
-                        }}
-                      >
-                        refuser
-                      </Button>
-                    </div>
-                  </div>
-                )}
+                {pendingConfirmation &&
+                  (() => {
+                    const { label, server } = parseToolDisplay(pendingConfirmation.tool);
+                    const hasDetails =
+                      (pendingConfirmation.tool === "edit_file" &&
+                        parseEditFileEdits(pendingConfirmation.args).length > 0) ||
+                      (pendingConfirmation.tool === "write_file" &&
+                        !!activeProject &&
+                        typeof pendingConfirmation.args.path === "string" &&
+                        typeof pendingConfirmation.args.content === "string") ||
+                      Object.keys(pendingConfirmation.args).length > 0;
+
+                    return (
+                      <div className="mx-auto flex w-full max-w-sm flex-col items-center gap-4 rounded-2xl border border-border bg-surface px-6 py-6">
+                        <Avatar name={server ?? label} size="lg" />
+
+                        <button
+                          type="button"
+                          disabled={!hasDetails}
+                          className="flex items-center gap-1 text-center text-sm disabled:cursor-default"
+                          onClick={() => {
+                            setConfirmationDetailsExpanded((v) => !v);
+                          }}
+                        >
+                          <span>
+                            Triton souhaite utiliser <strong>{label}</strong>
+                            {server && (
+                              <>
+                                {" "}
+                                de <strong>{server}</strong>
+                              </>
+                            )}
+                            .
+                          </span>
+                          {hasDetails && (
+                            <ChevronRightIcon
+                              className={`h-4 w-4 shrink-0 text-secondary transition-transform ${
+                                confirmationDetailsExpanded ? "rotate-90" : ""
+                              }`}
+                            />
+                          )}
+                        </button>
+
+                        {confirmationDetailsExpanded && (
+                          <div className="w-full">
+                            <Text
+                              size="sm"
+                              color="secondary"
+                              className="mb-2 block break-words text-center"
+                            >
+                              {pendingConfirmation.tool === "edit_file"
+                                ? editFileTarget(pendingConfirmation.args)
+                                : formatArgs(pendingConfirmation.args)}
+                            </Text>
+                            {pendingConfirmation.tool === "edit_file" &&
+                              parseEditFileEdits(pendingConfirmation.args).length > 0 && (
+                                <EditFileEdits
+                                  edits={parseEditFileEdits(pendingConfirmation.args)}
+                                />
+                              )}
+                            {pendingConfirmation.tool === "write_file" &&
+                              activeProject &&
+                              typeof pendingConfirmation.args.path === "string" &&
+                              typeof pendingConfirmation.args.content === "string" && (
+                                <WriteFileDiff
+                                  projectId={activeProject.id}
+                                  path={pendingConfirmation.args.path}
+                                  newContent={pendingConfirmation.args.content}
+                                />
+                              )}
+                          </div>
+                        )}
+
+                        <div className="flex w-full flex-col gap-2">
+                          <Button
+                            label="Refuser"
+                            variant="ghost"
+                            size="md"
+                            className="w-full"
+                            endContent={
+                              <kbd className="rounded border border-border px-1.5 py-0.5 text-xs text-secondary">
+                                Échap
+                              </kbd>
+                            }
+                            onClick={() => {
+                              void respondToConfirmation(false);
+                            }}
+                          >
+                            Refuser
+                          </Button>
+                          <Button
+                            label="Toujours autoriser pour cette conversation"
+                            variant="secondary"
+                            size="md"
+                            className="w-full"
+                            endContent={
+                              <kbd className="rounded border border-border px-1.5 py-0.5 text-xs text-secondary">
+                                ⇧⌘⏎
+                              </kbd>
+                            }
+                            onClick={() => {
+                              void respondToConfirmation(true, true);
+                            }}
+                          >
+                            Toujours autoriser
+                          </Button>
+                          <Button
+                            label="Autoriser une fois"
+                            variant="primary"
+                            size="md"
+                            className="w-full"
+                            endContent={
+                              <kbd className="rounded border border-white/30 px-1.5 py-0.5 text-xs">
+                                ⌘⏎
+                              </kbd>
+                            }
+                            onClick={() => {
+                              void respondToConfirmation(true);
+                            }}
+                          >
+                            Autoriser une fois
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })()}
               </ChatMessageList>
             </ChatLayout>
             {activeProject && openFile ? (
