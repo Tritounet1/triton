@@ -51,6 +51,7 @@ from triton.tools.snapshot import (
     ensure_snapshot,
     purge_expired_snapshots,
     restore_snapshot,
+    snapshot_file_content,
 )
 from triton.tools.web import is_tavily_configured
 
@@ -77,6 +78,7 @@ __all__ = [
     "purge_expired_snapshots",
     "rebuild_tools_list",
     "restore_snapshot",
+    "snapshot_file_content",
 ]
 
 TOOLS_REGISTRY: dict[str, Tool] = {

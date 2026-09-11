@@ -54,6 +54,54 @@ export async function fetchSnapshotDiff(
   }
 }
 
+export interface SnapshotFileContent {
+  old: string | null;
+  new: string | null;
+}
+
+/** GET /sessions/{id}/snapshot/file?turn_index=N&path=... - the before/
+ * after text content of one changed file, for the restore-history
+ * browser's diff pane (see SnapshotHistoryView.tsx). `old`/`new` are
+ * null when the path didn't exist at that point in time (a created or
+ * deleted file respectively) - null on any failure too (no snapshot for
+ * that turn, project deleted...), same "fail soft" convention as
+ * fetchSnapshotDiff. */
+export async function fetchSnapshotFileContent(
+  sessionId: string,
+  turnIndex: number,
+  path: string,
+): Promise<SnapshotFileContent | null> {
+  try {
+    const r = await fetch(
+      `${API_BASE}/sessions/${sessionId}/snapshot/file` +
+        `?turn_index=${turnIndex}&path=${encodeURIComponent(path)}`,
+    );
+    if (!r.ok) return null;
+    return (await r.json()) as SnapshotFileContent;
+  } catch {
+    return null;
+  }
+}
+
+export type SnapshotFileChangeType = "created" | "deleted" | "modified";
+
+export interface SnapshotChangedFile {
+  path: string;
+  type: SnapshotFileChangeType;
+}
+
+/** Flattens a SnapshotDiff's three separate arrays into one sorted list
+ * with each path's change type attached - what the restore-history
+ * browser's "changed files" column actually renders (one row per file,
+ * badge colored by type), rather than three separate loops. */
+export function changedFiles(diff: SnapshotDiff): SnapshotChangedFile[] {
+  return [
+    ...diff.created.map((path) => ({ path, type: "created" as const })),
+    ...diff.deleted.map((path) => ({ path, type: "deleted" as const })),
+    ...diff.modified.map((path) => ({ path, type: "modified" as const })),
+  ].sort((a, b) => a.path.localeCompare(b.path));
+}
+
 const MAX_NAMES_SHOWN = 6;
 
 /** A plain-text summary of a snapshot diff, meant to be appended to

@@ -125,6 +125,34 @@ def test_diff_reports_created_deleted_and_modified(tmp_path, client):
     assert body["modified"] == ["a.txt"]
 
 
+# --- GET /sessions/{id}/snapshot/file ---
+
+
+def test_snapshot_file_404_when_no_snapshot_for_that_turn(client):
+    r = client.get(
+        "/sessions/no-such-session/snapshot/file",
+        params={"turn_index": 1, "path": "a.txt"},
+    )
+    assert r.status_code == 404
+
+
+def test_snapshot_file_reports_old_and_new_content(tmp_path, client):
+    project = _project(tmp_path)
+    root = tmp_path / "myproject"
+    (root / "a.txt").write_text("original")
+    session_id = _session_with_messages("do something")
+
+    snap.ensure_snapshot(project, session_id, 1)
+    (root / "a.txt").write_text("edited by the agent")
+
+    r = client.get(
+        f"/sessions/{session_id}/snapshot/file",
+        params={"turn_index": 1, "path": "a.txt"},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"old": "original", "new": "edited by the agent"}
+
+
 # --- POST /sessions/{id}/snapshot/restore ---
 
 

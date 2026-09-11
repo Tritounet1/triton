@@ -492,6 +492,48 @@ def diff_snapshot(project: Project, snapshot: Snapshot) -> SnapshotDiff:
     return _diff_copy_snapshot(root, Path(snapshot.location))
 
 
+def snapshot_file_content(
+    project: Project, snapshot: Snapshot, rel_path: str
+) -> tuple[str | None, str | None]:
+    """(old, new) text content of `rel_path` for the restore-history
+    browser's per-file diff (see server.py's GET .../snapshot/file):
+    `old` as this snapshot captured it (None if the path didn't exist yet
+    at snapshot time - it was created afterward), `new` as it currently
+    is on disk (None if it no longer exists - deleted afterward, or
+    never existed outside the snapshot). Both decoded permissively
+    (invalid bytes replaced) since this is only ever rendered as text,
+    never written back anywhere."""
+    root = Path(project.folder_path).resolve()
+    new_path = root / rel_path
+    new_content = (
+        new_path.read_text(encoding="utf-8", errors="replace") if new_path.is_file() else None
+    )
+
+    if snapshot.kind == "content":
+        manifest = _load_manifest(snapshot.location)
+        content_hash = manifest.get(rel_path)
+        if content_hash is None:
+            return None, new_content
+        blob_path = _blob_path(content_hash)
+        if not blob_path.is_file():
+            raise RestoreError(f"snapshot blob missing: {content_hash}")
+        old_content = blob_path.read_bytes().decode("utf-8", errors="replace")
+        return old_content, new_content
+
+    if snapshot.kind == "git":
+        result = _git(["show", f"{snapshot.location}:{rel_path}"], root)
+        old_content = result.stdout if result.returncode == 0 else None
+        return old_content, new_content
+
+    backup_target = Path(snapshot.location) / rel_path
+    old_content = (
+        backup_target.read_text(encoding="utf-8", errors="replace")
+        if backup_target.is_file()
+        else None
+    )
+    return old_content, new_content
+
+
 def _discard_one(snapshot: Snapshot) -> None:
     """Cleans up whatever a single snapshot record points to (the
     manifest file, the legacy git ref, or the legacy backup copy) - the

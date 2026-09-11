@@ -35,6 +35,9 @@ interface ProjectFilePanelProps {
   /** Session active, pour proposer une restauration du filet de securite -
    * null hors conversation (ex. juste apres avoir choisi le projet). */
   sessionId: string | null;
+  /** Ouvre le navigateur d'historique plein ecran (voir
+   * SnapshotHistoryView.tsx) pour la session active. */
+  onOpenHistory: () => void;
   tasks: BackgroundTask[];
   onOpenTask: (id: string) => void;
   onStopTask: (id: string) => void;
@@ -91,6 +94,7 @@ export function ProjectFilePanel({
   folderPath,
   refreshSignal,
   sessionId,
+  onOpenHistory,
   tasks,
   onOpenTask,
   onStopTask,
@@ -153,13 +157,7 @@ export function ProjectFilePanel({
         onDelete={onDeleteTask}
       />
 
-      <SnapshotSection
-        sessionId={sessionId}
-        onRestored={() => {
-          setLoading(true);
-          loadTree();
-        }}
-      />
+      <SnapshotSection sessionId={sessionId} onOpenHistory={onOpenHistory} />
 
       <div className="flex-1 overflow-y-auto px-2 py-2">
         {error && (

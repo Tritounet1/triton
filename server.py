@@ -104,6 +104,7 @@ from triton.tools import (
     is_tavily_configured,
     purge_expired_snapshots,
     restore_snapshot,
+    snapshot_file_content,
 )
 from triton.tools.memory import remember
 
@@ -1575,6 +1576,36 @@ def get_session_snapshot_diff(session_id: str, turn_index: int) -> SnapshotDiffR
         raise HTTPException(500, f"could not compute diff: {e}") from e
 
     return SnapshotDiffResponse(created=diff.created, deleted=diff.deleted, modified=diff.modified)
+
+
+class SnapshotFileContentResponse(BaseModel):
+    old: str | None
+    new: str | None
+
+
+@app.get("/sessions/{session_id}/snapshot/file", tags=["Sessions"])
+def get_session_snapshot_file(
+    session_id: str, turn_index: int, path: str
+) -> SnapshotFileContentResponse:
+    """Before/after text content for one file changed by this turn (see
+    GET .../snapshot/diff for the list of changed paths) - powers the
+    restore-history browser's per-file diff view (SnapshotHistoryView.tsx).
+    `path` is relative to the project folder, exactly as it appears in the
+    diff response."""
+    snapshot = get_snapshot(session_id, turn_index)
+    if snapshot is None:
+        raise HTTPException(404, "no snapshot for this session at that turn")
+
+    project = get_project(snapshot.project_id)
+    if project is None:
+        raise HTTPException(404, "the project this snapshot belongs to no longer exists")
+
+    try:
+        old, new = snapshot_file_content(project, snapshot, path)
+    except RestoreError as e:
+        raise HTTPException(500, f"could not read snapshot content: {e}") from e
+
+    return SnapshotFileContentResponse(old=old, new=new)
 
 
 class SnapshotRestoreRequest(BaseModel):

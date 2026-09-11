@@ -105,6 +105,7 @@ import {
   type SnapshotDiff,
   type SnapshotPoint,
 } from "./snapshotDiff";
+import { SnapshotHistoryView } from "./SnapshotHistoryView";
 import { SubagentsPanel } from "./SubagentsPanel";
 import { TaskView } from "./TaskView";
 
@@ -735,7 +736,7 @@ function App() {
   const [themeMode, setThemeMode] = useState<"light" | "dark">(() =>
     localStorage.getItem("triton_theme") === "light" ? "light" : "dark",
   );
-  const [view, setView] = useState<"chat" | "task" | "search">("chat");
+  const [view, setView] = useState<"chat" | "task" | "search" | "snapshot_history">("chat");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
@@ -2502,6 +2503,19 @@ function App() {
             onSelectSession={switchSession}
           />
         )}
+        {view === "snapshot_history" && sessionId && (
+          <SnapshotHistoryView
+            key={sessionId}
+            sessionId={sessionId}
+            onBack={() => {
+              setView("chat");
+            }}
+            onRestored={() => {
+              setFileRefreshTick((t) => t + 1);
+              setView("chat");
+            }}
+          />
+        )}
         {view === "chat" && (
           <div
             className="relative flex h-full"
@@ -3078,6 +3092,9 @@ function App() {
                 folderPath={activeProject.folder_path}
                 refreshSignal={fileRefreshTick}
                 sessionId={sessionId}
+                onOpenHistory={() => {
+                  setView("snapshot_history");
+                }}
                 tasks={backgroundTasks}
                 onOpenTask={openTask}
                 onStopTask={stopTask}

@@ -525,3 +525,101 @@ def test_discard_one_still_cleans_up_a_legacy_copy_backup(tmp_path):
     snap.discard_snapshot("session2")
 
     assert not Path(location).exists()
+
+
+# --- snapshot_file_content (per-file before/after for the history browser) ---
+
+
+def test_snapshot_file_content_reports_old_and_new_for_a_modified_file(tmp_path):
+    root = tmp_path / "plain"
+    root.mkdir()
+    (root / "a.txt").write_text("original")
+    project = Project(id="proj2", name="plain", folder_path=str(root))
+
+    snap.ensure_snapshot(project, "session2", 1)
+    snapshot = snapshots.get_snapshot("session2", 1)
+    assert snapshot is not None
+
+    (root / "a.txt").write_text("edited")
+
+    old, new = snap.snapshot_file_content(project, snapshot, "a.txt")
+    assert old == "original"
+    assert new == "edited"
+
+
+def test_snapshot_file_content_reports_no_old_for_a_created_file(tmp_path):
+    root = tmp_path / "plain"
+    root.mkdir()
+    project = Project(id="proj2", name="plain", folder_path=str(root))
+
+    snap.ensure_snapshot(project, "session2", 1)
+    snapshot = snapshots.get_snapshot("session2", 1)
+    assert snapshot is not None
+
+    (root / "new_file.txt").write_text("created after the snapshot")
+
+    old, new = snap.snapshot_file_content(project, snapshot, "new_file.txt")
+    assert old is None
+    assert new == "created after the snapshot"
+
+
+def test_snapshot_file_content_reports_no_new_for_a_deleted_file(tmp_path):
+    root = tmp_path / "plain"
+    root.mkdir()
+    (root / "gone.txt").write_text("present at snapshot time")
+    project = Project(id="proj2", name="plain", folder_path=str(root))
+
+    snap.ensure_snapshot(project, "session2", 1)
+    snapshot = snapshots.get_snapshot("session2", 1)
+    assert snapshot is not None
+
+    (root / "gone.txt").unlink()
+
+    old, new = snap.snapshot_file_content(project, snapshot, "gone.txt")
+    assert old == "present at snapshot time"
+    assert new is None
+
+
+def test_snapshot_file_content_supports_a_legacy_git_record(tmp_path):
+    project = _git_repo(tmp_path)
+    root = tmp_path / "repo"
+
+    sha = snap._take_git_snapshot(root, "session1", 1)
+    assert sha is not None
+    snapshot = Snapshot(
+        session_id="session1",
+        project_id=project.id,
+        kind="git",
+        location=sha,
+        created_at=datetime.now(UTC).isoformat(),
+        turn_index=1,
+    )
+
+    (root / "tracked.txt").write_text("edited")
+
+    old, new = snap.snapshot_file_content(project, snapshot, "tracked.txt")
+    assert old == "original"
+    assert new == "edited"
+
+
+def test_snapshot_file_content_supports_a_legacy_copy_record(tmp_path):
+    root = tmp_path / "plain"
+    root.mkdir()
+    (root / "a.txt").write_text("original")
+    project = Project(id="proj2", name="plain", folder_path=str(root))
+
+    location = snap._take_copy_snapshot(root, "session2", 1)
+    snapshot = Snapshot(
+        session_id="session2",
+        project_id=project.id,
+        kind="copy",
+        location=location,
+        created_at=datetime.now(UTC).isoformat(),
+        turn_index=1,
+    )
+
+    (root / "a.txt").write_text("edited")
+
+    old, new = snap.snapshot_file_content(project, snapshot, "a.txt")
+    assert old == "original"
+    assert new == "edited"
