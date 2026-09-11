@@ -48,11 +48,15 @@ scheduled_tasks.json
 # Etat des taches en arriere-plan (pid, logs) - donnees locales, pas versionnees
 background_tasks_state/
 
-# Filet de securite ecriture : quelle session a un snapshot et ou (json), et
-# les copies de sauvegarde elles-memes pour les projets qui ne sont pas des
-# repos git - donnees locales, pas versionnees
+# Filet de securite ecriture : quelle session a un snapshot et ou (json),
+# le store de blobs adresses par contenu et les manifestes (format actuel,
+# voir triton/tools/snapshot.py), et les anciennes copies de sauvegarde
+# (format "copy" legacy, pour les projets qui n'etaient pas des repos git)
+# - donnees locales, pas versionnees
 snapshots.json
 snapshot_backups/
+snapshot_objects/
+snapshot_manifests/
 
 # Runs multi-agents en cours (persistes pour survivre a un redemarrage du
 # harness - voir orchestrator.resume_incomplete_runs()) - supprime des

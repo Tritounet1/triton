@@ -2,7 +2,13 @@ const API_BASE = "http://127.0.0.1:8000";
 
 export interface SnapshotPoint {
   turn_index: number;
-  kind: "git" | "copy";
+  // "content" (the current homemade content-addressable store, used for
+  // every project - see triton/tools/snapshot.py) or a legacy "git"/
+  // "copy" value from a snapshot taken before that existed. Not used for
+  // any rendering decision here - kept as a plain string rather than a
+  // literal union so this file doesn't need to track the backend's
+  // internal storage format.
+  kind: string;
   created_at: string;
   message_preview: string | null;
 }

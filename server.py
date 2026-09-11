@@ -1557,9 +1557,10 @@ def get_session_snapshot_diff(session_id: str, turn_index: int) -> SnapshotDiffR
     deleted (restore recreates them), or modified (restore reverts them).
     The desktop app fetches this when a restore confirmation dialog
     opens for that turn, not eagerly for every restore point on session
-    load - it's real work (a git diff, or reading every shared file's
-    bytes for the non-git backend) that only matters right before the
-    user is about to commit to it."""
+    load - it's real work (hashing every file currently in the project
+    to compare against the snapshot's manifest - see
+    triton/tools/snapshot.py) that only matters right before the user is
+    about to commit to it."""
     snapshot = get_snapshot(session_id, turn_index)
     if snapshot is None:
         raise HTTPException(404, "no snapshot for this session at that turn")

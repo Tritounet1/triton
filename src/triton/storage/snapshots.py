@@ -26,7 +26,13 @@ from triton.paths import ROOT_DIR
 
 SNAPSHOTS_FILE = ROOT_DIR / "snapshots.json"
 
-SnapshotKind = Literal["git", "copy"]
+# "content": the current format, a manifest JSON file in the homemade
+# content-addressable store (see triton/tools/snapshot.py's module
+# docstring) - used for every snapshot taken from here on, for both git
+# and non-git projects alike. "git"/"copy" are legacy formats no longer
+# produced, kept only so a snapshot already on disk from before this
+# existed stays restorable until it naturally expires.
+SnapshotKind = Literal["content", "git", "copy"]
 
 
 @dataclass
@@ -34,8 +40,9 @@ class Snapshot:
     session_id: str
     project_id: str
     kind: SnapshotKind
-    # git: the sha of the dangling commit the state was captured into.
-    # copy: the backup directory's absolute path.
+    # content: the manifest JSON file's absolute path.
+    # git (legacy): the sha of the dangling commit the state was captured into.
+    # copy (legacy): the backup directory's absolute path.
     location: str
     created_at: str
     # which turn (the nth user message in this session, 1-based) this

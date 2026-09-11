@@ -3,11 +3,11 @@ takes a one-time-per-turn capture of a project folder before its first
 write in that turn, restore_snapshot brings the folder back to exactly
 that state later - one restore point per turn that actually wrote
 something, not just one for the whole session (see
-storage/snapshots.py's list_snapshots). Covers both backends - a git
-repo (the scratch-index commit approach, chosen after git stash create
-turned out to silently ignore --include-untracked) and a plain folder
-(the non-git fallback) - plus the idempotency, purge, and cleanup
-behavior server.py/orchestrator.py rely on."""
+storage/snapshots.py's list_snapshots). Covers the current homemade
+content-addressable store (used for every project, git repo or not),
+the legacy git/copy formats still readable for pre-existing data, plus
+the idempotency, purge, and cleanup behavior server.py/orchestrator.py
+rely on."""
 
 import json
 import subprocess
@@ -43,6 +43,8 @@ def _git_repo(tmp_path) -> Project:
 def _isolated_storage(tmp_path, monkeypatch):
     monkeypatch.setattr(snapshots, "SNAPSHOTS_FILE", tmp_path / "snapshots.json")
     monkeypatch.setattr(snap, "BACKUP_ROOT", tmp_path / "snapshot_backups")
+    monkeypatch.setattr(snap, "OBJECTS_ROOT", tmp_path / "snapshot_objects")
+    monkeypatch.setattr(snap, "MANIFESTS_ROOT", tmp_path / "snapshot_manifests")
     monkeypatch.setattr(projects, "PROJECTS_FILE", tmp_path / "projects.json")
 
 
@@ -51,7 +53,11 @@ def test_ensure_snapshot_does_nothing_without_a_project():
     assert snapshots.get_snapshot("session1", 1) is None
 
 
-def test_ensure_snapshot_on_a_git_repo_captures_tracked_and_untracked_changes(tmp_path):
+def test_ensure_snapshot_uses_the_content_store_even_for_a_git_repo(tmp_path):
+    """The whole point of the homemade store (see the module docstring):
+    a project meant to be pushed to GitHub shouldn't have the safety
+    net's own bookkeeping living inside its real git object database, so
+    even a git-repo project gets a "content" snapshot, not a "git" one."""
     project = _git_repo(tmp_path)
     root = tmp_path / "repo"
     (root / "tracked.txt").write_text("modified before any snapshot")
@@ -61,19 +67,14 @@ def test_ensure_snapshot_on_a_git_repo_captures_tracked_and_untracked_changes(tm
 
     record = snapshots.get_snapshot("session1", 1)
     assert record is not None
-    assert record.kind == "git"
+    assert record.kind == "content"
     assert record.turn_index == 1
 
-    tree = subprocess.run(
-        ["git", "ls-tree", "-r", record.location, "--name-only"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-    )
-    assert "tracked.txt" in tree.stdout
-    assert "untracked.txt" in tree.stdout
+    manifest = json.loads(Path(record.location).read_text())
+    assert set(manifest) == {"tracked.txt", "untracked.txt"}
 
-    # taking the snapshot must not have touched the real working tree/index
+    # taking the snapshot must not have touched the real working
+    # tree/index at all - it never ran any git command.
     status = subprocess.run(["git", "status", "--short"], cwd=root, capture_output=True, text=True)
     assert "tracked.txt" in status.stdout
     assert "?? untracked.txt" in status.stdout
@@ -110,7 +111,7 @@ def test_ensure_snapshot_takes_a_new_one_for_a_later_turn(tmp_path):
     assert points[0].location != points[1].location
 
 
-def test_ensure_snapshot_on_a_non_git_folder_copies_it(tmp_path):
+def test_ensure_snapshot_on_a_non_git_folder(tmp_path):
     root = tmp_path / "plain"
     root.mkdir()
     (root / "a.txt").write_text("hello")
@@ -120,12 +121,34 @@ def test_ensure_snapshot_on_a_non_git_folder_copies_it(tmp_path):
 
     record = snapshots.get_snapshot("session2", 1)
     assert record is not None
-    assert record.kind == "copy"
-    backup = Path(record.location)
-    assert (backup / "a.txt").read_text() == "hello"
+    assert record.kind == "content"
+    manifest = json.loads(Path(record.location).read_text())
+    assert set(manifest) == {"a.txt"}
 
 
-def test_restore_snapshot_on_a_git_repo_undoes_every_change_since(tmp_path):
+def test_content_store_dedupes_identical_file_content(tmp_path):
+    """Two turns (even across different projects) that happen to write
+    the exact same bytes to a file must only cost one blob on disk -
+    that's the whole point of hashing by content instead of copying the
+    whole tree every time (see the module docstring)."""
+    root1 = tmp_path / "p1"
+    root1.mkdir()
+    (root1 / "shared.txt").write_text("same content everywhere")
+    project1 = Project(id="proj1", name="p1", folder_path=str(root1))
+
+    root2 = tmp_path / "p2"
+    root2.mkdir()
+    (root2 / "shared.txt").write_text("same content everywhere")
+    project2 = Project(id="proj2", name="p2", folder_path=str(root2))
+
+    snap.ensure_snapshot(project1, "session1", 1)
+    snap.ensure_snapshot(project2, "session2", 1)
+
+    blobs = list(snap.OBJECTS_ROOT.glob("*/*"))
+    assert len(blobs) == 1
+
+
+def test_restore_content_snapshot_undoes_every_change_since(tmp_path):
     project = _git_repo(tmp_path)
     root = tmp_path / "repo"
     (root / "to_be_deleted.txt").write_text("present at snapshot time")
@@ -147,7 +170,7 @@ def test_restore_snapshot_on_a_git_repo_undoes_every_change_since(tmp_path):
     assert (root / "to_be_deleted.txt").read_text() == "present at snapshot time"
 
 
-def test_restore_snapshot_on_a_non_git_folder_undoes_every_change_since(tmp_path):
+def test_restore_content_snapshot_on_a_non_git_folder(tmp_path):
     root = tmp_path / "plain"
     root.mkdir()
     (root / "a.txt").write_text("original")
@@ -206,7 +229,7 @@ def test_restore_to_the_most_recent_turn_only_undoes_that_turn(tmp_path):
     assert not (root / "turn2.txt").exists()
 
 
-def test_diff_snapshot_on_a_git_repo_classifies_every_change(tmp_path):
+def test_diff_content_snapshot_classifies_every_change(tmp_path):
     project = _git_repo(tmp_path)
     root = tmp_path / "repo"
     (root / "to_be_deleted.txt").write_text("present at snapshot time")
@@ -227,7 +250,7 @@ def test_diff_snapshot_on_a_git_repo_classifies_every_change(tmp_path):
     assert diff.modified == ["tracked.txt"]
 
 
-def test_diff_snapshot_on_a_git_repo_with_no_changes_is_empty(tmp_path):
+def test_diff_content_snapshot_with_no_changes_is_empty(tmp_path):
     project = _git_repo(tmp_path)
     snap.ensure_snapshot(project, "session1", 1)
     snapshot = snapshots.get_snapshot("session1", 1)
@@ -240,29 +263,7 @@ def test_diff_snapshot_on_a_git_repo_with_no_changes_is_empty(tmp_path):
     assert diff.modified == []
 
 
-def test_diff_snapshot_on_a_non_git_folder_classifies_every_change(tmp_path):
-    root = tmp_path / "plain"
-    root.mkdir()
-    (root / "a.txt").write_text("original")
-    (root / "to_be_deleted.txt").write_text("present at snapshot time")
-    project = Project(id="proj2", name="plain", folder_path=str(root))
-
-    snap.ensure_snapshot(project, "session2", 1)
-    snapshot = snapshots.get_snapshot("session2", 1)
-    assert snapshot is not None
-
-    (root / "a.txt").write_text("edited")
-    (root / "b.txt").write_text("new")
-    (root / "to_be_deleted.txt").unlink()
-
-    diff = snap.diff_snapshot(project, snapshot)
-
-    assert diff.created == ["b.txt"]
-    assert diff.deleted == ["to_be_deleted.txt"]
-    assert diff.modified == ["a.txt"]
-
-
-def test_discard_snapshot_removes_every_turns_record_and_backup(tmp_path):
+def test_discard_snapshot_removes_every_turns_record_and_manifest(tmp_path):
     root = tmp_path / "plain"
     root.mkdir()
     (root / "a.txt").write_text("hello")
@@ -273,13 +274,49 @@ def test_discard_snapshot_removes_every_turns_record_and_backup(tmp_path):
     snap.ensure_snapshot(project, "session2", 2)
     records = snapshots.list_snapshots("session2")
     assert len(records) == 2
-    backup_dirs = [Path(r.location) for r in records]
-    assert all(d.is_dir() for d in backup_dirs)
+    manifest_paths = [Path(r.location) for r in records]
+    assert all(p.is_file() for p in manifest_paths)
 
     snap.discard_snapshot("session2")
 
     assert snapshots.list_snapshots("session2") == []
-    assert not any(d.exists() for d in backup_dirs)
+    assert not any(p.exists() for p in manifest_paths)
+
+
+def test_discard_snapshot_garbage_collects_now_unreferenced_blobs(tmp_path):
+    root = tmp_path / "plain"
+    root.mkdir()
+    (root / "a.txt").write_text("hello")
+    project = Project(id="proj2", name="plain", folder_path=str(root))
+    projects.save_projects([project])
+
+    snap.ensure_snapshot(project, "session2", 1)
+    assert len(list(snap.OBJECTS_ROOT.glob("*/*"))) == 1
+
+    snap.discard_snapshot("session2")
+
+    assert list(snap.OBJECTS_ROOT.glob("*/*")) == []
+
+
+def test_discard_snapshot_keeps_a_blob_still_referenced_by_another_snapshot(tmp_path):
+    """A blob shared by two snapshots must survive discarding only one of
+    them - GC only removes what nothing references anymore."""
+    root = tmp_path / "plain"
+    root.mkdir()
+    (root / "a.txt").write_text("shared content")
+    project = Project(id="proj2", name="plain", folder_path=str(root))
+    projects.save_projects([project])
+
+    snap.ensure_snapshot(project, "session-a", 1)
+    snap.ensure_snapshot(project, "session-b", 1)
+    assert len(list(snap.OBJECTS_ROOT.glob("*/*"))) == 1
+
+    snap.discard_snapshot("session-a")
+
+    assert list(snap.OBJECTS_ROOT.glob("*/*")) != []
+    remaining = snapshots.get_snapshot("session-b", 1)
+    assert remaining is not None
+    snap.diff_snapshot(project, remaining)  # still restorable
 
 
 def test_discard_snapshots_for_project_purges_every_session_that_wrote_to_it(tmp_path):
@@ -371,3 +408,120 @@ def test_write_tool_names_covers_the_mutating_tools():
         "git_commit",
         "git_checkout",
     } == snap.WRITE_TOOL_NAMES
+
+
+# --- legacy "git"/"copy" formats: no longer produced, but must stay
+# restorable/diffable/discardable for any snapshot already on disk from
+# before the content store existed (see the module docstring).
+
+
+def test_restore_snapshot_still_supports_a_legacy_git_record(tmp_path):
+    project = _git_repo(tmp_path)
+    root = tmp_path / "repo"
+    (root / "to_be_deleted.txt").write_text("present at snapshot time")
+
+    sha = snap._take_git_snapshot(root, "session1", 1)
+    assert sha is not None
+    snapshot = Snapshot(
+        session_id="session1",
+        project_id=project.id,
+        kind="git",
+        location=sha,
+        created_at=datetime.now(UTC).isoformat(),
+        turn_index=1,
+    )
+    snapshots.save_snapshot(snapshot)
+
+    (root / "tracked.txt").write_text("edited by the agent")
+    (root / "created_by_agent.txt").write_text("new")
+    (root / "to_be_deleted.txt").unlink()
+
+    snap.restore_snapshot(project, snapshot)
+
+    assert (root / "tracked.txt").read_text() == "original"
+    assert not (root / "created_by_agent.txt").exists()
+    assert (root / "to_be_deleted.txt").read_text() == "present at snapshot time"
+
+    diff = snap.diff_snapshot(project, snapshot)
+    assert diff.created == []
+    assert diff.deleted == []
+    assert diff.modified == []
+
+
+def test_restore_snapshot_still_supports_a_legacy_copy_record(tmp_path):
+    root = tmp_path / "plain"
+    root.mkdir()
+    (root / "a.txt").write_text("original")
+    project = Project(id="proj2", name="plain", folder_path=str(root))
+
+    location = snap._take_copy_snapshot(root, "session2", 1)
+    snapshot = Snapshot(
+        session_id="session2",
+        project_id=project.id,
+        kind="copy",
+        location=location,
+        created_at=datetime.now(UTC).isoformat(),
+        turn_index=1,
+    )
+    snapshots.save_snapshot(snapshot)
+
+    (root / "a.txt").write_text("edited")
+    (root / "b.txt").write_text("new")
+
+    diff = snap.diff_snapshot(project, snapshot)
+    assert diff.created == ["b.txt"]
+    assert diff.modified == ["a.txt"]
+
+    snap.restore_snapshot(project, snapshot)
+
+    assert (root / "a.txt").read_text() == "original"
+    assert not (root / "b.txt").exists()
+
+
+def test_discard_one_still_cleans_up_a_legacy_git_ref(tmp_path):
+    project = _git_repo(tmp_path)
+    root = tmp_path / "repo"
+    projects.save_projects([project])
+
+    sha = snap._take_git_snapshot(root, "session1", 1)
+    assert sha is not None
+    snapshot = Snapshot(
+        session_id="session1",
+        project_id=project.id,
+        kind="git",
+        location=sha,
+        created_at=datetime.now(UTC).isoformat(),
+        turn_index=1,
+    )
+    snapshots.save_snapshot(snapshot)
+
+    snap.discard_snapshot("session1")
+
+    ref = subprocess.run(
+        ["git", "show-ref", "--verify", "--quiet", snap._snapshot_ref("session1", 1)],
+        cwd=root,
+    )
+    assert ref.returncode != 0
+
+
+def test_discard_one_still_cleans_up_a_legacy_copy_backup(tmp_path):
+    root = tmp_path / "plain"
+    root.mkdir()
+    (root / "a.txt").write_text("hello")
+    project = Project(id="proj2", name="plain", folder_path=str(root))
+    projects.save_projects([project])
+
+    location = snap._take_copy_snapshot(root, "session2", 1)
+    snapshot = Snapshot(
+        session_id="session2",
+        project_id=project.id,
+        kind="copy",
+        location=location,
+        created_at=datetime.now(UTC).isoformat(),
+        turn_index=1,
+    )
+    snapshots.save_snapshot(snapshot)
+
+    snap.discard_snapshot("session2")
+
+    assert not Path(location).exists()

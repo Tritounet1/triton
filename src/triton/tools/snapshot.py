@@ -1,11 +1,11 @@
 """Automatic safety net for the write tools (write_file/edit_file/
 delete_file/move_file/git_commit): the first time one is about to run in
 a given turn of a project-scoped session, that turn's starting state is
-captured - a dangling git commit if the folder is a git repo, or a plain
-recursive copy otherwise (see the module docstring's two halves below).
-One snapshot per (session, turn) - ensure_snapshot is a no-op once a
-record exists for that specific turn_index, taken lazily on the first
-write of the turn rather than eagerly, since most turns never write
+captured into a small homemade content-addressable store (see "Content
+snapshots" below) - regardless of whether the project folder is itself a
+git repo. One snapshot per (session, turn) - ensure_snapshot is a no-op
+once a record exists for that specific turn_index, taken lazily on the
+first write of the turn rather than eagerly, since most turns never write
 anything - so a session accumulates one restore point per turn that
 actually wrote something, letting a restore target either "undo the last
 turn" or "undo everything back to the first write" (see
@@ -18,20 +18,45 @@ per-call confirmation) and agents/orchestrator.py (the unsupervised
 no safety net beyond the project sandbox until this existed) - the two
 places a write tool can actually run.
 
-Git snapshots: `git stash create` looks like the obvious primitive here,
-but it silently ignores --include-untracked (verified against git
-2.50), so a new file the model is about to edit wouldn't be covered.
-Instead this builds the tree by hand in a scratch index (GIT_INDEX_FILE
-pointed at a throwaway path): `git add -A` there stages tracked and
-untracked content into *that* index only, never touching the repo's real
-index or working tree, then `write-tree`/`commit-tree` turn it into a
-real (if unreachable) commit object. A ref under
-refs/triton/snapshots/<session_id>/<turn_index> keeps that commit from
-being garbage-collected."""
+Content snapshots (current format, used for every new snapshot): a plain
+content-addressable blob store under snapshot_objects/<hash[:2]>/<hash>
+(sha256 of a file's bytes, written once per unique content and shared by
+every manifest that happens to reference it - identical files across
+turns/sessions/projects cost storage exactly once) plus a small JSON
+manifest per (session, turn) under snapshot_manifests/ mapping each
+relative path to its blob's hash. Deliberately not backed by the
+project's own git history even when it has one: a project meant to be
+pushed to GitHub shouldn't have its safety net's internal bookkeeping
+(dangling commits/refs) living in the same object database, and this
+also means a non-git project gets the exact same space-efficient
+treatment instead of the wasteful full `shutil.copytree` this used to do
+for it. Restoring a blob prefers `cp -c` (APFS clonefile on macOS: a
+copy-on-write clone, effectively free in time and disk space until
+either side is later modified) and falls back to a plain copy elsewhere
+- see _restore_blob.
 
+Legacy snapshots ("git"/"copy" kind): the two formats used before content
+snapshots existed - a dangling git commit for a git-repo project, or a
+full recursive copy otherwise. No longer produced by ensure_snapshot, but
+restore_snapshot/diff_snapshot/_discard_one still handle both so any
+snapshot already on disk from before this change stays restorable until
+it naturally expires (see purge_expired_snapshots). `git stash create`
+looks like the obvious primitive for the git half, but it silently
+ignores --include-untracked (verified against git 2.50), so a new file
+the model was about to edit wouldn't have been covered - instead it built
+the tree by hand in a scratch index (GIT_INDEX_FILE pointed at a
+throwaway path): `git add -A` there stages tracked and untracked content
+into *that* index only, never touching the repo's real index or working
+tree, then `write-tree`/`commit-tree` turned it into a real (if
+unreachable) commit object, anchored by a ref under
+refs/triton/snapshots/<session_id>/<turn_index>."""
+
+import hashlib
+import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import uuid
@@ -72,7 +97,14 @@ WRITE_TOOL_NAMES = {
     "git_checkout",
 }
 
-BACKUP_ROOT = ROOT_DIR / "snapshot_backups"
+BACKUP_ROOT = ROOT_DIR / "snapshot_backups"  # legacy "copy" kind only
+
+# current format (see the module docstring's "Content snapshots" half):
+# OBJECTS_ROOT holds the shared, content-addressed blobs; MANIFESTS_ROOT
+# holds one small JSON file per (session, turn) mapping relative paths to
+# blob hashes.
+OBJECTS_ROOT = ROOT_DIR / "snapshot_objects"
+MANIFESTS_ROOT = ROOT_DIR / "snapshot_manifests"
 
 # guards ensure_snapshot's read-then-write against two write tool calls
 # landing at nearly the same moment - most plausibly two "code" subtasks
@@ -92,6 +124,13 @@ def _git(
     return subprocess.run(
         ["git", *args], cwd=cwd, capture_output=True, text=True, timeout=15, env=full_env
     )
+
+
+# --- legacy "git"/"copy" snapshot kinds -------------------------------
+# No longer produced by ensure_snapshot (see the module docstring) - kept
+# only so a snapshot already on disk from before the content store existed
+# stays restorable via restore_snapshot/diff_snapshot/_discard_one until it
+# naturally expires.
 
 
 def _is_git_repo(root: Path) -> bool:
@@ -149,19 +188,134 @@ def _take_copy_snapshot(root: Path, session_id: str, turn_index: int) -> str:
     return str(backup_dir)
 
 
+# --- content snapshots (current format) --------------------------------
+
+
+def _project_files(root: Path) -> list[Path]:
+    """Every regular file under `root`, .git excluded (same exclusion as
+    the legacy copy backend's shutil.ignore_patterns(".git")) - shared by
+    snapshot-taking and diffing so both walk the tree the same way."""
+    return [p for p in root.rglob("*") if p.is_file() and ".git" not in p.relative_to(root).parts]
+
+
+def _file_hash(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _blob_path(content_hash: str) -> Path:
+    return OBJECTS_ROOT / content_hash[:2] / content_hash
+
+
+def _store_blob(path: Path) -> str:
+    """Adds `path`'s current content to the blob store if it isn't
+    already there (same content, same hash, stored once - see the module
+    docstring), and returns its hash either way. Written to a sibling
+    temp file first and renamed into place, so a crash mid-copy never
+    leaves a corrupt/truncated blob sitting under its final,
+    content-addressed name (which _restore_blob and the GC pass both
+    trust unconditionally)."""
+    content_hash = _file_hash(path)
+    blob_path = _blob_path(content_hash)
+    if not blob_path.exists():
+        blob_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = blob_path.with_name(f".{blob_path.name}.{uuid.uuid4().hex}.tmp")
+        shutil.copyfile(path, tmp)
+        tmp.replace(blob_path)
+    return content_hash
+
+
+def _restore_blob(content_hash: str, dest: Path) -> None:
+    blob_path = _blob_path(content_hash)
+    if not blob_path.is_file():
+        raise RestoreError(f"snapshot blob missing: {content_hash}")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if sys.platform == "darwin":
+        # APFS clonefile: a copy-on-write clone, effectively free in time
+        # and disk space until either side is later modified - falls back
+        # to a plain copy below if it fails (e.g. the blob store and the
+        # project live on different volumes, where clonefile can't work).
+        cloned = subprocess.run(
+            ["cp", "-c", str(blob_path), str(dest)], capture_output=True, timeout=15
+        )
+        if cloned.returncode == 0:
+            return
+    shutil.copy2(blob_path, dest)
+
+
+def _manifest_path(session_id: str, turn_index: int) -> Path:
+    return MANIFESTS_ROOT / session_id / f"{turn_index}.json"
+
+
+def _take_content_snapshot(root: Path, session_id: str, turn_index: int) -> str:
+    """Hashes every file under `root` into the shared blob store, then
+    writes a small JSON manifest (relative path -> blob hash) recording
+    this turn's tree shape - see the module docstring's "Content
+    snapshots" section. Returns the manifest's path, stored as the
+    Snapshot record's `location`."""
+    manifest = {p.relative_to(root).as_posix(): _store_blob(p) for p in _project_files(root)}
+    manifest_file = _manifest_path(session_id, turn_index)
+    manifest_file.parent.mkdir(parents=True, exist_ok=True)
+    manifest_file.write_text(json.dumps(manifest, ensure_ascii=False))
+    return str(manifest_file)
+
+
+def _load_manifest(manifest_path: str) -> dict[str, str]:
+    path = Path(manifest_path)
+    if not path.is_file():
+        raise RestoreError(f"snapshot manifest no longer exists: {manifest_path}")
+    return json.loads(path.read_text())
+
+
+def _restore_content_snapshot(root: Path, manifest_path: str) -> None:
+    manifest = _load_manifest(manifest_path)
+
+    # remove everything currently there (.git excepted) first, so a path
+    # created after the snapshot doesn't survive the restore - the same
+    # "checkout + clean" semantics as the legacy git backend.
+    for entry in root.iterdir():
+        if entry.name == ".git":
+            continue
+        if entry.is_dir():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()
+
+    for rel_path, content_hash in manifest.items():
+        _restore_blob(content_hash, root / rel_path)
+
+
+def _diff_content_snapshot(root: Path, manifest_path: str) -> "SnapshotDiff":
+    manifest = _load_manifest(manifest_path)
+    current = {p.relative_to(root).as_posix(): _file_hash(p) for p in _project_files(root)}
+
+    return SnapshotDiff(
+        created=sorted(set(current) - set(manifest)),
+        deleted=sorted(set(manifest) - set(current)),
+        modified=sorted(
+            rel for rel in set(current) & set(manifest) if current[rel] != manifest[rel]
+        ),
+    )
+
+
 def ensure_snapshot(project: Project | None, session_id: str, turn_index: int) -> bool:
     """Takes a snapshot of the project folder if this turn hasn't had one
     yet (turn_index: the nth user message in this session, 1-based - see
-    server.py's run_chat_stream). Silently does nothing without a
-    project, for a turn that already has a snapshot, or if the snapshot
-    attempt itself fails (a missing/broken git binary shouldn't block the
-    write the model was actually trying to make - this is a best-effort
-    safety net, not a precondition for writing). Returns whether a
-    snapshot was actually just taken by this call - server.py's
-    run_chat_stream uses this to surface a one-time "safety net is now
-    active [for this turn]" notice in the conversation itself instead of
-    only in the project file panel (see SnapshotSection.tsx), which
-    required knowing the feature existed at all to go find it."""
+    server.py's run_chat_stream), always into the content store (see the
+    module docstring) regardless of whether the project is itself a git
+    repo. Silently does nothing without a project, for a turn that
+    already has a snapshot, or if the snapshot attempt itself fails (a
+    permission error reading a file shouldn't block the write the model
+    was actually trying to make - this is a best-effort safety net, not a
+    precondition for writing). Returns whether a snapshot was actually
+    just taken by this call - server.py's run_chat_stream uses this to
+    surface a one-time "safety net is now active [for this turn]" notice
+    in the conversation itself instead of only in the project file panel
+    (see SnapshotSection.tsx), which required knowing the feature existed
+    at all to go find it."""
     if project is None:
         return False
 
@@ -174,31 +328,18 @@ def ensure_snapshot(project: Project | None, session_id: str, turn_index: int) -
             return False
 
         try:
-            if _is_git_repo(root):
-                sha = _take_git_snapshot(root, session_id, turn_index)
-                if sha is None:
-                    return False
-                snapshot = Snapshot(
-                    session_id=session_id,
-                    project_id=project.id,
-                    kind="git",
-                    location=sha,
-                    created_at=datetime.now(UTC).isoformat(),
-                    turn_index=turn_index,
-                )
-            else:
-                location = _take_copy_snapshot(root, session_id, turn_index)
-                snapshot = Snapshot(
-                    session_id=session_id,
-                    project_id=project.id,
-                    kind="copy",
-                    location=location,
-                    created_at=datetime.now(UTC).isoformat(),
-                    turn_index=turn_index,
-                )
+            location = _take_content_snapshot(root, session_id, turn_index)
         except OSError:
             return False
 
+        snapshot = Snapshot(
+            session_id=session_id,
+            project_id=project.id,
+            kind="content",
+            location=location,
+            created_at=datetime.now(UTC).isoformat(),
+            turn_index=turn_index,
+        )
         save_snapshot(snapshot)
         return True
 
@@ -209,7 +350,10 @@ def restore_snapshot(project: Project, snapshot: Snapshot) -> None:
     endpoint (see server.py) - never automatically."""
     root = Path(project.folder_path).resolve()
 
-    if snapshot.kind == "git":
+    if snapshot.kind == "content":
+        _restore_content_snapshot(root, snapshot.location)
+    elif snapshot.kind == "git":
+        # legacy - see the module docstring's "Legacy snapshots" section.
         checkout = _git(["checkout", snapshot.location, "--", "."], root)
         if checkout.returncode != 0:
             raise RestoreError(checkout.stderr.strip() or "git checkout failed")
@@ -226,6 +370,8 @@ def restore_snapshot(project: Project, snapshot: Snapshot) -> None:
         # as it was when the snapshot was taken, not as freshly staged.
         _git(["reset"], root)
     else:
+        # legacy "copy" - see the module docstring's "Legacy snapshots"
+        # section.
         backup_dir = Path(snapshot.location)
         if not backup_dir.is_dir():
             raise RestoreError(f"backup no longer exists: {backup_dir}")
@@ -256,6 +402,9 @@ class SnapshotDiff:
     created: list[str] = field(default_factory=list)
     deleted: list[str] = field(default_factory=list)
     modified: list[str] = field(default_factory=list)
+
+
+# --- legacy "git"/"copy" diffing (see the module docstring) -----------
 
 
 def _diff_git_snapshot(root: Path, snapshot_sha: str) -> SnapshotDiff:
@@ -336,18 +485,25 @@ def diff_snapshot(project: Project, snapshot: Snapshot) -> SnapshotDiff:
     whatever the session has written up to the moment the user is about
     to confirm, not a stale snapshot-time view."""
     root = Path(project.folder_path).resolve()
+    if snapshot.kind == "content":
+        return _diff_content_snapshot(root, snapshot.location)
     if snapshot.kind == "git":
         return _diff_git_snapshot(root, snapshot.location)
     return _diff_copy_snapshot(root, Path(snapshot.location))
 
 
 def _discard_one(snapshot: Snapshot) -> None:
-    """Cleans up whatever a single snapshot record points to (the git
-    ref, or the backup copy) - the record itself is assumed already
-    removed by the caller. Best-effort: if the project was since deleted
-    or the git ref is already gone, there's nothing left to clean up
-    beyond the record."""
-    if snapshot.kind == "git":
+    """Cleans up whatever a single snapshot record points to (the
+    manifest file, the legacy git ref, or the legacy backup copy) - the
+    record itself is assumed already removed by the caller. Best-effort:
+    if the project was since deleted or the git ref is already gone,
+    there's nothing left to clean up beyond the record. A content
+    snapshot's blobs are deliberately NOT touched here - they may be
+    shared by other manifests still alive, see _gc_unreferenced_blobs for
+    the actual reclaim step."""
+    if snapshot.kind == "content":
+        Path(snapshot.location).unlink(missing_ok=True)
+    elif snapshot.kind == "git":
         project = get_project(snapshot.project_id)
         if project is not None:
             root = Path(project.folder_path).resolve()
@@ -360,28 +516,68 @@ def _discard_one(snapshot: Snapshot) -> None:
         shutil.rmtree(snapshot.location, ignore_errors=True)
 
 
+def _referenced_blob_hashes() -> set[str]:
+    hashes: set[str] = set()
+    if not MANIFESTS_ROOT.is_dir():
+        return hashes
+    for manifest_file in MANIFESTS_ROOT.rglob("*.json"):
+        try:
+            manifest = json.loads(manifest_file.read_text())
+        except (OSError, ValueError):
+            continue
+        hashes.update(manifest.values())
+    return hashes
+
+
+def _gc_unreferenced_blobs() -> int:
+    """Removes every blob no remaining manifest points to - content
+    snapshots' counterpart to git's own gc (see the module docstring): a
+    blob may be shared by several manifests (that's the whole point of
+    content-addressing it), so a manifest being deleted doesn't mean its
+    blobs can go too, only whichever ones nothing references anymore
+    once it's gone. Meant to be called once after a batch of manifests
+    was just removed (discard_snapshot/discard_snapshots_for_project/
+    purge_expired_snapshots), not per snapshot, since it walks every
+    remaining manifest to build the referenced set. Returns how many
+    blobs were removed, for the caller's own log."""
+    if not OBJECTS_ROOT.is_dir():
+        return 0
+    referenced = _referenced_blob_hashes()
+    removed = 0
+    for blob_path in OBJECTS_ROOT.glob("*/*"):
+        if blob_path.name not in referenced:
+            blob_path.unlink(missing_ok=True)
+            removed += 1
+    return removed
+
+
 def discard_snapshot(session_id: str) -> None:
     """Cleans up every restore point a session has (one per turn that
     wrote something - see storage/snapshots.py's list_snapshots), called
     when the session itself is deleted so none of them linger forever."""
-    for snapshot in delete_snapshots_for_session(session_id):
-        _discard_one(snapshot)
+    with _LOCK:
+        for snapshot in delete_snapshots_for_session(session_id):
+            _discard_one(snapshot)
+        _gc_unreferenced_blobs()
 
 
 def discard_snapshots_for_project(project_id: str) -> int:
     """Same as discard_snapshot, scoped to every session's restore points
     for one project instead of one session's - called from server.py's
     DELETE /projects/{id}, before the Project record itself is removed
-    (its folder_path is what a git-backed snapshot's ref cleanup needs -
-    once the record's gone, get_project() can no longer resolve it).
-    Without this, a project's snapshots become dead weight forever: they
-    already can't be restored to (restore/diff both 404 once get_project()
-    returns None for a deleted project), but nothing was removing the git
-    ref or backup copy - see PLAN.md's "Purge des vieux snapshots" entry.
-    Returns how many were removed, for the endpoint's own log."""
-    removed = delete_snapshots_for_project(project_id)
-    for snapshot in removed:
-        _discard_one(snapshot)
+    (its folder_path is what a legacy git-backed snapshot's ref cleanup
+    needs - once the record's gone, get_project() can no longer resolve
+    it). Without this, a project's snapshots become dead weight forever:
+    they already can't be restored to (restore/diff both 404 once
+    get_project() returns None for a deleted project), but nothing was
+    removing the manifest/git ref/backup copy - see PLAN.md's "Purge des
+    vieux snapshots" entry. Returns how many were removed, for the
+    endpoint's own log."""
+    with _LOCK:
+        removed = delete_snapshots_for_project(project_id)
+        for snapshot in removed:
+            _discard_one(snapshot)
+        _gc_unreferenced_blobs()
     return len(removed)
 
 
@@ -404,7 +600,9 @@ def purge_expired_snapshots(max_age_days: int = SNAPSHOT_MAX_AGE_DAYS) -> int:
     restore points forever. Returns how many were removed, for the
     startup log."""
     cutoff = (datetime.now(UTC) - timedelta(days=max_age_days)).isoformat()
-    removed = delete_expired_snapshots(cutoff)
-    for snapshot in removed:
-        _discard_one(snapshot)
+    with _LOCK:
+        removed = delete_expired_snapshots(cutoff)
+        for snapshot in removed:
+            _discard_one(snapshot)
+        _gc_unreferenced_blobs()
     return len(removed)

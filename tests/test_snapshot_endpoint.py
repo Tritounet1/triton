@@ -1,10 +1,11 @@
 """GET /sessions/{id}/snapshots, GET .../snapshot/diff, and POST
 .../snapshot/restore - the desktop app's "undo" affordance (see
-triton/tools/snapshot.py for the actual git/copy logic, already covered
-directly in test_snapshot.py). These tests exercise the HTTP layer on
-top: an empty/404 shape when there's nothing to restore, that a restore
-actually reaches the project folder end to end, and that deleting a
-session or a project purges the snapshots that belonged to it."""
+triton/tools/snapshot.py for the actual content-store logic, already
+covered directly in test_snapshot.py). These tests exercise the HTTP
+layer on top: an empty/404 shape when there's nothing to restore, that a
+restore actually reaches the project folder end to end, and that
+deleting a session or a project purges the snapshots that belonged to
+it."""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,6 +20,8 @@ def _isolated_storage(tmp_path, monkeypatch):
     monkeypatch.setattr(projects, "PROJECTS_FILE", tmp_path / "projects.json")
     monkeypatch.setattr(snapshots, "SNAPSHOTS_FILE", tmp_path / "snapshots.json")
     monkeypatch.setattr(snap, "BACKUP_ROOT", tmp_path / "snapshot_backups")
+    monkeypatch.setattr(snap, "OBJECTS_ROOT", tmp_path / "snapshot_objects")
+    monkeypatch.setattr(snap, "MANIFESTS_ROOT", tmp_path / "snapshot_manifests")
     sessions_dir = tmp_path / "sessions"
     monkeypatch.setattr(sessions, "SESSIONS_DIR", sessions_dir)
     monkeypatch.setattr(server, "SESSIONS_DIR", sessions_dir)
@@ -62,7 +65,7 @@ def test_list_snapshots_reports_kind_and_created_at(tmp_path, client):
     r = client.get(f"/sessions/{session_id}/snapshots")
     assert r.status_code == 200
     [point] = r.json()
-    assert point["kind"] == "copy"
+    assert point["kind"] == "content"
     assert point["turn_index"] == 1
     assert point["created_at"]
 
