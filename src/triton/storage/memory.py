@@ -22,3 +22,10 @@ def load_global_memory() -> str:
 def append_global_memory(note: str) -> None:
     with GLOBAL_MEMORY_FILE.open("a", encoding="utf-8") as f:
         f.write(f"- {note.strip()}\n")
+
+
+def set_global_memory(content: str) -> None:
+    """Overwrites the whole file - the memory browser's save action (see
+    server.py's PUT /memory/global), letting the user edit/delete notes
+    by hand instead of only ever appending one at a time."""
+    GLOBAL_MEMORY_FILE.write_text(content)

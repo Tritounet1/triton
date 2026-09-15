@@ -85,3 +85,11 @@ def append_project_memory(project_id: str, note: str) -> None:
     PROJECT_MEMORY_DIR.mkdir(parents=True, exist_ok=True)
     with project_memory_path(project_id).open("a", encoding="utf-8") as f:
         f.write(f"- {note.strip()}\n")
+
+
+def set_project_memory(project_id: str, content: str) -> None:
+    """Overwrites the whole file - the memory browser's save action (see
+    server.py's PUT /projects/{id}/memory), letting the user edit/delete
+    notes by hand instead of only ever appending one at a time."""
+    PROJECT_MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    project_memory_path(project_id).write_text(content)

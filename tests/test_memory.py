@@ -90,6 +90,29 @@ def test_delete_session_removes_its_memory_but_not_its_project_s():
     assert projects.load_project_memory(project.id) == "- project fact"
 
 
+# --- set_*_memory: the memory browser's save action (overwrite, not append) ---
+
+
+def test_set_global_memory_overwrites_previous_content():
+    global_memory.append_global_memory("first note")
+    global_memory.set_global_memory("- edited note\n")
+    assert global_memory.load_global_memory() == "- edited note"
+
+
+def test_set_project_memory_overwrites_previous_content():
+    project = projects.create_project("demo", "/tmp/demo")
+    projects.append_project_memory(project.id, "first note")
+    projects.set_project_memory(project.id, "- edited note\n")
+    assert projects.load_project_memory(project.id) == "- edited note"
+
+
+def test_set_session_memory_overwrites_previous_content():
+    session_id = _session()
+    sessions.append_session_memory(session_id, "first note")
+    sessions.set_session_memory(session_id, "- edited note\n")
+    assert sessions.load_session_memory(session_id) == "- edited note"
+
+
 # --- build_system_message: what gets assembled into the prompt ---
 
 

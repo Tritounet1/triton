@@ -80,3 +80,57 @@ def test_remember_global_appends_multiple_notes(client):
     content = global_memory.load_global_memory()
     assert "first" in content
     assert "second" in content
+
+
+# --- GET/PUT: the memory browser (MemorySettings.tsx) reading/editing the
+# raw content, as opposed to the POST endpoints above which only append ---
+
+
+def test_get_global_memory(client):
+    global_memory.append_global_memory("a note")
+    r = client.get("/memory/global")
+    assert r.status_code == 200
+    assert r.json() == {"content": "- a note"}
+
+
+def test_put_global_memory_overwrites(client):
+    global_memory.append_global_memory("a note")
+    r = client.put("/memory/global", json={"content": "- edited\n"})
+    assert r.status_code == 200
+    assert global_memory.load_global_memory() == "- edited"
+
+
+def test_get_and_put_project_memory(client):
+    project = projects.create_project("demo", "/tmp/demo")
+    projects.append_project_memory(project.id, "a note")
+
+    r = client.get(f"/projects/{project.id}/memory")
+    assert r.status_code == 200
+    assert r.json() == {"content": "- a note"}
+
+    r = client.put(f"/projects/{project.id}/memory", json={"content": "- edited\n"})
+    assert r.status_code == 200
+    assert projects.load_project_memory(project.id) == "- edited"
+
+
+def test_project_memory_404_for_unknown_project(client):
+    assert client.get("/projects/does-not-exist/memory").status_code == 404
+    assert client.put("/projects/does-not-exist/memory", json={"content": "x"}).status_code == 404
+
+
+def test_get_and_put_session_memory(client):
+    session_id = _session()
+    sessions.append_session_memory(session_id, "a note")
+
+    r = client.get(f"/sessions/{session_id}/memory")
+    assert r.status_code == 200
+    assert r.json() == {"content": "- a note"}
+
+    r = client.put(f"/sessions/{session_id}/memory", json={"content": "- edited\n"})
+    assert r.status_code == 200
+    assert sessions.load_session_memory(session_id) == "- edited"
+
+
+def test_session_memory_404_for_unknown_session(client):
+    assert client.get("/sessions/does-not-exist/memory").status_code == 404
+    assert client.put("/sessions/does-not-exist/memory", json={"content": "x"}).status_code == 404

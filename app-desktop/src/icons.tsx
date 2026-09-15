@@ -425,3 +425,23 @@ export function ClockIcon({ className = base }: IconProps) {
     </svg>
   );
 }
+
+export function BrainIcon({ className = base }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <path
+        d="M9 4a3 3 0 0 0-3 3 3 3 0 0 0-1 5.83V15a3 3 0 0 0 3 3h1V4Z"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M15 4a3 3 0 0 1 3 3 3 3 0 0 1 1 5.83V15a3 3 0 0 1-3 3h-1V4Z"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinejoin="round"
+      />
+      <path d="M12 4v14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}

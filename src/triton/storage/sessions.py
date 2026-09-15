@@ -185,6 +185,14 @@ def append_session_memory(session_id: str, note: str) -> None:
         f.write(f"- {note.strip()}\n")
 
 
+def set_session_memory(session_id: str, content: str) -> None:
+    """Overwrites the whole file - the memory browser's save action (see
+    server.py's PUT /sessions/{id}/memory), letting the user edit/delete
+    notes by hand instead of only ever appending one at a time."""
+    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    memory_path(session_id).write_text(content)
+
+
 def session_path(session_id: str) -> Path:
     return SESSIONS_DIR / f"{session_id}.json"
 

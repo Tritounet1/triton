@@ -6,6 +6,7 @@ import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { ApiKeySettings } from "./ApiKeySettings";
 import {
+  BrainIcon,
   ChartBarIcon,
   ClockIcon,
   CpuIcon,
@@ -17,6 +18,7 @@ import {
 } from "./icons";
 import { LogsSettings } from "./LogsSettings";
 import { McpSettings } from "./McpSettings";
+import { MemorySettings } from "./MemorySettings";
 import { ModelSettings } from "./ModelSettings";
 import { MultiAgentRolesSettings } from "./MultiAgentRolesSettings";
 import { RoleModelsSettings } from "./RoleModelsSettings";
@@ -29,6 +31,7 @@ type SettingsCategory =
   | "multi_agent_roles"
   | "mcp"
   | "scheduled_tasks"
+  | "memory"
   | "logs";
 
 interface CategoryDef {
@@ -56,6 +59,7 @@ const CATEGORIES: CategoryDef[] = [
     label: "Tâches récurrentes",
     icon: <ClockIcon className="h-4 w-4" />,
   },
+  { id: "memory", label: "Mémoire", icon: <BrainIcon className="h-4 w-4" /> },
   { id: "logs", label: "Logs & coûts", icon: <ChartBarIcon className="h-4 w-4" /> },
 ];
 
@@ -141,6 +145,7 @@ export function SettingsModal({ isOpen, onClose, onModelChanged }: SettingsModal
             {category === "role_models" && <RoleModelsSettings />}
             {category === "mcp" && <McpSettings />}
             {category === "scheduled_tasks" && <ScheduledTasksSettings />}
+            {category === "memory" && <MemorySettings />}
             {category === "logs" && <LogsSettings />}
           </div>
         </div>

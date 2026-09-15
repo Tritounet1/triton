@@ -45,14 +45,16 @@ from triton.llm.chat_loop import (
 from triton.llm.model_roles import ROLE_MODELS
 from triton.storage import scheduled_tasks
 from triton.storage.logs import LOGS_FILE, current_month_cost, log_event
-from triton.storage.memory import append_global_memory
+from triton.storage.memory import append_global_memory, load_global_memory, set_global_memory
 from triton.storage.projects import (
     Project,
     create_project,
     delete_project,
     get_project,
+    load_project_memory,
     load_projects,
     rename_project,
+    set_project_memory,
 )
 from triton.storage.sessions import (
     SESSIONS_DIR,
@@ -63,6 +65,7 @@ from triton.storage.sessions import (
     is_yolo_enabled,
     load_always_allowed,
     load_session,
+    load_session_memory,
     load_session_model,
     load_session_project,
     load_title,
@@ -72,6 +75,7 @@ from triton.storage.sessions import (
     save_session_project,
     save_title,
     set_pinned,
+    set_session_memory,
     set_yolo_enabled,
 )
 from triton.storage.settings import (
@@ -1318,6 +1322,58 @@ def remember_globally(body: RememberRequest) -> dict[str, str]:
     never writes here, only ever to the session/project tier."""
     append_global_memory(body.note)
     return {"result": f"remembered globally: {body.note.strip()}"}
+
+
+class MemoryContent(BaseModel):
+    content: str
+
+
+# GET/PUT below power the memory browser (MemorySettings.tsx): unlike the
+# POST endpoints above (and the remember tool itself), which only ever
+# append one note, these read/overwrite the raw file - letting the user
+# see and edit/delete what's been remembered instead of having to open
+# memory_global.md/project_memory/*.md by hand.
+
+
+@app.get("/memory/global", tags=["Memory"])
+def get_global_memory() -> MemoryContent:
+    return MemoryContent(content=load_global_memory())
+
+
+@app.put("/memory/global", tags=["Memory"])
+def put_global_memory(body: MemoryContent) -> MemoryContent:
+    set_global_memory(body.content)
+    return body
+
+
+@app.get("/projects/{project_id}/memory", tags=["Memory"])
+def get_project_memory(project_id: str) -> MemoryContent:
+    if get_project(project_id) is None:
+        raise HTTPException(404, "project not found")
+    return MemoryContent(content=load_project_memory(project_id))
+
+
+@app.put("/projects/{project_id}/memory", tags=["Memory"])
+def put_project_memory(project_id: str, body: MemoryContent) -> MemoryContent:
+    if get_project(project_id) is None:
+        raise HTTPException(404, "project not found")
+    set_project_memory(project_id, body.content)
+    return body
+
+
+@app.get("/sessions/{session_id}/memory", tags=["Memory"])
+def get_session_memory(session_id: str) -> MemoryContent:
+    if not (SESSIONS_DIR / f"{session_id}.json").exists():
+        raise HTTPException(404, "session not found")
+    return MemoryContent(content=load_session_memory(session_id))
+
+
+@app.put("/sessions/{session_id}/memory", tags=["Memory"])
+def put_session_memory(session_id: str, body: MemoryContent) -> MemoryContent:
+    if not (SESSIONS_DIR / f"{session_id}.json").exists():
+        raise HTTPException(404, "session not found")
+    set_session_memory(session_id, body.content)
+    return body
 
 
 @app.get("/sessions/search", tags=["Sessions"])
