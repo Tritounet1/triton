@@ -2574,14 +2574,6 @@ function App() {
                   // has to be resolved first.
                   isDisabled={!!pendingConfirmation}
                   elevation="none"
-                  headerContext={
-                    yoloEnabled ? (
-                      <Badge
-                        variant="warning"
-                        label="YOLO actif - /yolo pour désactiver"
-                      />
-                    ) : undefined
-                  }
                   input={<ChatComposerInput triggers={composerTriggers} />}
                   style={
                     { "--_chat-composer-padding": "24px" } as CSSProperties
@@ -2677,7 +2669,10 @@ function App() {
                     </>
                   }
                   sendActions={
-                    effectiveModel ? <Badge variant="neutral" label={effectiveModel} /> : undefined
+                    <>
+                      {yoloEnabled && <Badge variant="warning" label="YOLO actif" />}
+                      {effectiveModel && <Badge variant="neutral" label={effectiveModel} />}
+                    </>
                   }
                 />
               }
