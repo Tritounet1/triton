@@ -578,71 +578,83 @@ def run_chat_stream(
 
                 name = tool_call.function.name
                 duration = 0.0
+                args: dict[str, object] = {}
 
                 try:
-                    args = json.loads(tool_call.function.arguments)
-                except json.JSONDecodeError:
-                    result = f"error: invalid arguments ({tool_call.function.arguments})"
-                    args = {}
-                else:
-                    sandbox_error = enforce_project_sandbox(name, args, project)
-                    tool = TOOLS_REGISTRY.get(name)
-
-                    # snapshot before the write actually runs, not after
-                    # approval below - taking it is harmless even if this
-                    # particular call ends up denied, and it guarantees the
-                    # safety net is in place before any write from this
-                    # turn could have landed (see tools/snapshot.py).
-                    # ensure_snapshot's own return is only true the one time
-                    # this specific turn's snapshot actually gets taken -
-                    # surfaced here instead of only in the project file
-                    # panel (SnapshotSection.tsx), which needed knowing the
-                    # feature existed at all to go find.
-                    if (
-                        sandbox_error is None
-                        and tool is not None
-                        and name in WRITE_TOOL_NAMES
-                        and ensure_snapshot(project, session_id, turn_index)
-                    ):
-                        yield emit(
-                            "info",
-                            {
-                                "message": "Point de restauration créé pour ce message : "
-                                "l'état actuel du dossier du projet vient d'être sauvegardé. "
-                                "Utilise /undo pour y revenir si besoin.",
-                            },
-                        )
-
-                    if sandbox_error is not None:
-                        result = sandbox_error
-                    elif tool is None:
-                        result = f"unknown tool: {name}"
-                    elif (
-                        tool.read_only
-                        or name in load_always_allowed(session_id)
-                        or is_yolo_enabled(session_id)
-                        or force_yolo
-                    ):
-                        result = invoke_tool(tool, name, args, session_id)
+                    try:
+                        args = json.loads(tool_call.function.arguments)
+                    except json.JSONDecodeError:
+                        result = f"error: invalid arguments ({tool_call.function.arguments})"
                     else:
-                        confirmation_id = str(uuid.uuid4())
-                        pending = PendingConfirmation()
-                        PENDING_CONFIRMATIONS[confirmation_id] = pending
+                        sandbox_error = enforce_project_sandbox(name, args, project)
+                        tool = TOOLS_REGISTRY.get(name)
 
-                        yield emit(
-                            "confirmation_required",
-                            {"confirmation_id": confirmation_id, "tool": name, "args": args},
-                        )
+                        # snapshot before the write actually runs, not after
+                        # approval below - taking it is harmless even if this
+                        # particular call ends up denied, and it guarantees the
+                        # safety net is in place before any write from this
+                        # turn could have landed (see tools/snapshot.py).
+                        # ensure_snapshot's own return is only true the one time
+                        # this specific turn's snapshot actually gets taken -
+                        # surfaced here instead of only in the project file
+                        # panel (SnapshotSection.tsx), which needed knowing the
+                        # feature existed at all to go find.
+                        if (
+                            sandbox_error is None
+                            and tool is not None
+                            and name in WRITE_TOOL_NAMES
+                            and ensure_snapshot(project, session_id, turn_index)
+                        ):
+                            yield emit(
+                                "info",
+                                {
+                                    "message": "Point de restauration créé pour ce message : "
+                                    "l'état actuel du dossier du projet vient d'être sauvegardé. "
+                                    "Utilise /undo pour y revenir si besoin.",
+                                },
+                            )
 
-                        got_response = pending.event.wait(timeout=300)
-                        PENDING_CONFIRMATIONS.pop(confirmation_id, None)
-
-                        if got_response and pending.approved:
-                            if pending.remember:
-                                allow_always(session_id, name)
+                        if sandbox_error is not None:
+                            result = sandbox_error
+                        elif tool is None:
+                            result = f"unknown tool: {name}"
+                        elif (
+                            tool.read_only
+                            or name in load_always_allowed(session_id)
+                            or is_yolo_enabled(session_id)
+                            or force_yolo
+                        ):
                             result = invoke_tool(tool, name, args, session_id)
                         else:
-                            result = "action denied by the user"
+                            confirmation_id = str(uuid.uuid4())
+                            pending = PendingConfirmation()
+                            PENDING_CONFIRMATIONS[confirmation_id] = pending
+
+                            yield emit(
+                                "confirmation_required",
+                                {"confirmation_id": confirmation_id, "tool": name, "args": args},
+                            )
+
+                            got_response = pending.event.wait(timeout=300)
+                            PENDING_CONFIRMATIONS.pop(confirmation_id, None)
+
+                            if got_response and pending.approved:
+                                if pending.remember:
+                                    allow_always(session_id, name)
+                                result = invoke_tool(tool, name, args, session_id)
+                            else:
+                                result = "action denied by the user"
+                except Exception as e:
+                    # a bug anywhere else in this per-call handling (the
+                    # sandbox check, the snapshot safety net, the
+                    # confirmation wait...) must not silently kill the whole
+                    # SSE stream - invoke_tool (_shared.py) already guards a
+                    # tool's own fn(), same reasoning covers the plumbing
+                    # around it: surface one failed tool call instead of the
+                    # client just seeing a dropped connection with no
+                    # feedback (found via a real report: a message sent,
+                    # nothing comes back, not even an error).
+                    result = f"error: unexpected failure handling {name} ({type(e).__name__}: {e})"
 
                 yield emit("tool_call", {"tool": name, "args": args, "result": result})
 
