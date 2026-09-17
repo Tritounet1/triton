@@ -114,6 +114,12 @@ const API_BASE = "http://127.0.0.1:8000";
 // notif meme si l'app est en arriere-plan, pour ne pas notifier a chaque
 // petit echange.
 const LONG_RESPONSE_MS = 15000;
+// au dela de ce delai sans le moindre evenement SSE, on considere qu'on
+// est dans un "silence" (ex. un outil qui tourne cote serveur) plutot que
+// dans un flux de tokens actif - voir awaitingSseEvent. Assez court pour
+// rester reactif, assez long pour ne jamais se declencher entre deux
+// tokens d'un flux de texte normal (qui arrivent bien plus vite que ca).
+const SSE_IDLE_MS = 500;
 // doit rester alignee avec MAX_ATTACHMENT_BYTES cote serveur (server.py) :
 // une image plus grande est rejetee ici avant meme d'etre envoyee.
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
@@ -598,6 +604,14 @@ function App() {
   // sessionId disponible ; utilise partout ailleurs dans l'UI) ne reflete
   // que celui de la conversation actuellement affichee.
   const [sendingSessionIds, setSendingSessionIds] = useState<Set<string>>(() => new Set());
+  // vrai des qu'aucun evenement SSE n'est arrive depuis SSE_IDLE_MS pour la
+  // conversation affichee - couvre le "silence" pendant qu'un outil tourne
+  // cote serveur juste apres un morceau de texte assistant (ex. "Je vais
+  // ecrire le fichier X." suivi d'un write_file qui prend plusieurs
+  // secondes) : showTypingPlaceholder masquait le loader des qu'un texte
+  // assistant etait deja affiche, meme si plus rien n'arrivait ensuite -
+  // voir sendMessage's noteSseEvent, appele a chaque evenement recu.
+  const [awaitingSseEvent, setAwaitingSseEvent] = useState(false);
   const [apiModel, setApiModel] = useState<string | null>(null);
   // modele propre a la conversation en cours, mis via la commande /model
   // (PUT /sessions/{id}/model) - prend le pas sur apiModel (le defaut
@@ -702,6 +716,10 @@ function App() {
   // cancelMessage/respondToConfirmation.
   const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
   const pendingConfirmationsRef = useRef<Map<string, PendingConfirmation>>(new Map());
+  // minuteur du "silence SSE" (voir awaitingSseEvent) - une seule
+  // conversation affichee a la fois, donc pas besoin d'une Map par session
+  // comme les refs juste au-dessus.
+  const sseIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // ids des sous-agents dispatches dans la conversation ACTIVE (remis a
   // zero au changement de conversation) : permet de relancer le modele
   // automatiquement une fois l'un d'eux termine, plutot que de rester en
@@ -1045,6 +1063,7 @@ function App() {
     setOpenFile(null);
     setSessionModelOverride(null);
     setYoloEnabled(false);
+    setAwaitingSseEvent(false);
     // restaure une confirmation d'outil laissee en attente si cette
     // conversation en a une (voir pendingConfirmationsRef dans sendMessage) -
     // null sinon, pour ne pas garder affichee celle de la conversation
@@ -1064,6 +1083,7 @@ function App() {
     setOpenFile(null);
     setSessionModelOverride(null);
     setYoloEnabled(false);
+    setAwaitingSseEvent(false);
     setPendingConfirmation(null);
   }, []);
 
@@ -1078,6 +1098,7 @@ function App() {
     setOpenFile(null);
     setSessionModelOverride(null);
     setYoloEnabled(false);
+    setAwaitingSseEvent(false);
     setPendingConfirmation(null);
   }
 
@@ -1846,6 +1867,20 @@ function App() {
       });
     }
 
+    // remet a zero le minuteur de "silence SSE" a chaque evenement recu -
+    // voir awaitingSseEvent. Ne fait rien si cette conversation n'est plus
+    // celle affichee : sinon un envoi en arriere-plan pourrait faire
+    // disparaitre a tort le loader d'une AUTRE conversation affichee entre
+    // temps (un seul minuteur, pas une Map par session - voir sseIdleTimerRef).
+    function noteSseEvent() {
+      if (!isDisplayed()) return;
+      if (sseIdleTimerRef.current !== null) clearTimeout(sseIdleTimerRef.current);
+      setAwaitingSseEvent(false);
+      sseIdleTimerRef.current = setTimeout(() => {
+        setAwaitingSseEvent(true);
+      }, SSE_IDLE_MS);
+    }
+
     const controller = new AbortController();
     abortControllersRef.current.set(currentSessionKey, controller);
 
@@ -1864,6 +1899,7 @@ function App() {
       });
 
       for await (const { event, data } of parseSSE(res)) {
+        noteSseEvent();
         switch (event) {
           case "session": {
             const id = data.session_id as string;
@@ -2035,6 +2071,11 @@ function App() {
       pendingConfirmationsRef.current.delete(currentSessionKey);
       markSending(currentSessionKey, false);
       if (isDisplayed()) setPendingConfirmation(null);
+      if (sseIdleTimerRef.current !== null) {
+        clearTimeout(sseIdleTimerRef.current);
+        sseIdleTimerRef.current = null;
+      }
+      if (isDisplayed()) setAwaitingSseEvent(false);
       void loadSessions();
 
       if (performance.now() - startTime > LONG_RESPONSE_MS) {
@@ -2156,10 +2197,19 @@ function App() {
   // debut du suivant (le modele "reflechit" a nouveau), pendant lequel
   // plus aucun indicateur ne s'affichait - voir la conversation "Triton
   // Folder" pour un exemple ou 20 appels d'outils s'enchainent sans loader
-  // entre chacun.
+  // entre chacun. Le meme trou existe quand le dernier message est du
+  // texte assistant suivi d'un appel d'outil (ex. "Je vais ecrire X."
+  // avant un write_file qui prend plusieurs secondes) : le texte fini de
+  // s'afficher, plus aucun evenement SSE n'arrive tant que l'outil tourne,
+  // mais lastMessage reste "assistant" - awaitingSseEvent (minuteur de
+  // silence, voir sendMessage's noteSseEvent) couvre ce cas-la aussi, sans
+  // faire clignoter le loader pendant un flux de texte actif (les tokens
+  // arrivent bien plus vite que SSE_IDLE_MS).
   const lastMessage = messages[messages.length - 1];
   const showTypingPlaceholder =
-    sending && !pendingConfirmation && lastMessage?.kind !== "assistant";
+    sending &&
+    !pendingConfirmation &&
+    (lastMessage?.kind !== "assistant" || awaitingSseEvent);
   // le modele de CETTE conversation, une fois la surcharge /model prise en
   // compte - c'est celui-ci qui doit determiner l'affichage (badge, avatar,
   // capacites de piece jointe), pas le defaut global apiModel seul.
