@@ -8,6 +8,7 @@ import {
     ChatComposerDrawer,
     ChatComposerInput,
     ChatLayout,
+    ChatLayoutScrollButton,
     ChatMessage,
     ChatMessageBubble,
     ChatMessageList,
@@ -120,6 +121,9 @@ const LONG_RESPONSE_MS = 15000;
 // rester reactif, assez long pour ne jamais se declencher entre deux
 // tokens d'un flux de texte normal (qui arrivent bien plus vite que ca).
 const SSE_IDLE_MS = 500;
+// distance (px) par rapport au bas du fil de discussion au-dela de laquelle
+// le bouton "revenir en bas" s'affiche - voir showScrollButton.
+const SCROLL_BUTTON_THRESHOLD_PX = 100;
 // doit rester alignee avec MAX_ATTACHMENT_BYTES cote serveur (server.py) :
 // une image plus grande est rejetee ici avant meme d'etre envoyee.
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
@@ -720,6 +724,46 @@ function App() {
   // conversation affichee a la fois, donc pas besoin d'une Map par session
   // comme les refs juste au-dessus.
   const sseIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // bouton "revenir en bas" du fil de discussion - remplace celui fourni
+  // par defaut par ChatLayout (scrollButton), dont le "nouveaux messages"
+  // reste affiche tant qu'on ne clique pas dessus meme apres etre revenu
+  // en bas au trackpad/molette (sa propre logique ne le reinitialise que
+  // via un dismiss() explicite). Ici, visible/label ne dependent que de la
+  // position de scroll actuelle - plus aucun etat "bloque".
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+  const [showScrollButton, setShowScrollButton] = useState(false);
+  const [hasNewMessage, setHasNewMessage] = useState(false);
+
+  useEffect(() => {
+    const el = chatScrollRef.current;
+    if (!el) return;
+    function onScroll() {
+      if (!el) return;
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      const scrolledUp = distanceFromBottom > SCROLL_BUTTON_THRESHOLD_PX;
+      setShowScrollButton(scrolledUp);
+      if (!scrolledUp) setHasNewMessage(false);
+    }
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+    };
+  }, [sessionId]);
+
+  // signale "nouveaux messages" uniquement si un message vient de
+  // s'ajouter (pas juste du texte qui continue de s'accumuler dans le
+  // dernier, voir scheduleFlush dans sendMessage) pendant qu'on est deja
+  // scrolle plus haut - inutile de le signaler si on est deja en bas, le
+  // scroll-suiveur de ChatLayout nous y garde de toute facon. Ajustement
+  // pendant le rendu (pas dans un effet - interdit d'y appeler setState
+  // synchrone, voir McpSettings.tsx pour le meme garde-fou) : compare a
+  // la derniere longueur vue, meme mecanisme que lastConfirmationId plus
+  // haut pour confirmationDetailsExpanded.
+  const [lastMessagesLength, setLastMessagesLength] = useState(messages.length);
+  if (messages.length !== lastMessagesLength) {
+    setLastMessagesLength(messages.length);
+    if (showScrollButton) setHasNewMessage(true);
+  }
   // ids des sous-agents dispatches dans la conversation ACTIVE (remis a
   // zero au changement de conversation) : permet de relancer le modele
   // automatiquement une fois l'un d'eux termine, plutot que de rester en
@@ -2242,7 +2286,7 @@ function App() {
             header={
               <SideNavHeading
                 heading="Triton"
-                icon={<Avatar src="triton-logo.jpeg" name="Triton" size="xsm" />}
+                icon={<Avatar src="/default-logo.png" name="Triton" size="lg" />}
                 headerEndContent={
                   <div className="flex items-center gap-0.5">
                     <IconButton
@@ -2596,12 +2640,26 @@ function App() {
               </div>
             )}
             <ChatLayout
+              ref={chatScrollRef}
               density="spacious"
               className="h-full min-w-0 flex-1"
               emptyState={
                 <EmptyState
                   title="Nouvelle conversation"
                   description="Écris un message pour démarrer la conversation."
+                />
+              }
+              scrollButton={
+                <ChatLayoutScrollButton
+                  isVisible={showScrollButton}
+                  label={hasNewMessage ? "Nouveaux messages" : undefined}
+                  onClick={() => {
+                    chatScrollRef.current?.scrollTo({
+                      top: chatScrollRef.current.scrollHeight,
+                      behavior: "smooth",
+                    });
+                    setHasNewMessage(false);
+                  }}
                 />
               }
               composer={
