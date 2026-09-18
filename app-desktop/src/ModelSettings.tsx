@@ -35,6 +35,24 @@ interface ModelSettingsProps {
 // nommees par ordre alphabetique, "Autres" toujours en dernier
 const FAMILY_PRIORITY = ["anthropic", "openai", "google", "qwen"];
 
+// familles jamais utilisees en pratique - masquees de cette page pour
+// alleger la liste (pas retirees de modelFamilies.ts : un modele de l'une
+// d'elles reste correctement affiche partout ailleurs - avatar du chat,
+// selecteurs de role... - si jamais il finit selectionne malgre tout, ex.
+// via /model en tapant l'id a la main). Un modele deja selectionne quand
+// sa famille est masquee ici resterait invisible dans cette liste - pas
+// geree pour l'instant, cas limite improbable vu la raison d'etre de cette
+// liste. Remettre une famille ici en la retirant si besoin plus tard.
+const HIDDEN_FAMILIES = new Set([
+  "cohere",
+  "amazon",
+  "nvidia",
+  "perplexity",
+  "minimax",
+  "microsoft",
+  "other",
+]);
+
 function formatContextLength(n: number): string {
   if (n <= 0) return "-";
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
@@ -135,6 +153,7 @@ export function ModelSettings({ onModelChanged }: ModelSettingsProps) {
     const byFamily = new Map<string, ModelInfo[]>();
     for (const m of filtered) {
       const key = familyKey(m.id);
+      if (HIDDEN_FAMILIES.has(key)) continue;
       const list = byFamily.get(key) ?? [];
       list.push(m);
       byFamily.set(key, list);
