@@ -8,7 +8,7 @@ import { Avatar } from "@astryxdesign/core/Avatar";
 import { Table, proportional, pixel, type TableColumn } from "@astryxdesign/core/Table";
 import { Tooltip } from "@astryxdesign/core/Tooltip";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
-import { CheckIcon, ChevronRightIcon, SearchIcon } from "./icons";
+import { CheckIcon, ChevronRightIcon, CpuIcon, SearchIcon } from "./icons";
 import { familyKey, familyInfo, isModelFamilyVisible } from "./modelFamilies";
 
 const API_BASE = "http://127.0.0.1:8000";
@@ -250,19 +250,38 @@ export function ModelSettings({ onModelChanged }: ModelSettingsProps) {
   ];
 
   const totalShown = groups.reduce((sum, [, list]) => sum + list.length, 0);
+  const selectedModel = currentModel ? models.find((model) => model.id === currentModel) : undefined;
+  const selectedFamily = currentModel ? familyInfo(familyKey(currentModel)) : undefined;
 
   return (
     <div>
-      <Text size="lg" weight="semibold" className="mb-1 block">
-        Modèle
-      </Text>
-      <Text size="sm" color="secondary" className="mb-4 block">
-        Modèles disponibles via OpenRouter, groupés par fournisseur, avec leur prix par million
-        de tokens. Un modèle sans support des outils ne peut pas être sélectionné : la boucle
-        agentique du harness en dépend entièrement.
-      </Text>
+      <div className="mb-4 pr-8">
+        <Text size="lg" weight="semibold" className="mb-1 block">
+          Modèle
+        </Text>
+        <Text size="sm" color="secondary" className="block max-w-xl">
+          Choisis le modèle principal de Triton. Les prix sont indiqués par million de tokens et
+          seuls les modèles avec outils peuvent être utilisés dans la boucle agentique.
+        </Text>
+      </div>
 
-      <div className="mb-4 flex items-center gap-3">
+      {currentModel && selectedFamily && (
+        <section className="mb-4 flex items-center gap-3 rounded-2xl border border-accent bg-accent-muted px-4 py-3">
+          <Avatar name={selectedFamily.label} src={selectedFamily.logo} size="sm" tooltip={false} />
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <Text weight="semibold">{selectedModel?.name ?? currentModel}</Text>
+              <Badge variant="blue" label="modèle actif" />
+            </div>
+            <Text size="2xs" color="secondary" className="mt-0.5 block truncate font-mono">
+              {currentModel}
+            </Text>
+          </div>
+          <CpuIcon className="h-5 w-5 shrink-0 text-accent" />
+        </section>
+      )}
+
+      <div className="mb-4 flex flex-col gap-3 rounded-xl bg-muted px-4 py-3 sm:flex-row sm:items-center">
         <TextInput
           value={search}
           onChange={setSearch}
@@ -273,13 +292,24 @@ export function ModelSettings({ onModelChanged }: ModelSettingsProps) {
           startIcon={<SearchIcon className="h-4 w-4 text-secondary" />}
           className="flex-1"
         />
-        <Switch label="Outils uniquement" value={toolsOnly} onChange={setToolsOnly} size="sm" />
+        <div className="flex items-center justify-between gap-3 sm:justify-end">
+          {!loading && <Badge variant="neutral" label={`${totalShown} modèle${totalShown > 1 ? "s" : ""}`} />}
+          <Switch label="Outils uniquement" value={toolsOnly} onChange={setToolsOnly} size="sm" />
+        </div>
       </div>
 
       {error && (
-        <Text size="sm" className="block text-error">
+        <Text size="sm" className="mb-3 block text-error">
           {error}
         </Text>
+      )}
+
+      {!error && loading && (
+        <div className="flex flex-col gap-3" role="status" aria-label="Chargement des modèles">
+          {[0, 1, 2, 3].map((item) => (
+            <div key={item} className="h-14 animate-pulse rounded-2xl border border-border bg-muted" />
+          ))}
+        </div>
       )}
 
       {!error && !loading && totalShown === 0 && (
@@ -292,12 +322,14 @@ export function ModelSettings({ onModelChanged }: ModelSettingsProps) {
             const info = familyInfo(key);
             const isCollapsed = !isSearching && !expandedFamilies.has(key);
             return (
-              <div key={key} className="overflow-hidden rounded-xl border border-border">
+              <section key={key} className="overflow-hidden rounded-2xl border border-border bg-surface transition-colors hover:border-accent">
                 <button
                   onClick={() => { toggleFamily(key); }}
-                  className="flex w-full items-center gap-3 bg-surface px-4 py-3 text-left hover:bg-muted"
+                  className="flex w-full items-center gap-3 px-4 py-3.5 text-left hover:bg-muted"
                 >
-                  <Avatar name={info.label} src={info.logo} size="xsm" />
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent-muted">
+                    <Avatar name={info.label} src={info.logo} size="xsm" tooltip={false} />
+                  </div>
                   <Text weight="medium" className="flex-1">
                     {info.label}
                   </Text>
@@ -311,7 +343,7 @@ export function ModelSettings({ onModelChanged }: ModelSettingsProps) {
                 {!isCollapsed && (
                   <Table data={list} columns={columns} density="compact" hasHover />
                 )}
-              </div>
+              </section>
             );
           })}
         </div>

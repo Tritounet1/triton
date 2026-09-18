@@ -1,8 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { Badge } from "@astryxdesign/core/Badge";
 import { Button } from "@astryxdesign/core/Button";
 import { Selector } from "@astryxdesign/core/Selector";
 import { Text } from "@astryxdesign/core/Text";
 import { TextArea } from "@astryxdesign/core/TextArea";
+import { BrainIcon, ClockIcon, FolderIcon } from "./icons";
 
 const API_BASE = "http://127.0.0.1:8000";
 
@@ -66,14 +68,16 @@ function MemoryEditor({ url, emptyHint }: { url: string | null; emptyHint: strin
 
   if (!url) {
     return (
-      <Text size="sm" color="secondary">
-        {emptyHint}
-      </Text>
+      <div className="rounded-xl bg-muted px-3 py-3">
+        <Text size="2xs" color="secondary">
+          {emptyHint}
+        </Text>
+      </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-3">
       <TextArea
         label="Contenu"
         isLabelHidden
@@ -82,20 +86,56 @@ function MemoryEditor({ url, emptyHint }: { url: string | null; emptyHint: strin
         onChange={setContent}
         isDisabled={loading}
         placeholder="(rien de mémorisé ici)"
-        className="font-mono text-xs"
+        className="font-mono text-xs leading-relaxed"
       />
-      <div>
+      <div className="flex items-center justify-between gap-3">
+        <Text size="2xs" color="secondary">
+          Modifie directement le contenu brut de cette mémoire.
+        </Text>
         <Button
           label="Sauvegarder"
           variant="secondary"
           size="sm"
+          className="shrink-0"
           isLoading={saving}
           onClick={save}
-        >
-          Sauvegarder
-        </Button>
+        />
       </div>
     </div>
+  );
+}
+
+function MemoryScopeCard({
+  title,
+  description,
+  icon,
+  badge,
+  children,
+}: {
+  title: string;
+  description: string;
+  icon: ReactNode;
+  badge?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section className="rounded-2xl border border-border bg-surface px-4 py-4 transition-colors hover:border-accent">
+      <div className="mb-4 flex items-start gap-3">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-muted text-accent">
+          {icon}
+        </div>
+        <div className="min-w-0 flex-1 pt-0.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <Text weight="semibold">{title}</Text>
+            {badge}
+          </div>
+          <Text size="2xs" color="secondary" className="mt-1 block">
+            {description}
+          </Text>
+        </div>
+      </div>
+      {children}
+    </section>
   );
 }
 
@@ -137,73 +177,87 @@ export function MemorySettings() {
   }, []);
 
   return (
-    <div className="flex flex-col gap-6">
-      <div>
+    <div>
+      <div className="mb-4 pr-8">
         <Text size="lg" weight="semibold" className="mb-1 block">
           Mémoire
         </Text>
-        <Text size="sm" color="secondary" className="block">
-          Ce que le modèle a retenu via l'outil <code>remember</code>/la commande{" "}
-          <code>/remember</code> - édite ou supprime une ligne directement ici plutôt que
-          d'ouvrir le fichier à la main.
+        <Text size="sm" color="secondary" className="block max-w-xl">
+          Consulte et corrige ce que le modèle a retenu dans chaque contexte, sans ouvrir les
+          fichiers de mémoire à la main.
         </Text>
       </div>
 
-      <div>
-        <Text weight="semibold" className="mb-2 block">
-          Globale
+      <div className="mb-4 flex items-start gap-3 rounded-xl bg-accent-muted px-4 py-3">
+        <div className="mt-0.5 shrink-0 text-accent">
+          <BrainIcon className="h-4 w-4" />
+        </div>
+        <Text size="2xs" color="secondary">
+          Les souvenirs sont créés via <code>remember</code> ou <code>/remember</code>. Les
+          modifications enregistrées ici seront utilisées au prochain échange concerné.
         </Text>
-        <Text size="2xs" color="secondary" className="mb-2 block">
-          Partagée par toutes les conversations, tous projets confondus.
-        </Text>
-        <MemoryEditor url={`${API_BASE}/memory/global`} emptyHint="" />
       </div>
 
-      <div>
-        <Text weight="semibold" className="mb-2 block">
-          Projet
-        </Text>
-        <Selector
-          label="Projet"
-          isLabelHidden
-          options={projects.map((p) => ({ value: p.id, label: p.name }))}
-          value={projectId}
-          onChange={setProjectId}
-          hasClear
-          placeholder="Choisir un projet..."
-          size="sm"
-          className="mb-2"
-        />
-        <MemoryEditor
-          key={projectId}
-          url={projectId ? `${API_BASE}/projects/${projectId}/memory` : null}
-          emptyHint="Choisis un projet pour voir sa mémoire."
-        />
-      </div>
+      <div className="flex flex-col gap-3">
+        <MemoryScopeCard
+          title="Mémoire globale"
+          description="Partagée par toutes les conversations et tous les projets."
+          icon={<BrainIcon className="h-5 w-5" />}
+          badge={<Badge variant="blue" label="tous les contextes" />}
+        >
+          <MemoryEditor url={`${API_BASE}/memory/global`} emptyHint="" />
+        </MemoryScopeCard>
 
-      <div>
-        <Text weight="semibold" className="mb-2 block">
-          Conversation (sans projet)
-        </Text>
-        <Selector
-          label="Conversation"
-          isLabelHidden
-          options={sessions.map((s) => ({
-            value: s.id,
-            label: s.title ?? formatSessionLabel(s.id),
-          }))}
-          value={sessionId}
-          onChange={setSessionId}
-          hasClear
-          placeholder="Choisir une conversation..."
-          size="sm"
-          className="mb-2"
-        />
-        <MemoryEditor
-          key={sessionId}
-          url={sessionId ? `${API_BASE}/sessions/${sessionId}/memory` : null}
-          emptyHint="Choisis une conversation sans projet pour voir sa mémoire."
-        />
+        <MemoryScopeCard
+          title="Mémoire de projet"
+          description="Partagée par les conversations rattachées au même projet."
+          icon={<FolderIcon className="h-5 w-5" />}
+          badge={<Badge variant="neutral" label={`${projects.length} projet${projects.length > 1 ? "s" : ""}`} />}
+        >
+          <Selector
+            label="Projet"
+            isLabelHidden
+            options={projects.map((p) => ({ value: p.id, label: p.name }))}
+            value={projectId}
+            onChange={setProjectId}
+            hasClear
+            placeholder="Choisir un projet..."
+            size="sm"
+            className="mb-3"
+          />
+          <MemoryEditor
+            key={projectId}
+            url={projectId ? `${API_BASE}/projects/${projectId}/memory` : null}
+            emptyHint="Choisis un projet pour consulter ou modifier sa mémoire."
+          />
+        </MemoryScopeCard>
+
+        <MemoryScopeCard
+          title="Mémoire de conversation"
+          description="Disponible uniquement pour une conversation qui n'appartient pas à un projet."
+          icon={<ClockIcon className="h-5 w-5" />}
+          badge={<Badge variant="neutral" label={`${sessions.length} conversation${sessions.length > 1 ? "s" : ""}`} />}
+        >
+          <Selector
+            label="Conversation"
+            isLabelHidden
+            options={sessions.map((s) => ({
+              value: s.id,
+              label: s.title ?? formatSessionLabel(s.id),
+            }))}
+            value={sessionId}
+            onChange={setSessionId}
+            hasClear
+            placeholder="Choisir une conversation..."
+            size="sm"
+            className="mb-3"
+          />
+          <MemoryEditor
+            key={sessionId}
+            url={sessionId ? `${API_BASE}/sessions/${sessionId}/memory` : null}
+            emptyHint="Choisis une conversation sans projet pour consulter sa mémoire."
+          />
+        </MemoryScopeCard>
       </div>
     </div>
   );

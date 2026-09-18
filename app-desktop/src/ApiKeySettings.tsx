@@ -3,6 +3,7 @@ import { Badge } from "@astryxdesign/core/Badge";
 import { Button } from "@astryxdesign/core/Button";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
+import { KeyIcon } from "./icons";
 
 const API_BASE = "http://127.0.0.1:8000";
 
@@ -13,13 +14,14 @@ interface ApiKeyFieldProps {
    * cotes : GET -> {configured}, PUT {api_key} -> {configured}). */
   endpoint: string;
   placeholder: string;
+  isRequired?: boolean;
 }
 
 /** Un bloc cle API reutilisable (OpenRouter, Tavily...) : jamais
  * pre-rempli avec la vraie valeur (le backend ne la renvoie jamais non
  * plus), juste un champ mot de passe vide et un badge qui dit si une cle
  * est deja active. */
-function ApiKeyField({ title, description, endpoint, placeholder }: ApiKeyFieldProps) {
+function ApiKeyField({ title, description, endpoint, placeholder, isRequired = false }: ApiKeyFieldProps) {
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [saving, setSaving] = useState(false);
@@ -57,24 +59,29 @@ function ApiKeyField({ title, description, endpoint, placeholder }: ApiKeyFieldP
   }
 
   return (
-    <div>
-      <div className="mb-2 flex items-center justify-between gap-3">
-        <Text size="sm" weight="semibold">
-          {title}
-        </Text>
-        {configured !== null && (
-          <Badge
-            variant={configured ? "success" : "error"}
-            label={configured ? "configurée" : "non configurée"}
-          />
-        )}
+    <section className="rounded-2xl border border-border bg-surface px-4 py-4 transition-colors hover:border-accent">
+      <div className="mb-4 flex items-start gap-3">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-muted text-accent">
+          <KeyIcon className="h-5 w-5" />
+        </div>
+        <div className="min-w-0 flex-1 pt-0.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <Text weight="semibold">{title}</Text>
+            {isRequired && <Badge variant="blue" label="requis" />}
+            {configured !== null && (
+              <Badge
+                variant={configured ? "success" : "neutral"}
+                label={configured ? "configurée" : "non configurée"}
+              />
+            )}
+          </div>
+          <Text size="2xs" color="secondary" className="mt-1 block">
+            {description}
+          </Text>
+        </div>
       </div>
 
-      <Text size="sm" color="secondary" className="mb-3 block">
-        {description}
-      </Text>
-
-      <div className="flex items-end gap-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <TextInput
           value={apiKey}
           onChange={setApiKey}
@@ -82,11 +89,13 @@ function ApiKeyField({ title, description, endpoint, placeholder }: ApiKeyFieldP
           placeholder={configured ? "•••••••••••••••• (déjà configurée)" : placeholder}
           isLabelHidden
           label={`Clé API ${title}`}
-          className="flex-1"
+          className="flex-1 font-mono"
         />
         <Button
           label="Enregistrer"
           variant="primary"
+          size="sm"
+          className="shrink-0"
           isLoading={saving}
           isDisabled={!apiKey.trim()}
           onClick={() => {
@@ -95,26 +104,43 @@ function ApiKeyField({ title, description, endpoint, placeholder }: ApiKeyFieldP
         />
       </div>
       {saved && (
-        <Text size="2xs" color="secondary" className="mt-2 block">
-          Clé enregistrée.
+        <Text size="2xs" className="mt-2 block text-success">
+          Clé enregistrée et active immédiatement.
         </Text>
       )}
-    </div>
+    </section>
   );
 }
 
 export function ApiKeySettings() {
   return (
     <div>
-      <Text size="lg" weight="semibold" className="mb-4 block">
-        Clés API
-      </Text>
+      <div className="mb-4 pr-8">
+        <Text size="lg" weight="semibold" className="mb-1 block">
+          Clés API
+        </Text>
+        <Text size="sm" color="secondary" className="block max-w-xl">
+          Configure les accès utilisés par Triton. Les clés sont conservées localement et ne sont
+          jamais réaffichées après enregistrement.
+        </Text>
+      </div>
 
-      <div className="flex flex-col gap-8">
+      <div className="mb-4 flex items-start gap-3 rounded-xl bg-accent-muted px-4 py-3">
+        <div className="mt-0.5 shrink-0 text-accent">
+          <KeyIcon className="h-4 w-4" />
+        </div>
+        <Text size="2xs" color="secondary">
+          Colle une nouvelle clé pour la remplacer. Le changement prend effet immédiatement,
+          sans redémarrer l'application.
+        </Text>
+      </div>
+
+      <div className="flex flex-col gap-3">
         <ApiKeyField
           title="OpenRouter"
           endpoint="/settings/api_key"
           placeholder="sk-or-v1-..."
+          isRequired
           description={
             <>
               Clé{" "}

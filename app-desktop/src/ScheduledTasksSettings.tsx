@@ -8,7 +8,8 @@ import { TextInput } from "@astryxdesign/core/TextInput";
 import { TextArea } from "@astryxdesign/core/TextArea";
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
-import { PlusIcon, TrashIcon } from "./icons";
+import { Selector } from "@astryxdesign/core/Selector";
+import { ClockIcon, PlusIcon, TrashIcon } from "./icons";
 
 const API_BASE = "http://127.0.0.1:8000";
 
@@ -63,10 +64,12 @@ export function ScheduledTasksSettings() {
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
 
   const [prompt, setPrompt] = useState("");
   const [frequency, setFrequency] = useState<Frequency>("daily");
@@ -89,6 +92,7 @@ export function ScheduledTasksSettings() {
       .catch(() => {
         setTasks([]);
         setProjects([]);
+        setError("Impossible de charger les tâches récurrentes.");
       })
       .finally(() => {
         setLoading(false);
@@ -150,192 +154,214 @@ export function ScheduledTasksSettings() {
   }
 
   async function toggleTask(task: ScheduledTask) {
-    const res = await fetch(`${API_BASE}/scheduled_tasks/${task.id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled: !task.enabled }),
-    });
-    if (!res.ok) return;
-    const updated = (await res.json()) as ScheduledTask;
-    setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+    setUpdatingId(task.id);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/scheduled_tasks/${task.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: !task.enabled }),
+      });
+      if (!res.ok) throw new Error("scheduled task update failed");
+      const updated = (await res.json()) as ScheduledTask;
+      setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+    } catch {
+      setError("Impossible de modifier cette tâche.");
+    } finally {
+      setUpdatingId(null);
+    }
   }
 
   async function confirmDelete() {
     if (!deletingId) return;
     const id = deletingId;
-    const res = await fetch(`${API_BASE}/scheduled_tasks/${id}`, { method: "DELETE" });
     setDeletingId(null);
-    if (res.ok) setTasks((prev) => prev.filter((t) => t.id !== id));
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/scheduled_tasks/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("scheduled task deletion failed");
+      setTasks((prev) => prev.filter((t) => t.id !== id));
+    } catch {
+      setError("Impossible de supprimer cette tâche.");
+    }
   }
 
   const deletingTask = tasks.find((t) => t.id === deletingId);
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <Text size="lg" weight="semibold">
-          Tâches récurrentes
-        </Text>
-        <Button
-          label="Ajouter une tâche"
-          icon={<PlusIcon />}
-          variant="secondary"
-          size="sm"
-          isDisabled={projects.length === 0}
-          onClick={() => {
-            setShowForm((v) => !v);
-          }}
-        />
+      <div className="mb-4 flex items-start justify-between gap-4 pr-8">
+        <div>
+          <Text size="lg" weight="semibold" className="mb-1 block">
+            Tâches récurrentes
+          </Text>
+          <Text size="sm" color="secondary" className="block max-w-xl">
+            Planifie des prompts qui se relancent automatiquement dans leur propre conversation.
+          </Text>
+        </div>
+        {!loading && tasks.length > 0 && (
+          <Badge
+            variant="blue"
+            label={`${tasks.length} tâche${tasks.length > 1 ? "s" : ""}`}
+            className="shrink-0"
+          />
+        )}
       </div>
 
-      <Text size="sm" color="secondary" className="mb-6 block">
-        Un prompt qui se relance tout seul selon une fréquence, envoyé dans sa propre
-        conversation dédiée (son historique s'accumule à chaque déclenchement). Vérifié
-        uniquement quand l'app tourne - pas de rattrapage si elle est restée fermée : une
-        échéance manquée est simplement sautée, la prochaine est recalculée à partir de
-        maintenant. Les demandes d'autorisation (écriture, commande...) sont automatiquement
-        sautées à chaque déclenchement, comme le mode{" "}
-        <code className="rounded bg-muted px-1 py-0.5 text-xs">/yolo</code> : personne n'est là
-        pour les valider.
-      </Text>
+      <div className="mb-4 flex flex-col gap-3 rounded-xl bg-accent-muted px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 shrink-0 text-accent">
+            <ClockIcon className="h-4 w-4" />
+          </div>
+          <Text size="2xs" color="secondary">
+            Elles ne s'exécutent que lorsque l'application est ouverte. Les demandes
+            d'autorisation sont automatiquement acceptées, comme avec <code>/yolo</code>.
+          </Text>
+        </div>
+        {!showForm && (
+          <Button
+            label="Ajouter une tâche"
+            icon={<PlusIcon />}
+            variant="primary"
+            size="sm"
+            className="shrink-0"
+            isDisabled={projects.length === 0}
+            onClick={() => { setShowForm(true); }}
+          />
+        )}
+      </div>
 
       {!loading && projects.length === 0 && (
-        <Text size="sm" className="mb-4 block text-error">
+        <Text size="sm" className="mb-4 block rounded-xl bg-error-muted px-3 py-3 text-error">
           Crée d'abord un projet - une tâche récurrente a besoin d'un projet cible.
         </Text>
       )}
 
       {showForm && (
-        <div className="mb-6 rounded-xl border border-border bg-surface p-4">
-          <TextArea
-            label="Prompt"
-            value={prompt}
-            onChange={setPrompt}
-            rows={3}
-            placeholder="Résume les fichiers modifiés aujourd'hui dans ce projet."
-            className="mb-3"
-          />
-          <div className="mb-3 grid grid-cols-2 gap-3">
-            <div>
-              <Text size="sm" className="mb-1 block">
-                Projet
-              </Text>
-              <select
-                className="w-full rounded-md border border-border bg-transparent p-2 text-sm"
-                value={projectId}
-                onChange={(e) => {
-                  setProjectId(e.target.value);
-                }}
-              >
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
+        <section className="mb-4 overflow-hidden rounded-2xl border border-accent bg-surface">
+          <div className="flex items-center gap-3 border-b border-border bg-accent-muted px-4 py-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-surface text-accent">
+              <PlusIcon className="h-5 w-5" />
             </div>
             <div>
-              <Text size="sm" className="mb-1 block">
-                Fréquence
+              <Text weight="semibold" className="block">Nouvelle tâche récurrente</Text>
+              <Text size="2xs" color="secondary" className="block">
+                Le prompt recevra son propre historique à chaque déclenchement.
               </Text>
-              <select
-                className="w-full rounded-md border border-border bg-transparent p-2 text-sm"
-                value={frequency}
-                onChange={(e) => {
-                  setFrequency(e.target.value as Frequency);
-                }}
-              >
-                <option value="hourly">Toutes les heures</option>
-                <option value="daily">Tous les jours</option>
-                <option value="weekly">Toutes les semaines</option>
-              </select>
             </div>
           </div>
-          <div className="mb-3 grid grid-cols-2 gap-3">
-            <TextInput
-              label={frequency === "hourly" ? "Minute (à chaque heure, HH ignoré)" : "Heure"}
-              value={timeOfDay}
-              onChange={setTimeOfDay}
-              placeholder="09:00"
-              size="sm"
+          <div className="p-4">
+            <TextArea
+              label="Prompt"
+              value={prompt}
+              onChange={setPrompt}
+              rows={3}
+              placeholder="Résume les fichiers modifiés aujourd'hui dans ce projet."
+              className="mb-3"
             />
-            {frequency === "weekly" && (
-              <div>
-                <Text size="sm" className="mb-1 block">
-                  Jour
-                </Text>
-                <select
-                  className="w-full rounded-md border border-border bg-transparent p-2 text-sm"
-                  value={dayOfWeek}
-                  onChange={(e) => {
-                    setDayOfWeek(Number(e.target.value));
-                  }}
-                >
-                  {DAY_LABELS.map((label, i) => (
-                    <option key={label} value={i}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
+            <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Selector
+                label="Projet"
+                options={projects.map((project) => ({ value: project.id, label: project.name }))}
+                value={projectId}
+                onChange={(value) => { if (value) setProjectId(value); }}
+                size="sm"
+              />
+              <Selector
+                label="Fréquence"
+                options={[
+                  { value: "hourly", label: "Toutes les heures" },
+                  { value: "daily", label: "Tous les jours" },
+                  { value: "weekly", label: "Toutes les semaines" },
+                ]}
+                value={frequency}
+                onChange={(value) => { if (value) setFrequency(value as Frequency); }}
+                size="sm"
+              />
+            </div>
+            <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <TextInput
+                label={frequency === "hourly" ? "Minute (HH ignoré)" : "Heure"}
+                value={timeOfDay}
+                onChange={setTimeOfDay}
+                placeholder="09:00"
+                size="sm"
+              />
+              {frequency === "weekly" && (
+                <Selector
+                  label="Jour"
+                  options={DAY_LABELS.map((label, index) => ({ value: String(index), label }))}
+                  value={String(dayOfWeek)}
+                  onChange={(value) => { setDayOfWeek(Number(value)); }}
+                  size="sm"
+                />
+              )}
+            </div>
+            {formError && <Text size="sm" className="mb-3 block text-error">{formError}</Text>}
+            <div className="flex items-center gap-2">
+              <Button
+                label="Créer la tâche"
+                icon={<ClockIcon />}
+                variant="primary"
+                size="sm"
+                isLoading={submitting}
+                onClick={() => { void submitForm(); }}
+              />
+              <Button label="Annuler" variant="ghost" size="sm" onClick={resetForm} />
+            </div>
           </div>
-          {formError && (
-            <Text size="sm" className="mb-3 block text-error">
-              {formError}
-            </Text>
-          )}
-          <div className="flex gap-2">
-            <Button
-              label="Créer"
-              variant="primary"
-              size="sm"
-              isLoading={submitting}
-              onClick={() => {
-                void submitForm();
-              }}
-            >
-              Créer
-            </Button>
-            <Button label="Annuler" variant="ghost" size="sm" onClick={resetForm}>
-              Annuler
-            </Button>
-          </div>
+        </section>
+      )}
+
+      {error && <Text size="sm" className="mb-3 block text-error">{error}</Text>}
+
+      {loading && (
+        <div className="flex flex-col gap-3" role="status" aria-label="Chargement des tâches">
+          {[0, 1, 2].map((item) => (
+            <div key={item} className="h-28 animate-pulse rounded-2xl border border-border bg-muted" />
+          ))}
         </div>
       )}
 
-      {!loading && tasks.length === 0 && !showForm ? (
+      {!loading && tasks.length === 0 && !showForm && !error ? (
         <EmptyState
           title="Aucune tâche récurrente"
           description="Programme un prompt qui se relance tout seul, au lieu de le retaper à chaque fois."
         />
-      ) : (
-        <div className="space-y-2">
+      ) : !loading && tasks.length > 0 ? (
+        <div className="flex flex-col gap-3">
           {tasks.map((t) => {
             const project = projects.find((p) => p.id === t.project_id);
             return (
-              <div key={t.id} className="rounded-xl border border-border bg-surface p-4">
+              <section
+                key={t.id}
+                className="rounded-2xl border border-border bg-surface px-4 py-3.5 transition-colors hover:border-accent"
+              >
                 <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <Text weight="semibold" className="block truncate">
-                        {t.prompt}
-                      </Text>
-                      {!t.enabled && <Badge variant="neutral" label="désactivée" />}
+                  <div className="flex min-w-0 flex-1 items-start gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-muted text-accent">
+                      <ClockIcon className="h-5 w-5" />
                     </div>
-                    <Text size="2xs" color="secondary" className="mt-1 block">
-                      {describeSchedule(t)} · {project?.name ?? t.project_id}
-                    </Text>
-                    <Text size="2xs" color="secondary" className="mt-1 block">
-                      Prochaine échéance : {formatDateTime(t.next_run)}
-                      {t.last_run && ` · dernière exécution : ${formatDateTime(t.last_run)}`}
-                    </Text>
+                    <div className="min-w-0 pt-0.5">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Text weight="semibold" className="max-w-full truncate">
+                        {t.prompt}
+                        </Text>
+                        <Badge variant={t.enabled ? "blue" : "neutral"} label={describeSchedule(t)} />
+                        {!t.enabled && <Badge variant="neutral" label="désactivée" />}
+                      </div>
+                      <Text size="2xs" color="secondary" className="mt-1 block">
+                        Projet : {project?.name ?? t.project_id}
+                      </Text>
+                    </div>
                   </div>
                   <div className="flex items-center gap-2">
+                    <Text size="2xs" color="secondary" className="hidden sm:block">Activée</Text>
                     <Switch
-                      label="Activée"
+                      label={`Activer la tâche ${t.prompt}`}
                       isLabelHidden
                       value={t.enabled}
+                      isDisabled={updatingId === t.id}
                       onChange={() => {
                         void toggleTask(t);
                       }}
@@ -346,17 +372,28 @@ export function ScheduledTasksSettings() {
                       icon={<TrashIcon />}
                       variant="ghost"
                       size="sm"
+                      isDisabled={updatingId === t.id}
                       onClick={() => {
                         setDeletingId(t.id);
                       }}
                     />
                   </div>
                 </div>
-              </div>
+                <div className="mt-3 grid grid-cols-1 gap-2 rounded-xl bg-muted px-3 py-2.5 sm:grid-cols-2">
+                  <div>
+                    <Text size="2xs" color="secondary" className="block uppercase tracking-wide">Prochaine exécution</Text>
+                    <Text size="2xs" className="mt-0.5 block">{formatDateTime(t.next_run)}</Text>
+                  </div>
+                  <div>
+                    <Text size="2xs" color="secondary" className="block uppercase tracking-wide">Dernière exécution</Text>
+                    <Text size="2xs" className="mt-0.5 block">{t.last_run ? formatDateTime(t.last_run) : "Pas encore exécutée"}</Text>
+                  </div>
+                </div>
+              </section>
             );
           })}
         </div>
-      )}
+      ) : null}
 
       <AlertDialog
         isOpen={deletingId !== null}

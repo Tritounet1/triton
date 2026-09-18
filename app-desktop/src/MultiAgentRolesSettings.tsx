@@ -6,7 +6,14 @@ import { TextInput } from "@astryxdesign/core/TextInput";
 import { TextArea } from "@astryxdesign/core/TextArea";
 import { Switch } from "@astryxdesign/core/Switch";
 import { Badge } from "@astryxdesign/core/Badge";
-import { PencilIcon, TrashIcon, PlusIcon, RefreshIcon, ChevronRightIcon } from "./icons";
+import {
+  ChevronRightIcon,
+  NetworkIcon,
+  PencilIcon,
+  PlusIcon,
+  RefreshIcon,
+  TrashIcon,
+} from "./icons";
 
 const API_BASE = "http://127.0.0.1:8000";
 
@@ -141,26 +148,78 @@ export function MultiAgentRolesSettings() {
 
   return (
     <div>
-      <Text size="lg" weight="semibold" className="mb-1 block">
-        Rôles multi-agent
-      </Text>
-      <Text size="sm" color="secondary" className="mb-4 block">
-        Les rôles que le planificateur peut attribuer à une sous-tâche (
-        <code className="rounded bg-muted px-1 py-0.5 text-xs">/multi-agents</code>), et combien
-        de sous-tâches un run peut créer au maximum. Le modèle utilisé par chaque rôle se règle
-        dans « Modèles des rôles », à part.
-      </Text>
+      <div className="mb-4 flex items-start justify-between gap-4 pr-8">
+        <div>
+          <Text size="lg" weight="semibold" className="mb-1 block">
+            Rôles multi-agent
+          </Text>
+          <Text size="sm" color="secondary" className="block max-w-xl">
+            Définis les spécialités disponibles pour le planificateur et le nombre maximum de
+            sous-tâches qu'un run peut lancer.
+          </Text>
+        </div>
+        {!loading && roles.length > 0 && (
+          <Badge
+            variant="blue"
+            label={`${roles.length} rôle${roles.length > 1 ? "s" : ""}`}
+            className="shrink-0"
+          />
+        )}
+      </div>
+
+      <div className="mb-4 flex flex-col gap-3 rounded-xl bg-accent-muted px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 shrink-0 text-accent">
+            <NetworkIcon className="h-4 w-4" />
+          </div>
+          <Text size="2xs" color="secondary">
+            Les rôles sont attribués avec <code>/multi-agents</code>. Leur modèle se règle dans
+            « Modèles des rôles » ; ici, tu définis leur mission et leurs droits.
+          </Text>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            label="Ajouter un rôle"
+            variant="primary"
+            size="sm"
+            icon={<PlusIcon className="h-4 w-4" />}
+            isDisabled={editingId !== null}
+            onClick={startAdd}
+          />
+          <IconButton
+            label="Réinitialiser aux rôles par défaut"
+            icon={<RefreshIcon className="h-4 w-4" />}
+            variant="ghost"
+            size="sm"
+            isDisabled={saving}
+            onClick={() => { void resetRoles(); }}
+          />
+        </div>
+      </div>
+
+      {loading && (
+        <div className="flex flex-col gap-3" role="status" aria-label="Chargement des rôles">
+          {[0, 1, 2].map((item) => (
+            <div key={item} className="h-24 animate-pulse rounded-2xl border border-border bg-muted" />
+          ))}
+        </div>
+      )}
 
       {!loading && (
         <>
-          <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-border bg-surface px-4 py-3">
-            <div className="min-w-0">
-              <Text weight="medium" className="block">
+          <section className="mb-4 flex items-center justify-between gap-3 rounded-2xl border border-border bg-surface px-4 py-3.5 transition-colors hover:border-accent">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-muted text-accent">
+                <NetworkIcon className="h-5 w-5" />
+              </div>
+              <div>
+                <Text weight="semibold" className="block">
                 Sous-tâches maximum par run
-              </Text>
-              <Text size="2xs" color="secondary" className="block">
-                Par défaut : {defaultMaxSubtasks}
-              </Text>
+                </Text>
+                <Text size="2xs" color="secondary" className="block">
+                  Valeur par défaut : {defaultMaxSubtasks}
+                </Text>
+              </div>
             </div>
             <TextInput
               value={String(maxSubtasks ?? defaultMaxSubtasks)}
@@ -173,7 +232,7 @@ export function MultiAgentRolesSettings() {
               size="sm"
               className="w-20"
             />
-          </div>
+          </section>
 
           {error && (
             <Text size="sm" className="mb-3 block text-error">
@@ -181,114 +240,77 @@ export function MultiAgentRolesSettings() {
             </Text>
           )}
 
-          <div className="mb-3 flex flex-col gap-2">
+          <div className="mb-3 flex flex-col gap-3">
             {roles.map((role) => (
-              <div key={role.id} className="overflow-hidden rounded-xl border border-border">
-                <div className="flex items-center gap-3 bg-surface px-4 py-3">
+              <section key={role.id} className="overflow-hidden rounded-2xl border border-border bg-surface transition-colors hover:border-accent">
+                <div className="flex items-center gap-3 px-4 py-3.5">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-muted text-accent">
+                    <NetworkIcon className="h-5 w-5" />
+                  </div>
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <Text weight="medium">{role.label}</Text>
-                      <Text size="2xs" color="secondary" className="font-mono">
-                        {role.id}
-                      </Text>
-                      {role.can_write && <Badge variant="neutral" label="écriture" />}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Text weight="semibold">{role.label}</Text>
+                      <Badge variant="neutral" label={role.id} />
+                      {role.can_write && <Badge variant="blue" label="écriture" />}
                     </div>
-                    <Text size="2xs" color="secondary" className="mt-0.5 block truncate">
-                      {role.description || "(pas de description)"}
+                    <Text size="2xs" color="secondary" className="mt-1 block truncate">
+                      {role.description || "Aucune description fournie."}
                     </Text>
                   </div>
-                  <IconButton
-                    label="Modifier"
-                    icon={<PencilIcon />}
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      startEdit(role);
-                    }}
-                  />
-                  <IconButton
-                    label="Supprimer"
-                    icon={<TrashIcon />}
-                    variant="ghost"
-                    size="sm"
-                    isDisabled={roles.length <= 1}
-                    onClick={() => {
-                      deleteRole(role.id);
-                    }}
-                  />
-                  <ChevronRightIcon
-                    className={`h-4 w-4 shrink-0 text-secondary transition-transform ${editingId === role.id ? "rotate-90" : ""}`}
-                  />
+                  <div className="flex shrink-0 items-center gap-1">
+                    <IconButton
+                      label="Modifier"
+                      icon={<PencilIcon />}
+                      variant="ghost"
+                      size="sm"
+                      isDisabled={saving}
+                      onClick={() => { startEdit(role); }}
+                    />
+                    <IconButton
+                      label="Supprimer"
+                      icon={<TrashIcon />}
+                      variant="ghost"
+                      size="sm"
+                      isDisabled={saving || roles.length <= 1}
+                      onClick={() => { deleteRole(role.id); }}
+                    />
+                    <ChevronRightIcon
+                      className={`h-4 w-4 shrink-0 text-secondary transition-transform ${editingId === role.id ? "rotate-90" : ""}`}
+                    />
+                  </div>
                 </div>
                 {editingId === role.id && (
-                  <div className="flex flex-col gap-3 border-t border-border px-4 py-3">
+                  <div className="flex flex-col gap-3 border-t border-border bg-muted px-4 py-4">
                     <RoleEditForm draft={draft} setDraft={setDraft} />
                     <div className="flex justify-end gap-2">
-                      <Button
-                        label="Annuler"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          setEditingId(null);
-                        }}
-                      />
-                      <Button
-                        label="Enregistrer"
-                        variant="primary"
-                        size="sm"
-                        isLoading={saving}
-                        onClick={saveDraft}
-                      />
+                      <Button label="Annuler" variant="ghost" size="sm" onClick={() => { setEditingId(null); }} />
+                      <Button label="Enregistrer" variant="primary" size="sm" isLoading={saving} onClick={saveDraft} />
                     </div>
                   </div>
                 )}
-              </div>
+              </section>
             ))}
 
             {editingId === "__new__" && (
-              <div className="overflow-hidden rounded-xl border border-border">
-                <div className="flex flex-col gap-3 px-4 py-3">
-                  <RoleEditForm draft={draft} setDraft={setDraft} />
-                  <div className="flex justify-end gap-2">
-                    <Button
-                      label="Annuler"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        setEditingId(null);
-                      }}
-                    />
-                    <Button
-                      label="Ajouter"
-                      variant="primary"
-                      size="sm"
-                      isLoading={saving}
-                      onClick={saveDraft}
-                    />
+              <section className="overflow-hidden rounded-2xl border border-accent bg-surface">
+                <div className="flex items-center gap-3 border-b border-border bg-accent-muted px-4 py-3">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-surface text-accent">
+                    <PlusIcon className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <Text weight="semibold" className="block">Nouveau rôle</Text>
+                    <Text size="2xs" color="secondary" className="block">Décris précisément la spécialité à déléguer.</Text>
                   </div>
                 </div>
-              </div>
+                <div className="flex flex-col gap-3 px-4 py-4">
+                  <RoleEditForm draft={draft} setDraft={setDraft} />
+                  <div className="flex justify-end gap-2">
+                    <Button label="Annuler" variant="ghost" size="sm" onClick={() => { setEditingId(null); }} />
+                    <Button label="Ajouter le rôle" variant="primary" size="sm" isLoading={saving} onClick={saveDraft} />
+                  </div>
+                </div>
+              </section>
             )}
-          </div>
-
-          <div className="flex gap-2">
-            <Button
-              label="Ajouter un rôle"
-              variant="secondary"
-              size="sm"
-              icon={<PlusIcon className="h-4 w-4" />}
-              isDisabled={editingId !== null}
-              onClick={startAdd}
-            />
-            <Button
-              label="Réinitialiser aux rôles par défaut"
-              variant="ghost"
-              size="sm"
-              icon={<RefreshIcon className="h-4 w-4" />}
-              onClick={() => {
-                void resetRoles();
-              }}
-            />
           </div>
         </>
       )}
@@ -305,15 +327,14 @@ function RoleEditForm({
 }) {
   return (
     <>
-      <div className="flex gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <TextInput
           value={draft.id}
           onChange={(v) => {
             setDraft({ ...draft, id: v });
           }}
-          label="Id (utilisé par le planificateur, ex. code, research...)"
+          label="Identifiant (ex. code, research...)"
           size="sm"
-          className="flex-1"
         />
         <TextInput
           value={draft.label}
@@ -322,7 +343,6 @@ function RoleEditForm({
           }}
           label="Nom affiché"
           size="sm"
-          className="flex-1"
         />
       </div>
       <TextInput
@@ -330,7 +350,7 @@ function RoleEditForm({
         onChange={(v) => {
           setDraft({ ...draft, description: v });
         }}
-        label="Description (montrée au planificateur pour choisir ce rôle)"
+        label="Description (utilisée par le planificateur)"
         size="sm"
       />
       <TextArea
@@ -339,11 +359,11 @@ function RoleEditForm({
           setDraft({ ...draft, system_prompt: v });
         }}
         label="Instructions système additionnelles (optionnel)"
-        placeholder="Ajoutées au prompt système de la sous-tâche, ex. « Réponds toujours en français. »"
-        rows={2}
+        placeholder="Ex. Réponds toujours en français."
+        rows={3}
       />
       <Switch
-        label="Peut écrire des fichiers (quand un projet est sélectionné)"
+        label="Peut écrire des fichiers (si un projet est sélectionné)"
         value={draft.can_write}
         onChange={(v) => {
           setDraft({ ...draft, can_write: v });
