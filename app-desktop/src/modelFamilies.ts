@@ -2,21 +2,25 @@
 // ModelPage.tsx (liste groupee) et App.tsx (avatar du modele actif dans le
 // chat) : la famille est deduite du prefixe avant le "/" de l'id OpenRouter
 // (ex. "anthropic/claude-..."), deja donne par l'API, pas besoin de le
-// deviner autrement. Logos reels pour les plus connus (public/*.svg), le
-// reste retombe sur les initiales via le composant Avatar.
+// deviner autrement. Logo reel seulement pour Gemini pour l'instant
+// (public/gemini-logo.png) - toute autre famille (connue ou non, voir
+// PLAN.md pour la liste de celles qui avaient un logo SVG avant, a refaire
+// en PNG) retombe sur public/default-logo.png, pas les initiales.
 
 export interface FamilyInfo {
   label: string;
   logo?: string;
 }
 
+const DEFAULT_LOGO = "/default-logo.png";
+
 export const FAMILIES: Record<string, FamilyInfo> = {
-  anthropic: { label: "Anthropic (Claude)", logo: "/claude-logo.svg" },
-  openai: { label: "OpenAI (ChatGPT)", logo: "/openai-logo.svg" },
-  google: { label: "Google (Gemini)", logo: "/gemini-logo.svg" },
-  qwen: { label: "Qwen (Alibaba)", logo: "/qwen-logo.svg" },
-  "meta-llama": { label: "Meta (Llama)", logo: "/meta-logo.svg" },
-  mistralai: { label: "Mistral AI", logo: "/mistral-logo.svg" },
+  anthropic: { label: "Anthropic (Claude)" },
+  openai: { label: "OpenAI (ChatGPT)" },
+  google: { label: "Google (Gemini)", logo: "/gemini-logo.png" },
+  qwen: { label: "Qwen (Alibaba)" },
+  "meta-llama": { label: "Meta (Llama)" },
+  mistralai: { label: "Mistral AI" },
   "x-ai": { label: "xAI (Grok)" },
   deepseek: { label: "DeepSeek" },
   "z-ai": { label: "Z.ai (GLM)" },
@@ -44,14 +48,15 @@ export function familyKey(id: string): string {
 }
 
 export function familyInfo(key: string): FamilyInfo {
-  return FAMILIES[key] ?? { label: "Autres" };
+  const info = FAMILIES[key] ?? { label: "Autres" };
+  return { ...info, logo: info.logo ?? DEFAULT_LOGO };
 }
 
 /** Nom + logo a passer a un composant Avatar pour representer le modele
- * actuellement selectionne (fallback sur les initiales du nom si la
- * famille n'a pas de logo connu, ou si aucun modele n'est encore connu). */
+ * actuellement selectionne (toujours un logo - default-logo.png si la
+ * famille n'en a pas de propre, ou si aucun modele n'est encore connu). */
 export function modelAvatar(modelId: string | null): { name: string; logo?: string } {
-  if (!modelId) return { name: "?" };
+  if (!modelId) return { name: "?", logo: DEFAULT_LOGO };
   const info = familyInfo(familyKey(modelId));
   return { name: info.label, logo: info.logo };
 }
