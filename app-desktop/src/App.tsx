@@ -2871,7 +2871,7 @@ function App() {
                         <Avatar
                           name={messageAvatar.name}
                           src={messageAvatar.logo}
-                          size="sm"
+                          size={72}
                         />
                       }
                       name="Triton"
@@ -2983,7 +2983,7 @@ function App() {
                       <Avatar
                         name={modelAvatar(effectiveModel).name}
                         src={modelAvatar(effectiveModel).logo}
-                        size="sm"
+                        size={72}
                       />
                     }
                     name="Triton"
