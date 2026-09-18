@@ -5,11 +5,13 @@ import { Item } from "@astryxdesign/core/Item";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { ApiKeySettings } from "./ApiKeySettings";
+import { BackupSettings } from "./BackupSettings";
 import {
   BrainIcon,
   ChartBarIcon,
   ClockIcon,
   CpuIcon,
+  DownloadIcon,
   KeyIcon,
   NetworkIcon,
   PlugIcon,
@@ -32,7 +34,8 @@ type SettingsCategory =
   | "mcp"
   | "scheduled_tasks"
   | "memory"
-  | "logs";
+  | "logs"
+  | "backup";
 
 interface CategoryDef {
   id: SettingsCategory;
@@ -61,6 +64,7 @@ const CATEGORIES: CategoryDef[] = [
   },
   { id: "memory", label: "Mémoire", icon: <BrainIcon className="h-4 w-4" /> },
   { id: "logs", label: "Logs & coûts", icon: <ChartBarIcon className="h-4 w-4" /> },
+  { id: "backup", label: "Sauvegarde", icon: <DownloadIcon className="h-4 w-4" /> },
 ];
 
 interface SettingsModalProps {
@@ -147,6 +151,7 @@ export function SettingsModal({ isOpen, onClose, onModelChanged }: SettingsModal
             {category === "scheduled_tasks" && <ScheduledTasksSettings />}
             {category === "memory" && <MemorySettings />}
             {category === "logs" && <LogsSettings />}
+            {category === "backup" && <BackupSettings />}
           </div>
         </div>
       </div>

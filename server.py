@@ -27,6 +27,7 @@ from scalar_fastapi import get_scalar_api_reference
 
 from triton import background_tasks, mcp_client
 from triton.agents import orchestrator, subagents
+from triton.backup import build_backup_zip
 from triton.llm.api import (
     ChatResult,
     call_chat,
@@ -251,6 +252,12 @@ OPENAPI_TAGS = [
         "dedicated route.",
     },
     {"name": "Settings", "description": "Model, budget, API key, per-role model overrides."},
+    {
+        "name": "Backup",
+        "description": "Full export of everything the harness manages under ROOT_DIR, as a "
+        "single zip - for migrating to a new machine or as a safety net before a risky manual "
+        "change.",
+    },
     {"name": "Models", "description": "The OpenRouter model catalog."},
     {"name": "Logs", "description": "Raw event log (model/tool calls) for observability."},
     {"name": "Health", "description": "Liveness check."},
@@ -863,6 +870,23 @@ def get_budget_status() -> BudgetStatus:
         monthly_budget_usd=budget,
         spent_usd=spent,
         exceeded=budget is not None and spent > budget,
+    )
+
+
+@app.get("/backup/export", tags=["Backup"])
+def export_backup() -> Response:
+    """Everything the harness manages under ROOT_DIR (sessions, projects,
+    memory, snapshots, MCP server configs, settings...) as a single zip -
+    see triton/backup.py. Includes API keys as-is (settings.json,
+    mcp_servers.json, .env) - the desktop app warns about this before the
+    download starts (BackupSettings.tsx), this endpoint itself doesn't
+    redact anything."""
+    data = build_backup_zip()
+    filename = f"triton-backup-{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.zip"
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
