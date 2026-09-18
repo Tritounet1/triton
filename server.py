@@ -279,9 +279,21 @@ app = FastAPI(
     docs_url=None,
 )
 
+# The API handles local files, conversations, and configured credentials, so
+# it must never grant an arbitrary website browser access to localhost.  Keep
+# CORS only for Triton's own Vite development server and Tauri's documented
+# production origins (the protocol differs by platform/version).
+TRITON_ALLOWED_ORIGINS = [
+    "http://localhost:1420",
+    "http://127.0.0.1:1420",
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=TRITON_ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
