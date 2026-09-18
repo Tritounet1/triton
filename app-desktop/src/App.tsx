@@ -2872,6 +2872,15 @@ function App() {
                           name={messageAvatar.name}
                           src={messageAvatar.logo}
                           size={72}
+                          // ceinture-bretelles en plus de `size` : la derniere
+                          // fois, l'image (1024x1024 a la source) a fini par
+                          // s'afficher a sa taille native au lieu d'etre
+                          // contrainte a la taille demandee, debordant tout
+                          // le fil de discussion horizontalement (plus moyen
+                          // de scroller). w-/h- fixes + overflow-hidden sur
+                          // ce meme element forcent un plafond quoi qu'il
+                          // arrive cote taille interne du composant Avatar.
+                          className="h-[72px] w-[72px] shrink-0 overflow-hidden"
                         />
                       }
                       name="Triton"
@@ -2984,6 +2993,7 @@ function App() {
                         name={modelAvatar(effectiveModel).name}
                         src={modelAvatar(effectiveModel).logo}
                         size={72}
+                        className="h-[72px] w-[72px] shrink-0 overflow-hidden"
                       />
                     }
                     name="Triton"
