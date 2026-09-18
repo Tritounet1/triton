@@ -136,6 +136,33 @@ class RestoreError(Exception):
     pass
 
 
+class InvalidSnapshotPathError(RestoreError):
+    """A history-browser path did not resolve within its project folder."""
+
+
+def validate_snapshot_relative_path(project: Project, rel_path: str) -> str:
+    """Return a canonical relative path that stays inside the project.
+
+    The history browser supplies this value as a query parameter. Resolving
+    it first blocks traversal, absolute paths, and symlinks that point out of
+    the project. ``strict=False`` keeps deleted snapshot files viewable.
+    """
+    root = Path(project.folder_path).resolve()
+    raw_path = Path(rel_path)
+    if raw_path.is_absolute():
+        raise InvalidSnapshotPathError("snapshot file path must be relative to the project")
+
+    resolved = (root / raw_path).resolve()
+    try:
+        relative = resolved.relative_to(root)
+    except ValueError as e:
+        raise InvalidSnapshotPathError("snapshot file path resolves outside the project") from e
+
+    if relative == Path("."):
+        raise InvalidSnapshotPathError("snapshot file path must identify a file")
+    return relative.as_posix()
+
+
 def _git(
     args: list[str], cwd: Path, env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
@@ -223,7 +250,14 @@ def _project_files(root: Path) -> list[Path]:
             name for name in child_directories if name not in IGNORED_DIRECTORY_NAMES
         ]
         directory_path = Path(directory)
-        files.extend(directory_path / name for name in child_files)
+        # Snapshots represent project-owned regular files. Following a
+        # symlink here could otherwise copy arbitrary content from outside
+        # the project into the internal history store.
+        files.extend(
+            path
+            for name in child_files
+            if not (path := directory_path / name).is_symlink() and path.is_file()
+        )
     return files
 
 
@@ -613,6 +647,7 @@ def snapshot_file_content(
     (invalid bytes replaced) since this is only ever rendered as text,
     never written back anywhere."""
     root = Path(project.folder_path).resolve()
+    rel_path = validate_snapshot_relative_path(project, rel_path)
     new_path = root / rel_path
     new_content = (
         new_path.read_text(encoding="utf-8", errors="replace") if new_path.is_file() else None

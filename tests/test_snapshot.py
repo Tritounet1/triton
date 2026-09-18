@@ -622,6 +622,21 @@ def test_snapshot_file_content_reports_no_new_for_a_deleted_file(tmp_path):
     assert new is None
 
 
+def test_content_snapshots_do_not_follow_symlinks_outside_the_project(tmp_path):
+    root = tmp_path / "plain"
+    root.mkdir()
+    secret = tmp_path / "secret.txt"
+    secret.write_text("must not be captured")
+    (root / "outside-link.txt").symlink_to(secret)
+    project = Project(id="proj2", name="plain", folder_path=str(root))
+
+    snap.ensure_snapshot(project, "session2", 1)
+    snapshot = snapshots.get_snapshot("session2", 1)
+    assert snapshot is not None
+
+    assert "outside-link.txt" not in snap._load_manifest(snapshot.location)
+
+
 def test_snapshot_file_content_supports_a_legacy_git_record(tmp_path):
     project = _git_repo(tmp_path)
     root = tmp_path / "repo"

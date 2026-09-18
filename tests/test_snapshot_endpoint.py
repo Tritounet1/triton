@@ -182,6 +182,43 @@ def test_snapshot_file_reports_old_and_new_content(tmp_path, client):
     assert r.json() == {"old": "original", "new": "edited by the agent"}
 
 
+@pytest.mark.parametrize("path", ["../secret.txt", "/tmp/secret.txt"])
+def test_snapshot_file_rejects_paths_outside_the_project(tmp_path, client, path):
+    project = _project(tmp_path)
+    root = tmp_path / "myproject"
+    (root / "a.txt").write_text("original")
+    (tmp_path / "secret.txt").write_text("must not be exposed")
+    session_id = _session_with_messages("do something")
+    snap.ensure_snapshot(project, session_id, 1)
+
+    r = client.get(
+        f"/sessions/{session_id}/snapshot/file",
+        params={"turn_index": 1, "path": path},
+    )
+
+    assert r.status_code == 400
+    assert "outside the project" in r.json()["detail"] or "must be relative" in r.json()["detail"]
+
+
+def test_snapshot_file_rejects_a_symlink_that_escapes_the_project(tmp_path, client):
+    project = _project(tmp_path)
+    root = tmp_path / "myproject"
+    (root / "a.txt").write_text("original")
+    secret = tmp_path / "secret.txt"
+    secret.write_text("must not be exposed")
+    (root / "outside-link.txt").symlink_to(secret)
+    session_id = _session_with_messages("do something")
+    snap.ensure_snapshot(project, session_id, 1)
+
+    r = client.get(
+        f"/sessions/{session_id}/snapshot/file",
+        params={"turn_index": 1, "path": "outside-link.txt"},
+    )
+
+    assert r.status_code == 400
+    assert "outside the project" in r.json()["detail"]
+
+
 # --- POST /sessions/{id}/snapshot/restore ---
 
 

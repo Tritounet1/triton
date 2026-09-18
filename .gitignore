@@ -18,6 +18,9 @@ node_modules/
 # Self plan for the app
 PLAN.md
 
+# Working audit notes are local progress tracking, not project source.
+AUDIT.md
+
 # Historique de conversation persistant (donnees locales, pas versionnees)
 sessions/
 

@@ -45,6 +45,7 @@ from triton.tools._shared import (
 from triton.tools.snapshot import (
     SNAPSHOT_MAX_AGE_DAYS,
     WRITE_TOOL_NAMES,
+    InvalidSnapshotPathError,
     RestoreError,
     SnapshotDiff,
     commit_diff_snapshot,
@@ -57,6 +58,7 @@ from triton.tools.snapshot import (
     purge_expired_snapshots,
     restore_snapshot,
     snapshot_file_content,
+    validate_snapshot_relative_path,
 )
 from triton.tools.web import is_tavily_configured
 
@@ -69,6 +71,7 @@ __all__ = [
     "TOOLS",
     "TOOLS_REGISTRY",
     "WRITE_TOOL_NAMES",
+    "InvalidSnapshotPathError",
     "RestoreError",
     "SnapshotDiff",
     "Tool",
@@ -87,6 +90,7 @@ __all__ = [
     "rebuild_tools_list",
     "restore_snapshot",
     "snapshot_file_content",
+    "validate_snapshot_relative_path",
 ]
 
 TOOLS_REGISTRY: dict[str, Tool] = {

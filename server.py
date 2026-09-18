@@ -98,6 +98,7 @@ from triton.tools import (
     TOOLS,
     TOOLS_REGISTRY,
     WRITE_TOOL_NAMES,
+    InvalidSnapshotPathError,
     RestoreError,
     commit_diff_snapshot,
     commit_snapshot_file_content,
@@ -113,6 +114,7 @@ from triton.tools import (
     purge_expired_snapshots,
     restore_snapshot,
     snapshot_file_content,
+    validate_snapshot_relative_path,
 )
 from triton.tools.memory import remember
 
@@ -1761,11 +1763,14 @@ def get_session_snapshot_file(
         raise HTTPException(404, "the project this snapshot belongs to no longer exists")
 
     try:
+        path = validate_snapshot_relative_path(project, path)
         old, new = (
             commit_snapshot_file_content(snapshot, path)
             if view == "commit"
             else snapshot_file_content(project, snapshot, path)
         )
+    except InvalidSnapshotPathError as e:
+        raise HTTPException(400, str(e)) from e
     except RestoreError as e:
         raise HTTPException(500, f"could not read snapshot content: {e}") from e
 
