@@ -68,6 +68,35 @@ def test_list_snapshots_reports_kind_and_created_at(tmp_path, client):
     assert point["kind"] == "content"
     assert point["turn_index"] == 1
     assert point["created_at"]
+    assert point["has_final_state"] is False
+
+
+def test_finalized_snapshot_is_exposed_as_internal_commit_and_restorable(tmp_path, client):
+    project = _project(tmp_path)
+    root = tmp_path / "myproject"
+    (root / "a.txt").write_text("before")
+    session_id = _session_with_messages("write a file")
+    snap.ensure_snapshot(project, session_id, 1)
+    (root / "a.txt").write_text("after")
+    snap.finalize_snapshot(project, session_id, 1)
+
+    points = client.get(f"/sessions/{session_id}/snapshots").json()
+    assert points[0]["has_final_state"] is True
+
+    diff = client.get(
+        f"/sessions/{session_id}/snapshot/diff",
+        params={"turn_index": 1, "view": "commit"},
+    )
+    assert diff.status_code == 200
+    assert diff.json()["modified"] == ["a.txt"]
+
+    (root / "a.txt").write_text("later")
+    restored = client.post(
+        f"/sessions/{session_id}/snapshot/restore",
+        json={"turn_index": 1, "state": "after"},
+    )
+    assert restored.status_code == 200
+    assert (root / "a.txt").read_text() == "after"
 
 
 def test_list_snapshots_includes_a_preview_of_the_triggering_message(tmp_path, client):

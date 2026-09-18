@@ -60,7 +60,7 @@ describe("SnapshotSection", () => {
     render(<SnapshotSection sessionId="s1" onOpenHistory={vi.fn()} />);
 
     expect(
-      await screen.findByText("Filet de sécurité actif pour cette session"),
+      await screen.findByText("1 sauvegarde interne disponible"),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Voir l'historique" })).toBeInTheDocument();
   });

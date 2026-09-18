@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  assistantGroupModel,
   editFileTarget,
   extractUserContent,
   formatSessionLabel,
@@ -113,6 +114,7 @@ describe("historyToMessages", () => {
       {
         role: "assistant",
         content: null,
+        model: "z-ai/glm-5.3-flash",
         tool_calls: [
           { id: "call_1", function: { name: "read_file", arguments: '{"path":"a.txt"}' } },
         ],
@@ -126,6 +128,7 @@ describe("historyToMessages", () => {
       tool: "read_file",
       args: { path: "a.txt" },
       result: "file contents",
+      model: "z-ai/glm-5.3-flash",
     });
   });
 
@@ -159,6 +162,37 @@ describe("groupMessages / toBlocks", () => {
     if (groups[1]?.type === "assistant") {
       expect(groups[1].items).toHaveLength(2);
       expect(groups[1].precedingTurnIndex).toBe(1);
+    }
+  });
+
+  it("keeps a later model available when an earlier tool-step message lacks it", () => {
+    const groups = groupMessages([
+      userMsg("supprime le fichier"),
+      { kind: "assistant", text: "Je le trouve.", time: 0 },
+      { kind: "tool", tool: "delete_file", args: {}, result: "ok", time: 0 },
+      { kind: "assistant", text: "Supprimé.", time: 0, model: "z-ai/glm-5.3-flash" },
+    ]);
+    const group = groups[1];
+    expect(group?.type).toBe("assistant");
+    if (group?.type === "assistant") {
+      expect(assistantGroupModel(group.items)).toBe("z-ai/glm-5.3-flash");
+    }
+  });
+
+  it("does not split an assistant response around an informational save notice", () => {
+    const groups = groupMessages([
+      userMsg("supprime le fichier"),
+      { kind: "assistant", text: "Je le trouve.", time: 0 },
+      { kind: "tool", tool: "delete_file", args: {}, result: "ok", time: 0 },
+      { kind: "info", text: "Point de restauration créé.", time: 0 },
+      { kind: "assistant", text: "Supprimé.", time: 0, model: "z-ai/glm-5.3-flash" },
+    ]);
+    expect(groups.map((group) => group.type)).toEqual(["user", "assistant", "system"]);
+    const assistant = groups[1];
+    expect(assistant?.type).toBe("assistant");
+    if (assistant?.type === "assistant") {
+      expect(assistant.items).toHaveLength(3);
+      expect(assistantGroupModel(assistant.items)).toBe("z-ai/glm-5.3-flash");
     }
   });
 

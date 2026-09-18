@@ -18,6 +18,7 @@ import {
   type SnapshotFileChangeType,
   type SnapshotFileContent,
   type SnapshotPoint,
+  type SnapshotView,
 } from "./snapshotDiff";
 
 const API_BASE = "http://127.0.0.1:8000";
@@ -99,19 +100,49 @@ export function SnapshotHistoryView({ sessionId, onBack, onRestored }: SnapshotH
   const [points, setPoints] = useState<SnapshotPoint[]>([]);
   const [selectedTurn, setSelectedTurn] = useState<number | null>(null);
   const [diff, setDiff] = useState<SnapshotDiff | null>(null);
+  const [diffTurn, setDiffTurn] = useState<number | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [content, setContent] = useState<SnapshotFileContent | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  const [loadingPoints, setLoadingPoints] = useState(true);
+  const [loadingDiff, setLoadingDiff] = useState(false);
+  const [loadingContent, setLoadingContent] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
+
+  const selectedPoint = points.find((p) => p.turn_index === selectedTurn) ?? null;
+  const selectedView: SnapshotView =
+    selectedPoint?.has_final_state === true ? "commit" : "rollback";
 
   // charge la liste des points de restauration a l'ouverture, et
   // selectionne le plus recent par defaut (comme le commit le plus recent
   // deja selectionne dans GitHub Desktop).
   useEffect(() => {
-    void fetchSnapshotPoints(sessionId).then((loaded) => {
-      setPoints(loaded);
-      setSelectedTurn(loaded[loaded.length - 1]?.turn_index ?? null);
-    });
+    const controller = new AbortController();
+    void fetchSnapshotPoints(sessionId, controller.signal)
+      .then((loaded) => {
+        if (controller.signal.aborted) return;
+        setPoints(loaded);
+        setSelectedTurn(loaded[loaded.length - 1]?.turn_index ?? null);
+        setLoadingDiff(loaded.length > 0);
+        setLoadError(null);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setPoints([]);
+          setSelectedTurn(null);
+          setLoadError("Impossible de charger l'historique des sauvegardes.");
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLoadingPoints(false);
+        }
+      });
+    return () => {
+      controller.abort();
+    };
   }, [sessionId]);
 
   // recharge la liste des fichiers changes des que le tour selectionne
@@ -123,44 +154,101 @@ export function SnapshotHistoryView({ sessionId, onBack, onRestored }: SnapshotH
   // s'appuie de toute facon que sur `diff`/`selectedPath` une fois
   // reellement peuples.
   useEffect(() => {
-    if (selectedTurn === null) return;
-    void fetchSnapshotDiff(sessionId, selectedTurn).then((loaded) => {
-      setDiff(loaded);
-      setSelectedPath(loaded ? (changedFiles(loaded)[0]?.path ?? null) : null);
-    });
-  }, [sessionId, selectedTurn]);
+    const controller = new AbortController();
+    if (selectedTurn === null) {
+      return () => {
+        controller.abort();
+      };
+    }
+
+    void fetchSnapshotDiff(sessionId, selectedTurn, selectedView, controller.signal)
+      .then((loaded) => {
+        if (controller.signal.aborted) return;
+        setDiff(loaded);
+        setDiffTurn(selectedTurn);
+        setSelectedPath(changedFiles(loaded)[0]?.path ?? null);
+        setContent(null);
+        setLoadingContent(changedFiles(loaded).length > 0);
+        setLoadError(null);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setLoadError("Impossible de charger les changements de cette sauvegarde.");
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLoadingDiff(false);
+        }
+      });
+    return () => {
+      controller.abort();
+    };
+  }, [sessionId, selectedTurn, selectedView]);
 
   // recharge le contenu avant/apres des que le fichier ou le tour
   // selectionne change - meme garde-fou que ci-dessus.
   useEffect(() => {
-    if (selectedTurn === null || selectedPath === null) return;
-    void fetchSnapshotFileContent(sessionId, selectedTurn, selectedPath).then(setContent);
-  }, [sessionId, selectedTurn, selectedPath]);
+    const controller = new AbortController();
+    if (selectedTurn === null || selectedPath === null) {
+      return () => {
+        controller.abort();
+      };
+    }
 
-  function restore() {
-    if (selectedTurn === null) return;
-    setRestoring(true);
-    void fetch(`${API_BASE}/sessions/${sessionId}/snapshot/restore`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ turn_index: selectedTurn }),
-    })
-      .then((r) => {
-        if (r.ok) {
-          setConfirmOpen(false);
-          onRestored();
+    void fetchSnapshotFileContent(
+      sessionId,
+      selectedTurn,
+      selectedPath,
+      selectedView,
+      controller.signal,
+    )
+      .then((loaded) => {
+        if (!controller.signal.aborted) {
+          setContent(loaded);
+          setLoadError(null);
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setLoadError("Impossible de charger le contenu de ce fichier.");
         }
       })
       .finally(() => {
-        setRestoring(false);
+        if (!controller.signal.aborted) {
+          setLoadingContent(false);
+        }
       });
+    return () => {
+      controller.abort();
+    };
+  }, [sessionId, selectedTurn, selectedPath, selectedView]);
+
+  async function restore() {
+    if (selectedTurn === null) return;
+    setRestoring(true);
+    setRestoreError(null);
+    try {
+      const response = await fetch(`${API_BASE}/sessions/${sessionId}/snapshot/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ turn_index: selectedTurn, state: selectedView === "commit" ? "after" : "before" }),
+      });
+      if (!response.ok) throw new Error("restore failed");
+      setConfirmOpen(false);
+      onRestored();
+    } catch {
+      setRestoreError("La restauration a échoué. Les fichiers n'ont pas été confirmés comme restaurés.");
+    } finally {
+      setRestoring(false);
+    }
   }
 
   // le plus recent en tete, comme la liste de commits de GitHub Desktop -
   // fetchSnapshotPoints renvoie le plus ancien en tete (voir sa docstring).
   const orderedPoints = [...points].reverse();
-  const selectedPoint = points.find((p) => p.turn_index === selectedTurn) ?? null;
-  const files: SnapshotChangedFile[] = diff ? changedFiles(diff) : [];
+  const displayedDiff = diffTurn === selectedTurn ? diff : null;
+  const files: SnapshotChangedFile[] = displayedDiff ? changedFiles(displayedDiff) : [];
 
   return (
     <div className="flex h-full flex-col">
@@ -176,15 +264,30 @@ export function SnapshotHistoryView({ sessionId, onBack, onRestored }: SnapshotH
         <Text size="lg" weight="semibold">
           Historique des sauvegardes
         </Text>
+        <Text size="sm" color="secondary" className="hidden sm:block">
+          États internes du projet, sans modifier Git.
+        </Text>
       </div>
+
+      {loadError && (
+        <div className="border-b border-error/30 bg-error-muted px-4 py-2">
+          <Text size="sm" className="text-error">
+            {loadError}
+          </Text>
+        </div>
+      )}
 
       <div className="flex min-h-0 flex-1">
         <div className="flex w-64 shrink-0 flex-col overflow-y-auto border-r border-border">
           {orderedPoints.length === 0 && (
             <div className="p-4">
               <EmptyState
-                title="Aucun point de restauration"
-                description="Rien n'a encore été écrit dans cette conversation."
+                title={loadingPoints ? "Chargement…" : "Aucune sauvegarde"}
+                description={
+                  loadingPoints
+                    ? "Les états internes du projet sont en cours de chargement."
+                    : "Une sauvegarde est créée lorsqu'un message modifie le projet."
+                }
               />
             </div>
           )}
@@ -193,6 +296,11 @@ export function SnapshotHistoryView({ sessionId, onBack, onRestored }: SnapshotH
               key={p.turn_index}
               onClick={() => {
                 setSelectedTurn(p.turn_index);
+                setSelectedPath(null);
+                setContent(null);
+                setLoadingDiff(true);
+                setLoadingContent(false);
+                setLoadError(null);
               }}
               className={`flex flex-col items-start gap-0.5 border-b border-border px-3 py-2.5 text-left ${
                 p.turn_index === selectedTurn ? "bg-accent-muted" : "hover:bg-muted"
@@ -201,7 +309,13 @@ export function SnapshotHistoryView({ sessionId, onBack, onRestored }: SnapshotH
               <Text size="sm" weight="medium" className="line-clamp-2">
                 {p.message_preview ?? `Tour ${p.turn_index}`}
               </Text>
-              <Timestamp value={new Date(p.created_at).getTime() / 1000} format="relative" />
+              <div className="flex items-center gap-2">
+                <Badge
+                  variant={p.has_final_state === true ? "success" : "warning"}
+                  label={p.has_final_state === true ? "État final" : "Point antérieur"}
+                />
+                <Timestamp value={new Date(p.created_at).getTime() / 1000} format="relative" />
+              </div>
             </button>
           ))}
         </div>
@@ -217,7 +331,11 @@ export function SnapshotHistoryView({ sessionId, onBack, onRestored }: SnapshotH
             <button
               key={f.path}
               onClick={() => {
+                if (f.path === selectedPath) return;
                 setSelectedPath(f.path);
+                setContent(null);
+                setLoadingContent(true);
+                setLoadError(null);
               }}
               className={`flex items-center gap-2 border-b border-border px-3 py-2 text-left ${
                 f.path === selectedPath ? "bg-accent-muted" : "hover:bg-muted"
@@ -229,7 +347,14 @@ export function SnapshotHistoryView({ sessionId, onBack, onRestored }: SnapshotH
               </Text>
             </button>
           ))}
-          {diff && files.length === 0 && (
+          {loadingDiff && (
+            <div className="px-3 py-4">
+              <Text size="sm" color="secondary">
+                Chargement des changements…
+              </Text>
+            </div>
+          )}
+          {displayedDiff && files.length === 0 && !loadingDiff && (
             <div className="px-3 py-4">
               <Text size="sm" color="secondary">
                 Aucun changement pour ce tour.
@@ -239,24 +364,33 @@ export function SnapshotHistoryView({ sessionId, onBack, onRestored }: SnapshotH
         </div>
 
         <div className="min-w-0 flex-1 overflow-y-auto">
-          {selectedPath && content ? (
+          {loadingContent && (
+            <div className="p-6">
+              <Text size="sm" color="secondary">
+                Chargement du fichier…
+              </Text>
+            </div>
+          )}
+          {!loadingContent && selectedPath && content ? (
             <SnapshotFileDiff content={content} />
           ) : (
-            <div className="p-6">
-              <EmptyState
-                title="Sélectionnez un fichier"
-                description="Choisissez un fichier modifié pour voir son contenu avant/après."
-              />
-            </div>
+            !loadingContent && (
+              <div className="p-6">
+                <EmptyState
+                  title="Sélectionnez un fichier"
+                  description="Choisissez un fichier modifié pour voir son contenu avant/après."
+                />
+              </div>
+            )
           )}
         </div>
       </div>
 
       <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
         <Button
-          label="Restaurer à ce point"
+          label="Recharger cet état"
           variant="primary"
-          isDisabled={selectedTurn === null}
+          isDisabled={selectedTurn === null || loadingDiff || loadError !== null}
           onClick={() => {
             setConfirmOpen(true);
           }}
@@ -266,14 +400,21 @@ export function SnapshotHistoryView({ sessionId, onBack, onRestored }: SnapshotH
       <AlertDialog
         isOpen={confirmOpen}
         onOpenChange={setConfirmOpen}
-        title="Restaurer à cet état ?"
-        description={`Annule tous les fichiers créés, modifiés ou supprimés depuis « ${
-          selectedPoint?.message_preview ?? "ce tour"
-        } ». Cette action est irréversible.${describeSnapshotDiff(diff)}`}
-        actionLabel="Restaurer"
+        title="Recharger cet état ?"
+        description={`Le projet reviendra à l'état ${
+          selectedView === "commit" ? "obtenu après" : "antérieur à"
+        } « ${selectedPoint?.message_preview ?? "ce tour"} ». Cette action est irréversible.${describeSnapshotDiff(displayedDiff)}`}
+        actionLabel="Recharger"
         isActionLoading={restoring}
         onAction={restore}
       />
+      {restoreError && (
+        <div className="border-t border-error/30 bg-error-muted px-4 py-2">
+          <Text size="sm" className="text-error">
+            {restoreError}
+          </Text>
+        </div>
+      )}
     </div>
   );
 }

@@ -99,11 +99,14 @@ from triton.tools import (
     TOOLS_REGISTRY,
     WRITE_TOOL_NAMES,
     RestoreError,
+    commit_diff_snapshot,
+    commit_snapshot_file_content,
     diff_snapshot,
     discard_snapshot,
     discard_snapshots_for_project,
     enforce_project_sandbox,
     ensure_snapshot,
+    finalize_snapshot,
     invoke_tool,
     is_skipped,
     is_tavily_configured,
@@ -515,6 +518,11 @@ def run_chat_stream(
     iteration = 0
     done = False
     cancelled = False
+    # Le point "avant" est pris juste avant la premiere ecriture. Une fois
+    # le tour termine, ce drapeau permet de capturer son etat final afin que
+    # l'historique affiche un commit interne immuable, pas un diff du disque
+    # courant qui change au fil du temps.
+    turn_has_write = False
     consecutive_tool_errors = 0
     consecutive_empty_replies = 0
 
@@ -576,11 +584,19 @@ def run_chat_stream(
 
         if reply.tool_calls:
             messages.append(
-                {
-                    "role": "assistant",
-                    "content": reply.content,
-                    "tool_calls": to_tool_call_params(reply.tool_calls),
-                }
+                cast(
+                    ChatCompletionMessageParam,
+                    {
+                        "role": "assistant",
+                        "content": reply.content,
+                        "tool_calls": to_tool_call_params(reply.tool_calls),
+                        # A tool-call message is still a response from this
+                        # model.  Persist it too: the desktop history uses
+                        # this metadata to display the correct model avatar
+                        # for a multi-step response, not Triton's fallback.
+                        "model": reply.model,
+                    },
+                )
             )
 
             for tool_call in reply.tool_calls:
@@ -635,6 +651,8 @@ def run_chat_stream(
                             or is_yolo_enabled(session_id)
                             or force_yolo
                         ):
+                            if name in WRITE_TOOL_NAMES:
+                                turn_has_write = True
                             result = invoke_tool(tool, name, args, session_id)
                         else:
                             confirmation_id = str(uuid.uuid4())
@@ -652,6 +670,8 @@ def run_chat_stream(
                             if got_response and pending.approved:
                                 if pending.remember:
                                     allow_always(session_id, name)
+                                if name in WRITE_TOOL_NAMES:
+                                    turn_has_write = True
                                 result = invoke_tool(tool, name, args, session_id)
                             else:
                                 result = "action denied by the user"
@@ -667,7 +687,10 @@ def run_chat_stream(
                     # nothing comes back, not even an error).
                     result = f"error: unexpected failure handling {name} ({type(e).__name__}: {e})"
 
-                yield emit("tool_call", {"tool": name, "args": args, "result": result})
+                yield emit(
+                    "tool_call",
+                    {"tool": name, "args": args, "result": result, "model": reply.model},
+                )
 
                 log_event(
                     type="tool_call",
@@ -781,6 +804,15 @@ def run_chat_stream(
 
     if not done and not cancelled:
         yield emit("error", {"message": f"limit of {MAX_ITERATIONS} iterations reached."})
+
+    if turn_has_write and finalize_snapshot(project, session_id, turn_index):
+        yield emit(
+            "info",
+            {
+                "message": "Sauvegarde interne finalisée : ce changement peut maintenant être "
+                "restauré depuis l'historique.",
+            },
+        )
 
     save_session(session_path, messages)
 
@@ -1628,6 +1660,9 @@ class SnapshotPoint(BaseModel):
     kind: str
     created_at: str
     message_preview: str | None
+    # Les nouveaux points ont un etat "apres" scelle a la fin du tour et
+    # peuvent donc etre presentes comme des commits internes fiables.
+    has_final_state: bool
 
 
 @app.get("/sessions/{session_id}/snapshots", tags=["Sessions"])
@@ -1643,6 +1678,7 @@ def list_session_snapshots(session_id: str) -> list[SnapshotPoint]:
             kind=s.kind,
             created_at=s.created_at,
             message_preview=_user_message_preview(session_id, s.turn_index),
+            has_final_state=s.after_location is not None,
         )
         for s in list_snapshots(session_id)
     ]
@@ -1655,7 +1691,11 @@ class SnapshotDiffResponse(BaseModel):
 
 
 @app.get("/sessions/{session_id}/snapshot/diff", tags=["Sessions"])
-def get_session_snapshot_diff(session_id: str, turn_index: int) -> SnapshotDiffResponse:
+def get_session_snapshot_diff(
+    session_id: str,
+    turn_index: int,
+    view: Literal["rollback", "commit"] = "rollback",
+) -> SnapshotDiffResponse:
     """A preview of what restoring to this specific turn's snapshot would
     actually change - which files it created (restore deletes them),
     deleted (restore recreates them), or modified (restore reverts them).
@@ -1674,7 +1714,9 @@ def get_session_snapshot_diff(session_id: str, turn_index: int) -> SnapshotDiffR
         raise HTTPException(404, "the project this snapshot belongs to no longer exists")
 
     try:
-        diff = diff_snapshot(project, snapshot)
+        diff = (
+            commit_diff_snapshot(snapshot) if view == "commit" else diff_snapshot(project, snapshot)
+        )
     except RestoreError as e:
         raise HTTPException(500, f"could not compute diff: {e}") from e
 
@@ -1688,7 +1730,10 @@ class SnapshotFileContentResponse(BaseModel):
 
 @app.get("/sessions/{session_id}/snapshot/file", tags=["Sessions"])
 def get_session_snapshot_file(
-    session_id: str, turn_index: int, path: str
+    session_id: str,
+    turn_index: int,
+    path: str,
+    view: Literal["rollback", "commit"] = "rollback",
 ) -> SnapshotFileContentResponse:
     """Before/after text content for one file changed by this turn (see
     GET .../snapshot/diff for the list of changed paths) - powers the
@@ -1704,7 +1749,11 @@ def get_session_snapshot_file(
         raise HTTPException(404, "the project this snapshot belongs to no longer exists")
 
     try:
-        old, new = snapshot_file_content(project, snapshot, path)
+        old, new = (
+            commit_snapshot_file_content(snapshot, path)
+            if view == "commit"
+            else snapshot_file_content(project, snapshot, path)
+        )
     except RestoreError as e:
         raise HTTPException(500, f"could not read snapshot content: {e}") from e
 
@@ -1713,6 +1762,10 @@ def get_session_snapshot_file(
 
 class SnapshotRestoreRequest(BaseModel):
     turn_index: int
+    # L'ancien contrat continue de restaurer l'etat avant le tour. La
+    # nouvelle timeline demande explicitement "after" pour recharger le
+    # commit selectionne.
+    state: Literal["before", "after"] = "before"
 
 
 @app.post("/sessions/{session_id}/snapshot/restore", tags=["Sessions"])
@@ -1734,7 +1787,7 @@ def restore_session_snapshot(session_id: str, body: SnapshotRestoreRequest) -> d
         raise HTTPException(404, "the project this snapshot belongs to no longer exists")
 
     try:
-        restore_snapshot(project, snapshot)
+        restore_snapshot(project, snapshot, body.state)
     except RestoreError as e:
         raise HTTPException(500, f"restore failed: {e}") from e
 

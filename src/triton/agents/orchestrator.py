@@ -59,7 +59,12 @@ from triton.storage.orchestrator_runs import delete_run, load_all_runs, save_run
 from triton.storage.projects import Project, get_project
 from triton.storage.sessions import load_session, save_session, session_path
 from triton.storage.settings import load_max_subtasks, load_multi_agent_roles
-from triton.tools import WRITE_TOOL_NAMES, enforce_project_sandbox, ensure_snapshot
+from triton.tools import (
+    WRITE_TOOL_NAMES,
+    enforce_project_sandbox,
+    ensure_snapshot,
+    finalize_snapshot,
+)
 
 if TYPE_CHECKING:
     from openai.types.chat import ChatCompletionMessageParam
@@ -677,6 +682,12 @@ def _execute_subtasks(
         for t in threads:
             t.join()
         _persist(run)
+
+    # Toutes les sous-taches ecrivent dans le meme tour de conversation :
+    # une fois les vagues terminees, on scelle leur etat commun pour que la
+    # timeline interne puisse afficher et restaurer ce commit complet.
+    if run.session_id is not None:
+        finalize_snapshot(project, run.session_id, run.turn_index)
 
     subtask_report = "\n\n".join(f"[{s.role}] {s.description}\n-> {s.result}" for s in run.subtasks)
     try:

@@ -126,6 +126,48 @@ def test_ensure_snapshot_on_a_non_git_folder(tmp_path):
     assert set(manifest) == {"a.txt"}
 
 
+def test_snapshot_ignores_regenerable_dependencies_and_build_outputs(tmp_path):
+    root = tmp_path / "plain"
+    root.mkdir()
+    (root / "source.py").write_text("print('hello')")
+    (root / "node_modules").mkdir()
+    (root / "node_modules" / "package.js").write_text("generated dependency")
+    (root / "dist").mkdir()
+    (root / "dist" / "bundle.js").write_text("generated bundle")
+    project = Project(id="proj2", name="plain", folder_path=str(root))
+
+    snap.ensure_snapshot(project, "session2", 1)
+
+    record = snapshots.get_snapshot("session2", 1)
+    assert record is not None
+    assert set(json.loads(Path(record.location).read_text())) == {"source.py"}
+
+
+def test_finalize_snapshot_creates_an_immutable_after_state(tmp_path):
+    project = _git_repo(tmp_path)
+    root = tmp_path / "repo"
+    session_id = "session-final"
+
+    snap.ensure_snapshot(project, session_id, 1)
+    (root / "tracked.txt").write_text("written during turn")
+    assert snap.finalize_snapshot(project, session_id, 1) is True
+
+    record = snapshots.get_snapshot(session_id, 1)
+    assert record is not None
+    assert record.after_location is not None
+    assert snap.commit_diff_snapshot(record).modified == ["tracked.txt"]
+
+    # A later modification does not alter the commit's recorded diff/content.
+    (root / "tracked.txt").write_text("later external change")
+    assert snap.commit_snapshot_file_content(record, "tracked.txt") == (
+        "original",
+        "written during turn",
+    )
+
+    snap.restore_snapshot(project, record, "after")
+    assert (root / "tracked.txt").read_text() == "written during turn"
+
+
 def test_content_store_dedupes_identical_file_content(tmp_path):
     """Two turns (even across different projects) that happen to write
     the exact same bytes to a file must only cost one blob on disk -

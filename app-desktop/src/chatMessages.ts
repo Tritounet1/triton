@@ -30,6 +30,9 @@ export type ChatMsg =
       args: Record<string, unknown>;
       result: string;
       time: number;
+      // modele qui a demande cet appel d'outil ; utile lorsqu'un tour se
+      // termine avant d'avoir produit une reponse textuelle finale.
+      model?: string;
       // statut explicite pour une sous-tache multi-agent en direct (connu
       // sans avoir a l'inferer du texte, contrairement a un vrai appel
       // d'outil deja termine - voir toolCallStatus).
@@ -161,6 +164,7 @@ export function historyToMessages(raw: RawSessionMessage[]): ChatMsg[] {
           // plus large.
           result: typeof toolResult?.content === "string" ? toolResult.content : "",
           time: now,
+          model: m.model,
         });
       }
       if (typeof m.content === "string" && m.content) {
@@ -208,12 +212,32 @@ export function groupMessages(msgs: ChatMsg[]): RenderGroup[] {
       const last = groups[groups.length - 1];
       if (last?.type === "assistant") {
         last.items.push(m);
+      } else if (
+        // Un message d'information peut arriver entre deux etapes d'un
+        // meme tour (par exemple le point de restauration cree juste avant
+        // une ecriture). Il ne doit pas faire reapparaitre un deuxieme
+        // avatar pour la meme reponse ; on le conserve visuellement apres
+        // le groupe, mais rattache la suite a l'assistant precedent.
+        last?.type === "system" &&
+        last.msg.kind === "info" &&
+        groups[groups.length - 2]?.type === "assistant"
+      ) {
+        const previousAssistant = groups[groups.length - 2];
+        if (previousAssistant?.type === "assistant") previousAssistant.items.push(m);
       } else {
         groups.push({ type: "assistant", items: [m], precedingTurnIndex: turnIndex });
       }
     }
   }
   return groups;
+}
+
+/** Le modele connu le plus recent d'une reponse groupee. Les anciens
+ * historiques pouvaient ne pas enregistrer le modele sur les fragments
+ * intermediaires autour d'un appel d'outil, alors que sa reponse finale le
+ * contient bien. */
+export function assistantGroupModel(items: (AssistantMsg | ToolMsg)[]): string | undefined {
+  return [...items].reverse().find((item) => Boolean(item.model))?.model;
 }
 
 export type Block =

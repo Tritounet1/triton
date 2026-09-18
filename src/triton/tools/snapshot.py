@@ -63,6 +63,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Literal
 
 from triton.paths import ROOT_DIR
 from triton.storage.projects import Project, get_project
@@ -105,6 +106,24 @@ BACKUP_ROOT = ROOT_DIR / "snapshot_backups"  # legacy "copy" kind only
 # blob hashes.
 OBJECTS_ROOT = ROOT_DIR / "snapshot_objects"
 MANIFESTS_ROOT = ROOT_DIR / "snapshot_manifests"
+
+# Les dependances et artefacts sont regenerables, pas des fichiers source a
+# versionner dans cet historique interne. Les exclure evite des diffs et des
+# restaurations disproportionnes sur les projets JavaScript/Python.
+IGNORED_DIRECTORY_NAMES = {
+    ".git",
+    ".next",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".turbo",
+    ".venv",
+    "__pycache__",
+    "build",
+    "coverage",
+    "dist",
+    "node_modules",
+    "venv",
+}
 
 # guards ensure_snapshot's read-then-write against two write tool calls
 # landing at nearly the same moment - most plausibly two "code" subtasks
@@ -192,10 +211,20 @@ def _take_copy_snapshot(root: Path, session_id: str, turn_index: int) -> str:
 
 
 def _project_files(root: Path) -> list[Path]:
-    """Every regular file under `root`, .git excluded (same exclusion as
-    the legacy copy backend's shutil.ignore_patterns(".git")) - shared by
-    snapshot-taking and diffing so both walk the tree the same way."""
-    return [p for p in root.rglob("*") if p.is_file() and ".git" not in p.relative_to(root).parts]
+    """Fichiers utiles du projet, sans dependances ni sorties de build.
+
+    `Path.rglob` visite quand meme tous les fichiers exclus. Ici, les
+    repertoires sont elagues pendant `os.walk`, ce qui evite de parcourir
+    tout un node_modules a chaque clic dans l'historique.
+    """
+    files: list[Path] = []
+    for directory, child_directories, child_files in os.walk(root):
+        child_directories[:] = [
+            name for name in child_directories if name not in IGNORED_DIRECTORY_NAMES
+        ]
+        directory_path = Path(directory)
+        files.extend(directory_path / name for name in child_files)
+    return files
 
 
 def _file_hash(path: Path) -> str:
@@ -246,18 +275,26 @@ def _restore_blob(content_hash: str, dest: Path) -> None:
     shutil.copy2(blob_path, dest)
 
 
-def _manifest_path(session_id: str, turn_index: int) -> Path:
-    return MANIFESTS_ROOT / session_id / f"{turn_index}.json"
+def _manifest_path(
+    session_id: str, turn_index: int, state: Literal["before", "after"] = "before"
+) -> Path:
+    suffix = "" if state == "before" else ".after"
+    return MANIFESTS_ROOT / session_id / f"{turn_index}{suffix}.json"
 
 
-def _take_content_snapshot(root: Path, session_id: str, turn_index: int) -> str:
+def _take_content_snapshot(
+    root: Path,
+    session_id: str,
+    turn_index: int,
+    state: Literal["before", "after"] = "before",
+) -> str:
     """Hashes every file under `root` into the shared blob store, then
     writes a small JSON manifest (relative path -> blob hash) recording
     this turn's tree shape - see the module docstring's "Content
     snapshots" section. Returns the manifest's path, stored as the
     Snapshot record's `location`."""
     manifest = {p.relative_to(root).as_posix(): _store_blob(p) for p in _project_files(root)}
-    manifest_file = _manifest_path(session_id, turn_index)
+    manifest_file = _manifest_path(session_id, turn_index, state)
     manifest_file.parent.mkdir(parents=True, exist_ok=True)
     manifest_file.write_text(json.dumps(manifest, ensure_ascii=False))
     return str(manifest_file)
@@ -277,7 +314,7 @@ def _restore_content_snapshot(root: Path, manifest_path: str) -> None:
     # created after the snapshot doesn't survive the restore - the same
     # "checkout + clean" semantics as the legacy git backend.
     for entry in root.iterdir():
-        if entry.name == ".git":
+        if entry.name in IGNORED_DIRECTORY_NAMES:
             continue
         if entry.is_dir():
             shutil.rmtree(entry)
@@ -298,6 +335,17 @@ def _diff_content_snapshot(root: Path, manifest_path: str) -> "SnapshotDiff":
         modified=sorted(
             rel for rel in set(current) & set(manifest) if current[rel] != manifest[rel]
         ),
+    )
+
+
+def _diff_content_manifests(before_path: str, after_path: str) -> "SnapshotDiff":
+    """Diff immuable entre les deux etats captures d'un meme tour."""
+    before = _load_manifest(before_path)
+    after = _load_manifest(after_path)
+    return SnapshotDiff(
+        created=sorted(set(after) - set(before)),
+        deleted=sorted(set(before) - set(after)),
+        modified=sorted(rel for rel in set(before) & set(after) if before[rel] != after[rel]),
     )
 
 
@@ -344,17 +392,49 @@ def ensure_snapshot(project: Project | None, session_id: str, turn_index: int) -
         return True
 
 
-def restore_snapshot(project: Project, snapshot: Snapshot) -> None:
+def finalize_snapshot(project: Project | None, session_id: str, turn_index: int) -> bool:
+    """Scelle l'etat final d'un tour qui possede deja son point de depart.
+
+    Un snapshot devient ainsi un vrai commit interne avant/apres, sans
+    modifier le depot Git du projet. Le dernier etat ecrit remplace celui
+    deja capture si un stream est termine une seconde fois apres reprise.
+    """
+    if project is None:
+        return False
+
+    with _LOCK:
+        snapshot = get_snapshot(session_id, turn_index)
+        if snapshot is None:
+            return False
+        root = Path(project.folder_path).resolve()
+        if not root.is_dir():
+            return False
+        try:
+            snapshot.after_location = _take_content_snapshot(root, session_id, turn_index, "after")
+        except OSError:
+            return False
+        save_snapshot(snapshot)
+        return True
+
+
+def restore_snapshot(
+    project: Project, snapshot: Snapshot, state: Literal["before", "after"] = "before"
+) -> None:
     """Brings the project folder back to exactly the state ensure_snapshot
     captured. Only ever called from the explicit, user-confirmed restore
     endpoint (see server.py) - never automatically."""
+    if state == "after" and snapshot.after_location is None:
+        raise RestoreError("this restore point has no final state")
+    location = snapshot.after_location if state == "after" else snapshot.location
+    assert location is not None
     root = Path(project.folder_path).resolve()
 
     if snapshot.kind == "content":
-        _restore_content_snapshot(root, snapshot.location)
+        with _LOCK:
+            _restore_content_snapshot(root, location)
     elif snapshot.kind == "git":
         # legacy - see the module docstring's "Legacy snapshots" section.
-        checkout = _git(["checkout", snapshot.location, "--", "."], root)
+        checkout = _git(["checkout", location, "--", "."], root)
         if checkout.returncode != 0:
             raise RestoreError(checkout.stderr.strip() or "git checkout failed")
         # removes files created after the snapshot: checkout only
@@ -372,11 +452,11 @@ def restore_snapshot(project: Project, snapshot: Snapshot) -> None:
     else:
         # legacy "copy" - see the module docstring's "Legacy snapshots"
         # section.
-        backup_dir = Path(snapshot.location)
+        backup_dir = Path(location)
         if not backup_dir.is_dir():
             raise RestoreError(f"backup no longer exists: {backup_dir}")
         for entry in root.iterdir():
-            if entry.name == ".git":
+            if entry.name in IGNORED_DIRECTORY_NAMES:
                 continue
             if entry.is_dir():
                 shutil.rmtree(entry)
@@ -492,6 +572,35 @@ def diff_snapshot(project: Project, snapshot: Snapshot) -> SnapshotDiff:
     return _diff_copy_snapshot(root, Path(snapshot.location))
 
 
+def commit_diff_snapshot(snapshot: Snapshot) -> SnapshotDiff:
+    """Les changements produits par un tour, entre ses deux etats figes."""
+    if snapshot.kind != "content" or snapshot.after_location is None:
+        raise RestoreError("this restore point has no immutable final state")
+    return _diff_content_manifests(snapshot.location, snapshot.after_location)
+
+
+def _content_from_manifest(manifest_path: str, rel_path: str) -> str | None:
+    content_hash = _load_manifest(manifest_path).get(rel_path)
+    if content_hash is None:
+        return None
+    blob_path = _blob_path(content_hash)
+    if not blob_path.is_file():
+        raise RestoreError(f"snapshot blob missing: {content_hash}")
+    return blob_path.read_bytes().decode("utf-8", errors="replace")
+
+
+def commit_snapshot_file_content(
+    snapshot: Snapshot, rel_path: str
+) -> tuple[str | None, str | None]:
+    """Contenu avant/apres fige d'un fichier modifie par un tour."""
+    if snapshot.kind != "content" or snapshot.after_location is None:
+        raise RestoreError("this restore point has no immutable final state")
+    return (
+        _content_from_manifest(snapshot.location, rel_path),
+        _content_from_manifest(snapshot.after_location, rel_path),
+    )
+
+
 def snapshot_file_content(
     project: Project, snapshot: Snapshot, rel_path: str
 ) -> tuple[str | None, str | None]:
@@ -545,6 +654,8 @@ def _discard_one(snapshot: Snapshot) -> None:
     the actual reclaim step."""
     if snapshot.kind == "content":
         Path(snapshot.location).unlink(missing_ok=True)
+        if snapshot.after_location is not None:
+            Path(snapshot.after_location).unlink(missing_ok=True)
     elif snapshot.kind == "git":
         project = get_project(snapshot.project_id)
         if project is not None:

@@ -50,6 +50,7 @@ import "./App.css";
 import { BackgroundTasksPanel } from "./BackgroundTasksPanel";
 import { type BackgroundTask } from "./BackgroundTasksSection";
 import {
+  assistantGroupModel,
   editFileTarget,
   formatSessionLabel,
   groupMessages,
@@ -64,7 +65,6 @@ import {
   truncateBeforeTurn,
   userMessageAtTurn,
   webSearchSource,
-  type AssistantMsg,
   type ChatMsg,
   type EditFileEdit,
   type MultiAgentSubtaskToolCall,
@@ -1662,7 +1662,20 @@ function App() {
       return;
     }
 
-    const points = await fetchSnapshotPoints(sessionId);
+    let points: SnapshotPoint[];
+    try {
+      points = await fetchSnapshotPoints(sessionId);
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        {
+          kind: "error",
+          text: "Impossible de charger les points de restauration.",
+          time: Date.now(),
+        },
+      ]);
+      return;
+    }
     if (points.length === 0) {
       setMessages((prev) => [
         ...prev,
@@ -1681,7 +1694,11 @@ function App() {
     if (!target) return;
     setUndoDiff(null);
     setUndoTarget(target);
-    void fetchSnapshotDiff(sessionId, target.turn_index).then(setUndoDiff);
+    void fetchSnapshotDiff(sessionId, target.turn_index, "rollback")
+      .then(setUndoDiff)
+      .catch(() => {
+        setUndoDiff(null);
+      });
   }
 
   async function confirmUndo() {
@@ -1693,7 +1710,7 @@ function App() {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ turn_index: undoTarget.turn_index }),
+          body: JSON.stringify({ turn_index: undoTarget.turn_index, state: "before" }),
         },
       );
       setMessages((prev) => [
@@ -2209,6 +2226,7 @@ function App() {
                   args: data.args as Record<string, unknown>,
                   result: data.result as string,
                   time: Date.now(),
+                  model: typeof data.model === "string" ? data.model : undefined,
                 },
               ]);
               // un outil a pu modifier le systeme de fichiers (write_file,
@@ -3211,9 +3229,14 @@ function App() {
                         // qui a pu changer depuis) ; undefined pour un historique
                         // enregistre avant l'ajout de ce champ, l'avatar retombe alors
                         // sur les initiales.
-                        const groupModel = group.items.find(
-                          (it): it is AssistantMsg => it.kind === "assistant",
-                        )?.model;
+                        // A response may contain several assistant fragments
+                        // around tool calls. Older saved conversations did
+                        // not record `model` on those intermediate fragments,
+                        // while the final fragment does have it. Pick any
+                        // known model in the group (from the end, which is
+                        // normally the final answer) instead of letting one
+                        // missing value turn the avatar back into Triton.
+                        const groupModel = assistantGroupModel(group.items);
                         const messageAvatar = modelAvatar(groupModel ?? null);
 
                         return (

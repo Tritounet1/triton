@@ -12,8 +12,20 @@ function jsonResponse(body: unknown, ok = true) {
 }
 
 const points: SnapshotPoint[] = [
-  { turn_index: 1, kind: "content", created_at: "2026-01-01T00:00:00Z", message_preview: "first write" },
-  { turn_index: 2, kind: "content", created_at: "2026-01-02T00:00:00Z", message_preview: "second write" },
+  {
+    turn_index: 1,
+    kind: "content",
+    created_at: "2026-01-01T00:00:00Z",
+    message_preview: "first write",
+    has_final_state: true,
+  },
+  {
+    turn_index: 2,
+    kind: "content",
+    created_at: "2026-01-02T00:00:00Z",
+    message_preview: "second write",
+    has_final_state: true,
+  },
 ];
 
 const diffByTurn: Record<number, SnapshotDiff> = {
@@ -117,11 +129,11 @@ describe("SnapshotHistoryView", () => {
     render(<SnapshotHistoryView sessionId="s1" onBack={vi.fn()} onRestored={onRestored} />);
 
     await screen.findByText("a.txt");
-    await user.click(screen.getByRole("button", { name: "Restaurer à ce point" }));
+    await user.click(screen.getByRole("button", { name: "Recharger cet état" }));
 
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByText(/second write/)).toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "Restaurer" }));
+    await user.click(within(dialog).getByRole("button", { name: "Recharger" }));
 
     await waitFor(() => {
       expect(onRestored).toHaveBeenCalledTimes(1);

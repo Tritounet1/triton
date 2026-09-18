@@ -48,6 +48,9 @@ class Snapshot:
     # which turn (the nth user message in this session, 1-based) this
     # snapshot precedes - see tools/snapshot.py's ensure_snapshot.
     turn_index: int
+    # Etat obtenu une fois le tour termine. Les anciens enregistrements
+    # restent lisibles : ils n'ont simplement pas cet etat final.
+    after_location: str | None = None
 
 
 def _load() -> list[Snapshot]:

@@ -8,6 +8,7 @@ a lone "history compressed" line then silence). Pins down that any such
 exception now surfaces as one failed tool call instead."""
 
 import json
+from typing import cast
 
 import pytest
 from openai.types.chat import (
@@ -83,9 +84,8 @@ def test_an_unexpected_error_around_a_tool_call_does_not_kill_the_stream(tmp_pat
 
     monkeypatch.setattr(server, "timed_stream_chat", fake_timed_stream_chat)
 
-    events = list(
-        server.run_chat_stream(_session_path(tmp_path), [{"role": "user", "content": "hi"}])
-    )
+    session_path = _session_path(tmp_path)
+    events = list(server.run_chat_stream(session_path, [{"role": "user", "content": "hi"}]))
 
     # the stream reached a normal completion - not silently cut off
     assert any("event: done" in e for e in events)
@@ -93,3 +93,10 @@ def test_an_unexpected_error_around_a_tool_call_does_not_kill_the_stream(tmp_pat
     assert len(tool_call_events) == 1
     assert "unexpected failure handling todo_write" in tool_call_events[0]
     assert "RuntimeError" in tool_call_events[0]
+    assert '"model": "test-model"' in tool_call_events[0]
+    saved_tool_request = next(
+        message
+        for message in sessions.load_session(session_path)
+        if message["role"] == "assistant" and message.get("tool_calls")
+    )
+    assert cast(dict[str, object], saved_tool_request)["model"] == "test-model"

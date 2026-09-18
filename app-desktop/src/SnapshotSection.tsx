@@ -31,7 +31,11 @@ export function SnapshotSection({ sessionId, onOpenHistory }: SnapshotSectionPro
   // d'etre remplacee.
   useEffect(() => {
     if (!sessionId) return;
-    void fetchSnapshotPoints(sessionId).then(setPoints);
+    void fetchSnapshotPoints(sessionId)
+      .then(setPoints)
+      .catch(() => {
+        setPoints([]);
+      });
   }, [sessionId]);
 
   if (!sessionId || points.length === 0) return null;
@@ -44,7 +48,8 @@ export function SnapshotSection({ sessionId, onOpenHistory }: SnapshotSectionPro
           s'affichait sur 3 "colonnes" superposees dans un panneau etroit */}
       <div className="flex flex-col gap-1.5 rounded-md px-2 py-1.5">
         <Text size="sm" color="secondary">
-          Filet de sécurité actif pour cette session
+          {points.length} sauvegarde{points.length > 1 ? "s" : ""} interne
+          {points.length > 1 ? "s" : ""} disponible{points.length > 1 ? "s" : ""}
         </Text>
         <div>
           <Button label="Voir l'historique" variant="ghost" size="sm" onClick={onOpenHistory}>

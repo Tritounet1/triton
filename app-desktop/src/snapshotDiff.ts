@@ -11,6 +11,21 @@ export interface SnapshotPoint {
   kind: string;
   created_at: string;
   message_preview: string | null;
+  // absent dans les fixtures et les anciens serveurs ; false signifie un
+  // ancien point "avant ecriture", true un commit interne avant/apres.
+  has_final_state?: boolean;
+}
+
+export type SnapshotView = "rollback" | "commit";
+
+export class SnapshotRequestError extends Error {}
+
+async function requestJson<T>(url: string, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(url, { signal });
+  if (!response.ok) {
+    throw new SnapshotRequestError(`La sauvegarde n'a pas pu être chargée (${response.status}).`);
+  }
+  return (await response.json()) as T;
 }
 
 export interface SnapshotDiff {
@@ -24,14 +39,11 @@ export interface SnapshotDiff {
  * empty when there's none, never a 404. Used by SnapshotSection.tsx (the
  * file panel banner) and App.tsx's /undo command to decide whether to
  * offer a restore action at all, and which turn(s) to offer. */
-export async function fetchSnapshotPoints(sessionId: string): Promise<SnapshotPoint[]> {
-  try {
-    const r = await fetch(`${API_BASE}/sessions/${sessionId}/snapshots`);
-    if (!r.ok) return [];
-    return (await r.json()) as SnapshotPoint[];
-  } catch {
-    return [];
-  }
+export async function fetchSnapshotPoints(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<SnapshotPoint[]> {
+  return requestJson<SnapshotPoint[]>(`${API_BASE}/sessions/${sessionId}/snapshots`, signal);
 }
 
 /** GET /sessions/{id}/snapshot/diff?turn_index=N - what restoring to
@@ -42,16 +54,13 @@ export async function fetchSnapshotPoints(sessionId: string): Promise<SnapshotPo
 export async function fetchSnapshotDiff(
   sessionId: string,
   turnIndex: number,
-): Promise<SnapshotDiff | null> {
-  try {
-    const r = await fetch(
-      `${API_BASE}/sessions/${sessionId}/snapshot/diff?turn_index=${turnIndex}`,
-    );
-    if (!r.ok) return null;
-    return (await r.json()) as SnapshotDiff;
-  } catch {
-    return null;
-  }
+  view: SnapshotView = "rollback",
+  signal?: AbortSignal,
+): Promise<SnapshotDiff> {
+  return requestJson<SnapshotDiff>(
+    `${API_BASE}/sessions/${sessionId}/snapshot/diff?turn_index=${turnIndex}&view=${view}`,
+    signal,
+  );
 }
 
 export interface SnapshotFileContent {
@@ -70,17 +79,14 @@ export async function fetchSnapshotFileContent(
   sessionId: string,
   turnIndex: number,
   path: string,
-): Promise<SnapshotFileContent | null> {
-  try {
-    const r = await fetch(
-      `${API_BASE}/sessions/${sessionId}/snapshot/file` +
-        `?turn_index=${turnIndex}&path=${encodeURIComponent(path)}`,
-    );
-    if (!r.ok) return null;
-    return (await r.json()) as SnapshotFileContent;
-  } catch {
-    return null;
-  }
+  view: SnapshotView = "rollback",
+  signal?: AbortSignal,
+): Promise<SnapshotFileContent> {
+  return requestJson<SnapshotFileContent>(
+    `${API_BASE}/sessions/${sessionId}/snapshot/file` +
+      `?turn_index=${turnIndex}&path=${encodeURIComponent(path)}&view=${view}`,
+    signal,
+  );
 }
 
 export type SnapshotFileChangeType = "created" | "deleted" | "modified";
