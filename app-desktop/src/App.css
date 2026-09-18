@@ -13,6 +13,13 @@ body,
 #root {
   height: 100%;
   margin: 0;
+  /* sans ca, si le contenu depasse la fenetre d'un seul pixel, c'est le
+     document entier qui defile - et notre propre barre du haut (censee
+     rester fixe sous les feux rouge/jaune/vert dessines par macOS a une
+     position fixe dans la fenetre) part avec lui. Tout defilement doit
+     rester a l'interieur d'un conteneur precis (liste de messages,
+     sidebar...), jamais au niveau du document. */
+  overflow: hidden;
 }
 
 * {

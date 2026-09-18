@@ -4,101 +4,103 @@ import { Avatar } from "@astryxdesign/core/Avatar";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Button } from "@astryxdesign/core/Button";
 import {
-    ChatComposer,
-    ChatComposerDrawer,
-    ChatComposerInput,
-    ChatLayout,
-    ChatLayoutScrollButton,
-    ChatMessage,
-    ChatMessageBubble,
-    ChatMessageList,
-    ChatMessageMetadata,
-    ChatSystemMessage,
-    ChatToolCalls,
-    type ChatComposerToken,
-    type ChatComposerTrigger,
+  ChatComposer,
+  ChatComposerDrawer,
+  ChatComposerInput,
+  ChatLayout,
+  ChatLayoutScrollButton,
+  ChatMessage,
+  ChatMessageBubble,
+  ChatMessageList,
+  ChatMessageMetadata,
+  ChatSystemMessage,
+  ChatToolCalls,
+  type ChatComposerToken,
+  type ChatComposerTrigger,
 } from "@astryxdesign/core/Chat";
 import { DropdownMenu } from "@astryxdesign/core/DropdownMenu";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { IconButton } from "@astryxdesign/core/IconButton";
 import { Markdown } from "@astryxdesign/core/Markdown";
 import {
-    SideNav,
-    SideNavHeading,
-    SideNavItem,
-    SideNavSection,
+  SideNav,
+  SideNavHeading,
+  SideNavItem,
+  SideNavSection,
 } from "@astryxdesign/core/SideNav";
+import { Spinner } from "@astryxdesign/core/Spinner";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
-import { Spinner } from "@astryxdesign/core/Spinner";
 import { Theme } from "@astryxdesign/core/theme";
 import { Timestamp } from "@astryxdesign/core/Timestamp";
-import { createStaticSource, type SearchableItem } from "@astryxdesign/core/Typeahead";
+import {
+  createStaticSource,
+  type SearchableItem,
+} from "@astryxdesign/core/Typeahead";
 import { neutralTheme } from "@astryxdesign/theme-neutral/built";
 import {
-    useCallback,
-    useEffect,
-    useRef,
-    useState,
-    type CSSProperties,
-    type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
 } from "react";
 import "./App.css";
 import { BackgroundTasksPanel } from "./BackgroundTasksPanel";
 import { type BackgroundTask } from "./BackgroundTasksSection";
 import {
-    editFileTarget,
-    formatSessionLabel,
-    groupMessages,
-    historyToMessages,
-    isPdfDataUrl,
-    parseEditFileEdits,
-    parseToolDisplay,
-    stripWebSearchSource,
-    toBlocks,
-    toolCallStatus,
-    toolDiffStats,
-    truncateBeforeTurn,
-    userMessageAtTurn,
-    webSearchSource,
-    type AssistantMsg,
-    type ChatMsg,
-    type EditFileEdit,
-    type MultiAgentSubtaskToolCall,
-    type RawSessionMessage,
-    type ToolCallLike,
-    type ToolMsg,
+  editFileTarget,
+  formatSessionLabel,
+  groupMessages,
+  historyToMessages,
+  isPdfDataUrl,
+  parseEditFileEdits,
+  parseToolDisplay,
+  stripWebSearchSource,
+  toBlocks,
+  toolCallStatus,
+  toolDiffStats,
+  truncateBeforeTurn,
+  userMessageAtTurn,
+  webSearchSource,
+  type AssistantMsg,
+  type ChatMsg,
+  type EditFileEdit,
+  type MultiAgentSubtaskToolCall,
+  type RawSessionMessage,
+  type ToolCallLike,
+  type ToolMsg,
 } from "./chatMessages";
+import { type OpenFile } from "./fileViewer";
+import { FileViewerPanel } from "./FileViewerPanel";
 import { formatArgs } from "./format";
 import {
-    CheckIcon,
-    ChevronRightIcon,
-    CopyIcon,
-    DownloadIcon,
-    FileIcon,
-    FolderIcon,
-    GearIcon,
-    MoonIcon,
-    MoreIcon,
-    PencilIcon,
-    PinIcon,
-    PlusIcon,
-    RefreshIcon,
-    SearchIcon,
-    SidebarIcon,
-    SunIcon,
-    TrashIcon,
-    XIcon,
+  CheckIcon,
+  ChevronRightIcon,
+  CopyIcon,
+  DownloadIcon,
+  FileIcon,
+  FolderIcon,
+  GearIcon,
+  MoonIcon,
+  MoreIcon,
+  PencilIcon,
+  PinIcon,
+  PlusIcon,
+  RefreshIcon,
+  SearchIcon,
+  SidebarIcon,
+  SunIcon,
+  TrashIcon,
+  XIcon,
 } from "./icons";
 import { modelAvatar } from "./modelFamilies";
 import { NewProjectModal } from "./NewProjectModal";
 import { notifyIfBackground } from "./notifications";
-import { type OpenFile } from "./fileViewer";
-import { FileViewerPanel } from "./FileViewerPanel";
 import { ProjectFilePanel } from "./ProjectFilePanel";
 import { SearchPage } from "./SearchPage";
 import { SettingsModal } from "./SettingsModal";
-import { parseSSE } from "./sse";
 import {
   describeSnapshotDiff,
   fetchSnapshotDiff,
@@ -107,6 +109,7 @@ import {
   type SnapshotPoint,
 } from "./snapshotDiff";
 import { SnapshotHistoryView } from "./SnapshotHistoryView";
+import { parseSSE } from "./sse";
 import { SubagentsPanel } from "./SubagentsPanel";
 import { TaskView } from "./TaskView";
 
@@ -132,7 +135,16 @@ const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 // texte du message a l'envoi, donc dans le contexte du modele - une limite
 // bien plus basse que celle des images/PDF est necessaire.
 const MAX_TEXT_ATTACHMENT_BYTES = 200 * 1024;
-const TEXT_ATTACHMENT_EXTENSIONS = [".txt", ".md", ".markdown", ".csv", ".json", ".log", ".yaml", ".yml"];
+const TEXT_ATTACHMENT_EXTENSIONS = [
+  ".txt",
+  ".md",
+  ".markdown",
+  ".csv",
+  ".json",
+  ".log",
+  ".yaml",
+  ".yml",
+];
 // declenche le mode multi-agent (orchestrator.py) directement depuis le
 // chat normal, plutot qu'un mode/page a part : "/multi-agents <tache>"
 // dans le composer habituel.
@@ -154,7 +166,8 @@ const SLASH_COMMANDS: SearchableItem<{ description: string }>[] = [
     id: "multi-agents",
     label: "multi-agents",
     auxiliaryData: {
-      description: "Répartit la tâche entre plusieurs agents spécialisés (recherche, code, rédaction...)",
+      description:
+        "Répartit la tâche entre plusieurs agents spécialisés (recherche, code, rédaction...)",
     },
   },
   {
@@ -168,42 +181,48 @@ const SLASH_COMMANDS: SearchableItem<{ description: string }>[] = [
     id: "cost",
     label: "cost",
     auxiliaryData: {
-      description: "Affiche le coût et les tokens utilisés dans cette conversation",
+      description:
+        "Affiche le coût et les tokens utilisés dans cette conversation",
     },
   },
   {
     id: "undo",
     label: "undo",
     auxiliaryData: {
-      description: "Restaure le dossier du projet à l'état d'avant cette session (filet de sécurité)",
+      description:
+        "Restaure le dossier du projet à l'état d'avant cette session (filet de sécurité)",
     },
   },
   {
     id: "remember-session",
     label: "remember session",
     auxiliaryData: {
-      description: "Note quelque chose pour cette conversation (ou son projet, si elle en a un)",
+      description:
+        "Note quelque chose pour cette conversation (ou son projet, si elle en a un)",
     },
   },
   {
     id: "remember-global",
     label: "remember global",
     auxiliaryData: {
-      description: "Note quelque chose dans la mémoire globale, partagée par toutes les conversations",
+      description:
+        "Note quelque chose dans la mémoire globale, partagée par toutes les conversations",
     },
   },
   {
     id: "compact",
     label: "compact",
     auxiliaryData: {
-      description: "Résume les échanges les plus anciens dès maintenant, sans attendre que le contexte soit plein",
+      description:
+        "Résume les échanges les plus anciens dès maintenant, sans attendre que le contexte soit plein",
     },
   },
   {
     id: "yolo",
     label: "yolo",
     auxiliaryData: {
-      description: "Active/désactive le mode YOLO pour cette conversation : plus de demande d'autorisation avant une action (écriture, commande...)",
+      description:
+        "Active/désactive le mode YOLO pour cette conversation : plus de demande d'autorisation avant une action (écriture, commande...)",
     },
   },
 ];
@@ -227,8 +246,8 @@ const composerTriggers: ChatComposerTrigger[] = [
       variant: "neutral",
     }),
     renderItem: (item) => {
-      const description = (item as SearchableItem<{ description: string }>).auxiliaryData
-        ?.description;
+      const description = (item as SearchableItem<{ description: string }>)
+        .auxiliaryData?.description;
       return (
         <div className="flex flex-col gap-0.5 px-2 py-1.5">
           <Text size="sm" weight="medium">
@@ -498,7 +517,9 @@ function WriteFileDiff({
   // donc ce composant remonte a chaque fois plutot que de reutiliser son
   // etat entre deux appels differents.
   useEffect(() => {
-    fetch(`${API_BASE}/projects/${projectId}/file?path=${encodeURIComponent(path)}`)
+    fetch(
+      `${API_BASE}/projects/${projectId}/file?path=${encodeURIComponent(path)}`,
+    )
       .then((r) => (r.ok ? r.text() : null))
       .then((text) => {
         setOldContent(text);
@@ -512,7 +533,13 @@ function WriteFileDiff({
   }, [projectId, path]);
 
   if (!loaded) {
-    return <Spinner size="sm" shade="subtle" aria-label="Chargement du contenu actuel" />;
+    return (
+      <Spinner
+        size="sm"
+        shade="subtle"
+        aria-label="Chargement du contenu actuel"
+      />
+    );
   }
 
   return <EditFileDiff oldString={oldContent ?? ""} newString={newContent} />;
@@ -539,7 +566,11 @@ function EditFileEdits({ edits }: { edits: EditFileEdit[] }) {
             </Text>
           )}
           {hunks.map((h, i) => (
-            <EditFileDiff key={i} oldString={h.old_string} newString={h.new_string} />
+            <EditFileDiff
+              key={i}
+              oldString={h.old_string}
+              newString={h.new_string}
+            />
           ))}
         </div>
       ))}
@@ -562,7 +593,8 @@ function toolResultDetail(t: ToolCallLike): ReactNode {
     // ecrit, lui, est un fait connu avec certitude (l'argument de l'appel).
     return <EditFileDiff oldString="" newString={content} />;
   }
-  const result = t.tool === "web_search" ? stripWebSearchSource(t.result) : t.result;
+  const result =
+    t.tool === "web_search" ? stripWebSearchSource(t.result) : t.result;
   return (
     <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap text-xs">
       {result}
@@ -586,8 +618,12 @@ function multiAgentSubtaskDetail(t: ToolMsg): ReactNode {
           calls={calls.map((c) => ({
             name: c.tool,
             status: toolCallStatus(c.result),
-            node: c.tool === "web_search" ? webSearchSource(c.result) : undefined,
-            target: c.tool === "edit_file" ? editFileTarget(c.args) : formatArgs(c.args),
+            node:
+              c.tool === "web_search" ? webSearchSource(c.result) : undefined,
+            target:
+              c.tool === "edit_file"
+                ? editFileTarget(c.args)
+                : formatArgs(c.args),
             ...toolDiffStats(c),
             resultDetail: toolResultDetail(c),
           }))}
@@ -621,7 +657,9 @@ function App() {
   // celle affichee a l'ecran. `sending` (defini plus bas, une fois
   // sessionId disponible ; utilise partout ailleurs dans l'UI) ne reflete
   // que celui de la conversation actuellement affichee.
-  const [sendingSessionIds, setSendingSessionIds] = useState<Set<string>>(() => new Set());
+  const [sendingSessionIds, setSendingSessionIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   // vrai des qu'aucun evenement SSE n'est arrive depuis SSE_IDLE_MS pour la
   // conversation affichee - couvre le "silence" pendant qu'un outil tourne
   // cote serveur juste apres un morceau de texte assistant (ex. "Je vais
@@ -635,7 +673,9 @@ function App() {
   // (PUT /sessions/{id}/model) - prend le pas sur apiModel (le defaut
   // global) tant qu'il est defini. null = pas de surcharge, la conversation
   // suit le modele global comme avant l'existence de cette commande.
-  const [sessionModelOverride, setSessionModelOverride] = useState<string | null>(null);
+  const [sessionModelOverride, setSessionModelOverride] = useState<
+    string | null
+  >(null);
   // /yolo pour CETTE conversation (voir GET/POST /sessions/{id}/yolo) :
   // affiche un bandeau persistant tant qu'actif (pas juste un toast au
   // moment du bascule), puisque ca change silencieusement ce que fait
@@ -646,12 +686,19 @@ function App() {
   // (active/desactive et filtre le bouton "joindre" du composer) sans
   // dupliquer cette logique cote serveur.
   const [modelsCatalog, setModelsCatalog] = useState<
-    { id: string; name: string; supports_images: boolean; supports_files: boolean }[]
+    {
+      id: string;
+      name: string;
+      supports_images: boolean;
+      supports_files: boolean;
+    }[]
   >([]);
-  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
-  const [pendingTextAttachments, setPendingTextAttachments] = useState<PendingTextAttachment[]>(
-    [],
-  );
+  const [pendingAttachments, setPendingAttachments] = useState<
+    PendingAttachment[]
+  >([]);
+  const [pendingTextAttachments, setPendingTextAttachments] = useState<
+    PendingTextAttachment[]
+  >([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // compteur plutot qu'un booleen simple : dragenter/dragleave se
   // declenchent aussi en survolant les enfants (la liste de messages, le
@@ -718,13 +765,16 @@ function App() {
     useState<PendingConfirmation | null>(null);
   // repliee par defaut (style Claude Desktop) - args/diff caches jusqu'a
   // ce qu'on clique pour les voir.
-  const [confirmationDetailsExpanded, setConfirmationDetailsExpanded] = useState(false);
+  const [confirmationDetailsExpanded, setConfirmationDetailsExpanded] =
+    useState(false);
   // remise a false a chaque nouvelle confirmation (id different - y
   // compris en revenant sur une conversation qui en avait une en attente,
   // voir switchSession) : ajustement synchrone pendant le rendu (pattern
   // React officiel "adjusting state when a prop changes"), pas dans un
   // effet - react-hooks/set-state-in-effect l'interdirait sinon.
-  const [lastConfirmationId, setLastConfirmationId] = useState<string | null>(null);
+  const [lastConfirmationId, setLastConfirmationId] = useState<string | null>(
+    null,
+  );
   if ((pendingConfirmation?.id ?? null) !== lastConfirmationId) {
     setLastConfirmationId(pendingConfirmation?.id ?? null);
     setConfirmationDetailsExpanded(false);
@@ -739,7 +789,9 @@ function App() {
   // conversation en question n'est pas celle affichee - voir sendMessage/
   // cancelMessage/respondToConfirmation.
   const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
-  const pendingConfirmationsRef = useRef<Map<string, PendingConfirmation>>(new Map());
+  const pendingConfirmationsRef = useRef<Map<string, PendingConfirmation>>(
+    new Map(),
+  );
   // minuteur du "silence SSE" (voir awaitingSseEvent) - une seule
   // conversation affichee a la fois, donc pas besoin d'une Map par session
   // comme les refs juste au-dessus.
@@ -759,7 +811,8 @@ function App() {
     if (!el) return;
     function onScroll() {
       if (!el) return;
-      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      const distanceFromBottom =
+        el.scrollHeight - el.scrollTop - el.clientHeight;
       const scrolledUp = distanceFromBottom > SCROLL_BUTTON_THRESHOLD_PX;
       setShowScrollButton(scrolledUp);
       if (!scrolledUp) setHasNewMessage(false);
@@ -818,7 +871,9 @@ function App() {
   const [themeMode, setThemeMode] = useState<"light" | "dark">(() =>
     localStorage.getItem("triton_theme") === "light" ? "light" : "dark",
   );
-  const [view, setView] = useState<"chat" | "task" | "search" | "snapshot_history">("chat");
+  const [view, setView] = useState<
+    "chat" | "task" | "search" | "snapshot_history"
+  >("chat");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
@@ -907,7 +962,9 @@ function App() {
     const pinned = !session.pinned;
     // optimiste : la sidebar re-trie immediatement, pas d'attente du
     // round-trip pour un simple booleen peu risque de rater
-    setSessions((prev) => prev.map((s) => (s.id === session.id ? { ...s, pinned } : s)));
+    setSessions((prev) =>
+      prev.map((s) => (s.id === session.id ? { ...s, pinned } : s)),
+    );
     await fetch(`${API_BASE}/sessions/${session.id}/pin`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -969,7 +1026,12 @@ function App() {
       .then((r) => (r.ok ? r.json() : []))
       .then(
         (
-          data: { id: string; name: string; supports_images: boolean; supports_files: boolean }[],
+          data: {
+            id: string;
+            name: string;
+            supports_images: boolean;
+            supports_files: boolean;
+          }[],
         ) => {
           setModelsCatalog(data);
         },
@@ -990,7 +1052,10 @@ function App() {
     // dossier du projet reste invisible tant qu'on n'a pas change de
     // conversation puis qu'on n'y revient (bug signale par l'utilisateur).
     void loadSessions().then((list) => {
-      if (stored) setActiveProjectId(list.find((s) => s.id === stored)?.project_id ?? null);
+      if (stored)
+        setActiveProjectId(
+          list.find((s) => s.id === stored)?.project_id ?? null,
+        );
     });
     loadProjects();
   }, []);
@@ -1097,17 +1162,21 @@ function App() {
   }
 
   function stopTask(id: string) {
-    fetch(`${API_BASE}/background_tasks/${id}/stop`, { method: "POST" }).catch(() => {
-      // API hors ligne : le prochain polling reflete quand meme l'etat reel
-    });
+    fetch(`${API_BASE}/background_tasks/${id}/stop`, { method: "POST" }).catch(
+      () => {
+        // API hors ligne : le prochain polling reflete quand meme l'etat reel
+      },
+    );
   }
 
   function deleteTask(id: string) {
     setBackgroundTasks((prev) => prev.filter((t) => t.id !== id));
-    fetch(`${API_BASE}/background_tasks/${id}`, { method: "DELETE" }).catch(() => {
-      // API hors ligne : le prochain polling la fera reapparaitre si la
-      // suppression n'a en fait pas eu lieu cote serveur
-    });
+    fetch(`${API_BASE}/background_tasks/${id}`, { method: "DELETE" }).catch(
+      () => {
+        // API hors ligne : le prochain polling la fera reapparaitre si la
+        // suppression n'a en fait pas eu lieu cote serveur
+      },
+    );
   }
 
   // `sending` n'est plus une raison de bloquer le changement de
@@ -1200,14 +1269,21 @@ function App() {
           continue;
         }
         void file.text().then((content) => {
-          setPendingTextAttachments((prev) => [...prev, { name: file.name, content }]);
+          setPendingTextAttachments((prev) => [
+            ...prev,
+            { name: file.name, content },
+          ]);
         });
         continue;
       }
 
       const isImage = file.type.startsWith("image/");
       const isPdf = file.type === "application/pdf";
-      if ((isImage && !supportsImages) || (isPdf && !supportsFiles) || (!isImage && !isPdf)) {
+      if (
+        (isImage && !supportsImages) ||
+        (isPdf && !supportsFiles) ||
+        (!isImage && !isPdf)
+      ) {
         continue;
       }
       if (file.size > MAX_ATTACHMENT_BYTES) {
@@ -1225,7 +1301,10 @@ function App() {
       reader.onload = () => {
         const dataUrl = reader.result;
         if (typeof dataUrl !== "string") return;
-        setPendingAttachments((prev) => [...prev, { name: file.name, dataUrl }]);
+        setPendingAttachments((prev) => [
+          ...prev,
+          { name: file.name, dataUrl },
+        ]);
       };
       reader.readAsDataURL(file);
     }
@@ -1302,7 +1381,10 @@ function App() {
   // depuis que changer de conversation pendant un envoi est permis (un
   // run multi-agent lance dans une conversation qu'on a quittee ne doit
   // pas ecrire dans celle qu'on regarde desormais).
-  function pollMultiAgentRun(runId: string, targetSessionId: string | null): Promise<void> {
+  function pollMultiAgentRun(
+    runId: string,
+    targetSessionId: string | null,
+  ): Promise<void> {
     function isDisplayed(): boolean {
       return displayedSessionIdRef.current === targetSessionId;
     }
@@ -1328,7 +1410,9 @@ function App() {
                     subtaskDescription: s.description,
                     subtaskToolCalls: s.tool_calls,
                   };
-                  const idx = next.findIndex((m) => m.kind === "tool" && m.id === s.id);
+                  const idx = next.findIndex(
+                    (m) => m.kind === "tool" && m.id === s.id,
+                  );
                   if (idx >= 0) next[idx] = entry;
                   else next.push(entry);
                 }
@@ -1341,7 +1425,8 @@ function App() {
               if (isDisplayed()) {
                 const finalText =
                   run.status === "done"
-                    ? (run.final_result ?? "(le planificateur n'a rien synthétisé)")
+                    ? (run.final_result ??
+                      "(le planificateur n'a rien synthétisé)")
                     : (run.error ?? "le run multi-agent a échoué");
                 setMessages((prev) => [
                   ...prev,
@@ -1371,7 +1456,10 @@ function App() {
 
     setInput("");
     if (isDisplayed()) {
-      setMessages((prev) => [...prev, { kind: "user", text: rawCommand, time: Date.now() }]);
+      setMessages((prev) => [
+        ...prev,
+        { kind: "user", text: rawCommand, time: Date.now() },
+      ]);
     }
     markSending(sessionKey, true);
 
@@ -1379,7 +1467,11 @@ function App() {
       const res = await fetch(`${API_BASE}/orchestrator`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ task, session_id: startSessionId, project_id: activeProjectId }),
+        body: JSON.stringify({
+          task,
+          session_id: startSessionId,
+          project_id: activeProjectId,
+        }),
       });
       if (!res.ok) throw new Error(String(res.status));
       const data = (await res.json()) as { run_id: string; session_id: string };
@@ -1419,7 +1511,10 @@ function App() {
    * chat_loop.py). */
   async function handleCostCommand() {
     setInput("");
-    setMessages((prev) => [...prev, { kind: "user", text: COST_COMMAND, time: Date.now() }]);
+    setMessages((prev) => [
+      ...prev,
+      { kind: "user", text: COST_COMMAND, time: Date.now() },
+    ]);
 
     if (!sessionId) {
       setMessages((prev) => [
@@ -1475,7 +1570,10 @@ function App() {
   async function handleModelCommand(rawCommand: string) {
     const query = rawCommand.slice(MODEL_COMMAND_PREFIX.length).trim();
     setInput("");
-    setMessages((prev) => [...prev, { kind: "user", text: rawCommand, time: Date.now() }]);
+    setMessages((prev) => [
+      ...prev,
+      { kind: "user", text: rawCommand, time: Date.now() },
+    ]);
 
     if (!sessionId) {
       setMessages((prev) => [
@@ -1491,7 +1589,11 @@ function App() {
     if (!query) {
       setMessages((prev) => [
         ...prev,
-        { kind: "error", text: "Précise un modèle, ex. /model gpt-5", time: Date.now() },
+        {
+          kind: "error",
+          text: "Précise un modèle, ex. /model gpt-5",
+          time: Date.now(),
+        },
       ]);
       return;
     }
@@ -1503,7 +1605,11 @@ function App() {
     if (matches.length === 0) {
       setMessages((prev) => [
         ...prev,
-        { kind: "error", text: `Aucun modèle ne correspond à « ${query} ».`, time: Date.now() },
+        {
+          kind: "error",
+          text: `Aucun modèle ne correspond à « ${query} ».`,
+          time: Date.now(),
+        },
       ]);
       return;
     }
@@ -1517,7 +1623,9 @@ function App() {
     });
     setSessionModelOverride(chosen.id);
     const note =
-      matches.length > 1 ? ` (${matches.length} correspondances, la plus proche a été prise)` : "";
+      matches.length > 1
+        ? ` (${matches.length} correspondances, la plus proche a été prise)`
+        : "";
     setMessages((prev) => [
       ...prev,
       {
@@ -1535,12 +1643,19 @@ function App() {
    * (action irreversible, meme depuis une commande). */
   async function handleUndoCommand() {
     setInput("");
-    setMessages((prev) => [...prev, { kind: "user", text: UNDO_COMMAND, time: Date.now() }]);
+    setMessages((prev) => [
+      ...prev,
+      { kind: "user", text: UNDO_COMMAND, time: Date.now() },
+    ]);
 
     if (!sessionId) {
       setMessages((prev) => [
         ...prev,
-        { kind: "error", text: "Aucune conversation active pour l'instant.", time: Date.now() },
+        {
+          kind: "error",
+          text: "Aucune conversation active pour l'instant.",
+          time: Date.now(),
+        },
       ]);
       return;
     }
@@ -1571,11 +1686,14 @@ function App() {
     if (!sessionId || !undoTarget) return;
     setUndoing(true);
     try {
-      const res = await fetch(`${API_BASE}/sessions/${sessionId}/snapshot/restore`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ turn_index: undoTarget.turn_index }),
-      });
+      const res = await fetch(
+        `${API_BASE}/sessions/${sessionId}/snapshot/restore`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ turn_index: undoTarget.turn_index }),
+        },
+      );
       setMessages((prev) => [
         ...prev,
         res.ok
@@ -1606,7 +1724,10 @@ function App() {
    * seule - jamais les deux. */
   async function handleRememberCommand(rawCommand: string) {
     setInput("");
-    setMessages((prev) => [...prev, { kind: "user", text: rawCommand, time: Date.now() }]);
+    setMessages((prev) => [
+      ...prev,
+      { kind: "user", text: rawCommand, time: Date.now() },
+    ]);
 
     const rest = rawCommand.slice(REMEMBER_PREFIX.length);
     const restLower = rest.toLowerCase();
@@ -1632,7 +1753,11 @@ function App() {
     if (!note) {
       setMessages((prev) => [
         ...prev,
-        { kind: "error", text: "Précise une note à retenir.", time: Date.now() },
+        {
+          kind: "error",
+          text: "Précise une note à retenir.",
+          time: Date.now(),
+        },
       ]);
       return;
     }
@@ -1647,12 +1772,20 @@ function App() {
         if (!res.ok) throw new Error(String(res.status));
         setMessages((prev) => [
           ...prev,
-          { kind: "info", text: `Retenu dans la mémoire globale : ${note}`, time: Date.now() },
+          {
+            kind: "info",
+            text: `Retenu dans la mémoire globale : ${note}`,
+            time: Date.now(),
+          },
         ]);
       } catch {
         setMessages((prev) => [
           ...prev,
-          { kind: "error", text: "impossible d'enregistrer cette note.", time: Date.now() },
+          {
+            kind: "error",
+            text: "impossible d'enregistrer cette note.",
+            time: Date.now(),
+          },
         ]);
       }
       return;
@@ -1681,12 +1814,20 @@ function App() {
         : "cette conversation";
       setMessages((prev) => [
         ...prev,
-        { kind: "info", text: `Retenu pour ${scopeLabel} : ${note}`, time: Date.now() },
+        {
+          kind: "info",
+          text: `Retenu pour ${scopeLabel} : ${note}`,
+          time: Date.now(),
+        },
       ]);
     } catch {
       setMessages((prev) => [
         ...prev,
-        { kind: "error", text: "impossible d'enregistrer cette note.", time: Date.now() },
+        {
+          kind: "error",
+          text: "impossible d'enregistrer cette note.",
+          time: Date.now(),
+        },
       ]);
     }
   }
@@ -1698,25 +1839,41 @@ function App() {
    * MAX_CONTEXT_CHARS (voir chat_loop.py). */
   async function handleCompactCommand() {
     setInput("");
-    setMessages((prev) => [...prev, { kind: "user", text: COMPACT_COMMAND, time: Date.now() }]);
+    setMessages((prev) => [
+      ...prev,
+      { kind: "user", text: COMPACT_COMMAND, time: Date.now() },
+    ]);
 
     if (!sessionId) {
       setMessages((prev) => [
         ...prev,
-        { kind: "error", text: "Aucune conversation active pour l'instant.", time: Date.now() },
+        {
+          kind: "error",
+          text: "Aucune conversation active pour l'instant.",
+          time: Date.now(),
+        },
       ]);
       return;
     }
 
     try {
-      const res = await fetch(`${API_BASE}/sessions/${sessionId}/compact`, { method: "POST" });
+      const res = await fetch(`${API_BASE}/sessions/${sessionId}/compact`, {
+        method: "POST",
+      });
       if (!res.ok) throw new Error(String(res.status));
       const data = (await res.json()) as { result: string };
-      setMessages((prev) => [...prev, { kind: "info", text: data.result, time: Date.now() }]);
+      setMessages((prev) => [
+        ...prev,
+        { kind: "info", text: data.result, time: Date.now() },
+      ]);
     } catch {
       setMessages((prev) => [
         ...prev,
-        { kind: "error", text: "impossible de résumer cette conversation.", time: Date.now() },
+        {
+          kind: "error",
+          text: "impossible de résumer cette conversation.",
+          time: Date.now(),
+        },
       ]);
     }
   }
@@ -1729,18 +1886,27 @@ function App() {
    * ponctuel). */
   async function handleYoloCommand() {
     setInput("");
-    setMessages((prev) => [...prev, { kind: "user", text: YOLO_COMMAND, time: Date.now() }]);
+    setMessages((prev) => [
+      ...prev,
+      { kind: "user", text: YOLO_COMMAND, time: Date.now() },
+    ]);
 
     if (!sessionId) {
       setMessages((prev) => [
         ...prev,
-        { kind: "error", text: "Aucune conversation active pour l'instant.", time: Date.now() },
+        {
+          kind: "error",
+          text: "Aucune conversation active pour l'instant.",
+          time: Date.now(),
+        },
       ]);
       return;
     }
 
     try {
-      const res = await fetch(`${API_BASE}/sessions/${sessionId}/yolo`, { method: "POST" });
+      const res = await fetch(`${API_BASE}/sessions/${sessionId}/yolo`, {
+        method: "POST",
+      });
       if (!res.ok) throw new Error(String(res.status));
       const data = (await res.json()) as { enabled: boolean };
       setYoloEnabled(data.enabled);
@@ -1757,7 +1923,11 @@ function App() {
     } catch {
       setMessages((prev) => [
         ...prev,
-        { kind: "error", text: "impossible de changer le mode YOLO.", time: Date.now() },
+        {
+          kind: "error",
+          text: "impossible de changer le mode YOLO.",
+          time: Date.now(),
+        },
       ]);
     }
   }
@@ -1803,7 +1973,10 @@ function App() {
     const text = rawText.trim();
     const isEdit = editTurnIndex !== undefined;
     if (
-      (!text && !isEdit && pendingAttachments.length === 0 && pendingTextAttachments.length === 0) ||
+      (!text &&
+        !isEdit &&
+        pendingAttachments.length === 0 &&
+        pendingTextAttachments.length === 0) ||
       sending
     ) {
       // the composer stays typable while a response is in flight (see
@@ -1848,10 +2021,14 @@ function App() {
     }
 
     const startTime = performance.now();
-    const attachments = isEdit ? (attachmentsOverride ?? []) : pendingAttachments;
+    const attachments = isEdit
+      ? (attachmentsOverride ?? [])
+      : pendingAttachments;
     const textAttachments = isEdit ? [] : pendingTextAttachments;
 
-    const sentImages = attachments.filter((a) => !isPdfDataUrl(a.dataUrl)).map((a) => a.dataUrl);
+    const sentImages = attachments
+      .filter((a) => !isPdfDataUrl(a.dataUrl))
+      .map((a) => a.dataUrl);
     const sentFiles = attachments.filter((a) => isPdfDataUrl(a.dataUrl));
 
     // les fichiers texte n'existent pas comme piece jointe pour le serveur
@@ -1860,7 +2037,9 @@ function App() {
     // relecture depuis l'historique, pas de reconstruction speciale requise.
     const outgoingText = [
       text,
-      ...textAttachments.map((a) => `--- ${a.name} ---\n\`\`\`\n${a.content}\n\`\`\``),
+      ...textAttachments.map(
+        (a) => `--- ${a.name} ---\n\`\`\`\n${a.content}\n\`\`\``,
+      ),
     ]
       .filter(Boolean)
       .join("\n\n");
@@ -1938,7 +2117,8 @@ function App() {
     // temps (un seul minuteur, pas une Map par session - voir sseIdleTimerRef).
     function noteSseEvent() {
       if (!isDisplayed()) return;
-      if (sseIdleTimerRef.current !== null) clearTimeout(sseIdleTimerRef.current);
+      if (sseIdleTimerRef.current !== null)
+        clearTimeout(sseIdleTimerRef.current);
       setAwaitingSseEvent(false);
       sseIdleTimerRef.current = setTimeout(() => {
         setAwaitingSseEvent(true);
@@ -1956,7 +2136,10 @@ function App() {
           session_id: startSessionId,
           message: outgoingText,
           project_id: activeProjectId,
-          attachments: attachments.map((a) => ({ name: a.name, data_url: a.dataUrl })),
+          attachments: attachments.map((a) => ({
+            name: a.name,
+            data_url: a.dataUrl,
+          })),
           edit_turn_index: editTurnIndex ?? null,
         }),
         signal: controller.signal,
@@ -1973,10 +2156,12 @@ function App() {
               // cette conversation vient d'obtenir son vrai id du serveur -
               // deplace son suivi (envoi/annulation) de la cle "" vers celui-ci
               moveSendingKey(currentSessionKey, id);
-              const controllerForThis = abortControllersRef.current.get(currentSessionKey);
+              const controllerForThis =
+                abortControllersRef.current.get(currentSessionKey);
               abortControllersRef.current.delete(currentSessionKey);
               currentSessionKey = id;
-              if (controllerForThis) abortControllersRef.current.set(id, controllerForThis);
+              if (controllerForThis)
+                abortControllersRef.current.set(id, controllerForThis);
               // ne navigue vers cette toute nouvelle conversation que si
               // l'utilisateur regarde encore ce qu'il etait en train de
               // composer - sinon on le laisserait la ou il est alle entre-temps
@@ -2000,7 +2185,10 @@ function App() {
             setSessions((prev) =>
               prev.some((s) => s.id === id)
                 ? prev.map((s) => (s.id === id ? { ...s, title } : s))
-                : [{ id, title, project_id: activeProjectId, pinned: false }, ...prev],
+                : [
+                    { id, title, project_id: activeProjectId, pinned: false },
+                    ...prev,
+                  ],
             );
             break;
           }
@@ -2082,7 +2270,11 @@ function App() {
             if (isDisplayed()) {
               setMessages((prev) => [
                 ...prev,
-                { kind: "info", text: data.message as string, time: Date.now() },
+                {
+                  kind: "info",
+                  text: data.message as string,
+                  time: Date.now(),
+                },
               ]);
             }
             break;
@@ -2091,7 +2283,11 @@ function App() {
             if (isDisplayed()) {
               setMessages((prev) => [
                 ...prev,
-                { kind: "error", text: data.message as string, time: Date.now() },
+                {
+                  kind: "error",
+                  text: data.message as string,
+                  time: Date.now(),
+                },
               ]);
             }
             break;
@@ -2223,7 +2419,6 @@ function App() {
     };
   }, [pendingConfirmation, respondToConfirmation]);
 
-
   // raccourcis globaux, actifs partout dans l'app (pas seulement pendant une
   // reponse en cours, contrairement a echap ci-dessus) : cmd/ctrl+K pour la
   // recherche, cmd/ctrl+N pour une nouvelle conversation.
@@ -2302,290 +2497,306 @@ function App() {
           : "Joindre un fichier texte";
 
   const sideNavElement = (
-          <SideNav
-            header={
-              <SideNavHeading
-                heading="Triton"
-                icon={<Avatar src="/default-logo.png" name="Triton" size="lg" />}
-                headerEndContent={
-                  <div className="flex items-center gap-0.5">
-                    {!usesMacTitlebarOverlay && (
-                      <IconButton
-                        label={sidebarCollapsed ? "Épingler ouverte" : "Fermer la barre latérale"}
-                        icon={<SidebarIcon />}
-                        variant="ghost"
+    <SideNav
+      header={
+        <SideNavHeading
+          heading="Triton"
+          icon={<Avatar src="/default-logo.png" name="Triton" size="lg" />}
+          headerEndContent={
+            <div className="flex items-center gap-0.5">
+              {!usesMacTitlebarOverlay && (
+                <IconButton
+                  label={
+                    sidebarCollapsed
+                      ? "Épingler ouverte"
+                      : "Fermer la barre latérale"
+                  }
+                  icon={<SidebarIcon />}
+                  variant="ghost"
+                  size="sm"
+                  onClick={toggleSidebar}
+                />
+              )}
+              <IconButton
+                label="Rechercher"
+                icon={<SearchIcon />}
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setView("search");
+                }}
+              />
+            </div>
+          }
+        />
+      }
+      topContent={
+        <Button
+          label="Nouvelle conversation"
+          icon={<PlusIcon />}
+          variant="secondary"
+          size="sm"
+          onClick={startNewSession}
+          className="w-full justify-start"
+        />
+      }
+      footer={
+        <div className="flex items-center justify-end gap-0.5 px-1 py-1">
+          <IconButton
+            label="Paramètres"
+            icon={<GearIcon />}
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setSettingsOpen(true);
+            }}
+          />
+          <IconButton
+            label={
+              themeMode === "dark"
+                ? "Passer en thème clair"
+                : "Passer en thème sombre"
+            }
+            icon={themeMode === "dark" ? <MoonIcon /> : <SunIcon />}
+            variant="ghost"
+            size="sm"
+            onClick={toggleTheme}
+          />
+        </div>
+      }
+    >
+      <SideNavSection
+        title="Projets"
+        endContent={
+          <IconButton
+            label="Nouveau projet"
+            icon={<PlusIcon />}
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setShowProjectForm(true);
+            }}
+          />
+        }
+      >
+        {projects.length === 0 && (
+          <Text size="2xs" color="secondary" className="block px-2 py-1">
+            Aucun projet.
+          </Text>
+        )}
+        {projects.map((p) => {
+          const isCollapsed = collapsedProjectIds.has(p.id);
+          return (
+            <div key={p.id}>
+              {editingProjectId === p.id ? (
+                <div className="px-2 py-1">
+                  <TextInput
+                    value={editingProjectValue}
+                    onChange={setEditingProjectValue}
+                    isLabelHidden
+                    label="Nom du projet"
+                    size="sm"
+                    hasAutoFocus
+                    onEnter={() => {
+                      void commitRenameProject(p.id);
+                    }}
+                    onBlur={() => {
+                      void commitRenameProject(p.id);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") setEditingProjectId(null);
+                    }}
+                  />
+                </div>
+              ) : (
+                <div className="group">
+                  <SideNavItem
+                    label={p.name}
+                    icon={<FolderIcon className="h-4 w-4" />}
+                    isSelected={p.id === activeProjectId && sessionId === null}
+                    onClick={() => {
+                      toggleProjectCollapsed(p.id);
+                    }}
+                    endContent={
+                      <div className="flex items-center gap-0.5">
+                        <ProjectActionsMenu
+                          className="pointer-events-none opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
+                          onNewConversation={() => {
+                            startProjectSession(p.id);
+                          }}
+                          onRename={() => {
+                            startRenameProject(p);
+                          }}
+                          onDelete={() => {
+                            setDeletingProject(p);
+                          }}
+                        />
+                        <ChevronRightIcon
+                          className={`h-4 w-4 shrink-0 text-secondary transition-transform ${isCollapsed ? "" : "rotate-90"}`}
+                        />
+                      </div>
+                    }
+                  />
+                </div>
+              )}
+              {!isCollapsed &&
+                sessions
+                  .filter((s) => s.project_id === p.id)
+                  .sort((a, b) => Number(b.pinned) - Number(a.pinned))
+                  .map((s) =>
+                    editingSessionId === s.id ? (
+                      <div key={s.id} className="py-1 pl-4">
+                        <TextInput
+                          value={editingValue}
+                          onChange={setEditingValue}
+                          isLabelHidden
+                          label="Titre de la conversation"
+                          size="sm"
+                          hasAutoFocus
+                          onEnter={() => {
+                            void commitRename(s.id);
+                          }}
+                          onBlur={() => {
+                            void commitRename(s.id);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Escape") setEditingSessionId(null);
+                          }}
+                        />
+                      </div>
+                    ) : (
+                      <div key={s.id} className="group">
+                        <SideNavItem
+                          label={s.title ?? formatSessionLabel(s.id)}
+                          isSelected={s.id === sessionId}
+                          onClick={() => {
+                            switchSession(s.id);
+                          }}
+                          className="pl-4"
+                          endContent={
+                            <div className="flex items-center gap-1">
+                              {/* reponse en cours en arriere-plan (voir
+                                      sendMessage) - jamais pour celle
+                                      affichee, la vue principale montre
+                                      deja son propre etat "en cours". */}
+                              {s.id !== sessionId &&
+                                sendingSessionIds.has(s.id) && (
+                                  <Spinner
+                                    size="sm"
+                                    shade="subtle"
+                                    aria-label="Réponse en cours"
+                                  />
+                                )}
+                              <SessionActionsMenu
+                                className="pointer-events-none opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
+                                session={s}
+                                onRename={() => {
+                                  startRename(s);
+                                }}
+                                onTogglePin={() => {
+                                  void togglePin(s);
+                                }}
+                                onDelete={() => {
+                                  setDeletingSession(s);
+                                }}
+                              />
+                            </div>
+                          }
+                        />
+                      </div>
+                    ),
+                  )}
+            </div>
+          );
+        })}
+      </SideNavSection>
+
+      <SubagentsPanel />
+
+      <SideNavSection title="Conversations">
+        {topLevelSessions.length === 0 && (
+          <Text size="2xs" color="secondary" className="block px-2 py-1">
+            Aucune conversation.
+          </Text>
+        )}
+        {topLevelSessions.map((s) =>
+          editingSessionId === s.id ? (
+            <div key={s.id} className="px-2 py-1">
+              <TextInput
+                value={editingValue}
+                onChange={setEditingValue}
+                isLabelHidden
+                label="Titre de la conversation"
+                size="sm"
+                hasAutoFocus
+                onEnter={() => {
+                  void commitRename(s.id);
+                }}
+                onBlur={() => {
+                  void commitRename(s.id);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") setEditingSessionId(null);
+                }}
+              />
+            </div>
+          ) : (
+            <div key={s.id} className="group">
+              <SideNavItem
+                label={s.title ?? formatSessionLabel(s.id)}
+                isSelected={s.id === sessionId}
+                onClick={() => {
+                  switchSession(s.id);
+                }}
+                endContent={
+                  <div className="flex items-center gap-1">
+                    {s.id !== sessionId && sendingSessionIds.has(s.id) && (
+                      <Spinner
                         size="sm"
-                        onClick={toggleSidebar}
+                        shade="subtle"
+                        aria-label="Réponse en cours"
                       />
                     )}
-                    <IconButton
-                      label="Rechercher"
-                      icon={<SearchIcon />}
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        setView("search");
+                    <SessionActionsMenu
+                      className="pointer-events-none opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
+                      session={s}
+                      onRename={() => {
+                        startRename(s);
+                      }}
+                      onTogglePin={() => {
+                        void togglePin(s);
+                      }}
+                      onDelete={() => {
+                        setDeletingSession(s);
                       }}
                     />
                   </div>
                 }
               />
-            }
-            topContent={
-              <Button
-                label="Nouvelle conversation"
-                icon={<PlusIcon />}
-                variant="secondary"
-                size="sm"
-                onClick={startNewSession}
-                className="w-full justify-start"
-              />
-            }
-            footer={
-              <div className="flex items-center justify-end gap-0.5 px-1 py-1">
-                <IconButton
-                  label="Paramètres"
-                  icon={<GearIcon />}
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setSettingsOpen(true);
-                  }}
-                />
-                <IconButton
-                  label={
-                    themeMode === "dark"
-                      ? "Passer en thème clair"
-                      : "Passer en thème sombre"
-                  }
-                  icon={themeMode === "dark" ? <MoonIcon /> : <SunIcon />}
-                  variant="ghost"
-                  size="sm"
-                  onClick={toggleTheme}
-                />
-              </div>
-            }
-          >
-            <SideNavSection
-              title="Projets"
-              endContent={
-                <IconButton
-                  label="Nouveau projet"
-                  icon={<PlusIcon />}
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setShowProjectForm(true);
-                  }}
-                />
-              }
-            >
-              {projects.length === 0 && (
-                <Text size="2xs" color="secondary" className="block px-2 py-1">
-                  Aucun projet.
-                </Text>
-              )}
-              {projects.map((p) => {
-                const isCollapsed = collapsedProjectIds.has(p.id);
-                return (
-                  <div key={p.id}>
-                    {editingProjectId === p.id ? (
-                      <div className="px-2 py-1">
-                        <TextInput
-                          value={editingProjectValue}
-                          onChange={setEditingProjectValue}
-                          isLabelHidden
-                          label="Nom du projet"
-                          size="sm"
-                          hasAutoFocus
-                          onEnter={() => {
-                            void commitRenameProject(p.id);
-                          }}
-                          onBlur={() => {
-                            void commitRenameProject(p.id);
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === "Escape") setEditingProjectId(null);
-                          }}
-                        />
-                      </div>
-                    ) : (
-                      <div className="group">
-                        <SideNavItem
-                          label={p.name}
-                          icon={<FolderIcon className="h-4 w-4" />}
-                        isSelected={
-                          p.id === activeProjectId && sessionId === null
-                        }
-                        onClick={() => {
-                          toggleProjectCollapsed(p.id);
-                        }}
-                        endContent={
-                          <div className="flex items-center gap-0.5">
-                            <ProjectActionsMenu
-                              className="pointer-events-none opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
-                              onNewConversation={() => {
-                                startProjectSession(p.id);
-                              }}
-                              onRename={() => {
-                                startRenameProject(p);
-                              }}
-                              onDelete={() => {
-                                setDeletingProject(p);
-                              }}
-                            />
-                            <ChevronRightIcon
-                              className={`h-4 w-4 shrink-0 text-secondary transition-transform ${isCollapsed ? "" : "rotate-90"}`}
-                            />
-                          </div>
-                        }
-                        />
-                      </div>
-                    )}
-                    {!isCollapsed &&
-                      sessions
-                        .filter((s) => s.project_id === p.id)
-                        .sort((a, b) => Number(b.pinned) - Number(a.pinned))
-                        .map((s) =>
-                          editingSessionId === s.id ? (
-                            <div key={s.id} className="py-1 pl-4">
-                              <TextInput
-                                value={editingValue}
-                                onChange={setEditingValue}
-                                isLabelHidden
-                                label="Titre de la conversation"
-                                size="sm"
-                                hasAutoFocus
-                                onEnter={() => {
-                                  void commitRename(s.id);
-                                }}
-                                onBlur={() => {
-                                  void commitRename(s.id);
-                                }}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Escape")
-                                    setEditingSessionId(null);
-                                }}
-                              />
-                            </div>
-                          ) : (
-                            <div key={s.id} className="group">
-                              <SideNavItem
-                              label={s.title ?? formatSessionLabel(s.id)}
-                              isSelected={s.id === sessionId}
-                              onClick={() => {
-                                switchSession(s.id);
-                              }}
-                              className="pl-4"
-                              endContent={
-                                <div className="flex items-center gap-1">
-                                  {/* reponse en cours en arriere-plan (voir
-                                      sendMessage) - jamais pour celle
-                                      affichee, la vue principale montre
-                                      deja son propre etat "en cours". */}
-                                  {s.id !== sessionId && sendingSessionIds.has(s.id) && (
-                                    <Spinner
-                                      size="sm"
-                                      shade="subtle"
-                                      aria-label="Réponse en cours"
-                                    />
-                                  )}
-                                  <SessionActionsMenu
-                                    className="pointer-events-none opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
-                                    session={s}
-                                    onRename={() => {
-                                      startRename(s);
-                                    }}
-                                    onTogglePin={() => {
-                                      void togglePin(s);
-                                    }}
-                                    onDelete={() => {
-                                      setDeletingSession(s);
-                                    }}
-                                  />
-                                </div>
-                              }
-                              />
-                            </div>
-                          ),
-                        )}
-                  </div>
-                );
-              })}
-            </SideNavSection>
-
-            <SubagentsPanel />
-
-            <SideNavSection title="Conversations">
-              {topLevelSessions.length === 0 && (
-                <Text size="2xs" color="secondary" className="block px-2 py-1">
-                  Aucune conversation.
-                </Text>
-              )}
-              {topLevelSessions.map((s) =>
-                editingSessionId === s.id ? (
-                  <div key={s.id} className="px-2 py-1">
-                    <TextInput
-                      value={editingValue}
-                      onChange={setEditingValue}
-                      isLabelHidden
-                      label="Titre de la conversation"
-                      size="sm"
-                      hasAutoFocus
-                      onEnter={() => {
-                        void commitRename(s.id);
-                      }}
-                      onBlur={() => {
-                        void commitRename(s.id);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Escape") setEditingSessionId(null);
-                      }}
-                    />
-                  </div>
-                ) : (
-                  <div key={s.id} className="group">
-                    <SideNavItem
-                    label={s.title ?? formatSessionLabel(s.id)}
-                    isSelected={s.id === sessionId}
-                    onClick={() => {
-                      switchSession(s.id);
-                    }}
-                    endContent={
-                      <div className="flex items-center gap-1">
-                        {s.id !== sessionId && sendingSessionIds.has(s.id) && (
-                          <Spinner size="sm" shade="subtle" aria-label="Réponse en cours" />
-                        )}
-                        <SessionActionsMenu
-                          className="pointer-events-none opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
-                          session={s}
-                          onRename={() => {
-                            startRename(s);
-                          }}
-                          onTogglePin={() => {
-                            void togglePin(s);
-                          }}
-                          onDelete={() => {
-                            setDeletingSession(s);
-                          }}
-                        />
-                      </div>
-                    }
-                    />
-                  </div>
-                ),
-              )}
-            </SideNavSection>
-          </SideNav>
+            </div>
+          ),
+        )}
+      </SideNavSection>
+    </SideNav>
   );
 
   return (
     <Theme theme={neutralTheme} mode={themeMode}>
       <div className="flex h-full min-h-0 flex-col bg-surface">
         {usesMacTitlebarOverlay && (
-          <div className="flex h-[52px] shrink-0 items-center border-b border-border bg-surface pl-[84px]">
+          <div className="flex h-[44px] shrink-0 items-center border-b border-border bg-surface pl-[84px]">
+            {/* 44px (pas 52) : hauteur choisie pour que items-center place
+                deja ce bouton au niveau des feux rouge/jaune/vert (dessines
+                par macOS a une position fixe, trafficLightPosition dans
+                tauri.conf.json) sans decalage supplementaire - une barre
+                plus haute que ca ne fait que rajouter du vide sous les
+                boutons avant le trait de separation. */}
             <IconButton
-              label={sidebarCollapsed ? "Afficher la barre latérale" : "Masquer la barre latérale"}
+              label={
+                sidebarCollapsed
+                  ? "Afficher la barre latérale"
+                  : "Masquer la barre latérale"
+              }
               icon={<SidebarIcon />}
               variant="ghost"
               size="sm"
@@ -2598,7 +2809,7 @@ function App() {
           {sidebarCollapsed && (
             <div
               className={`fixed bottom-0 left-0 z-40 w-2 ${
-                usesMacTitlebarOverlay ? "top-[52px]" : "top-0"
+                usesMacTitlebarOverlay ? "top-[44px]" : "top-0"
               }`}
               onMouseEnter={() => {
                 setSidebarPeeking(true);
@@ -2608,7 +2819,7 @@ function App() {
           {sidebarCollapsed && sidebarPeeking && (
             <div
               className={`fixed bottom-0 left-0 z-50 shadow-2xl ${
-                usesMacTitlebarOverlay ? "top-[52px]" : "top-0"
+                usesMacTitlebarOverlay ? "top-[44px]" : "top-0"
               }`}
               onMouseLeave={() => {
                 setSidebarPeeking(false);
@@ -2622,650 +2833,717 @@ function App() {
             height="fill"
             sideNav={sidebarCollapsed ? undefined : sideNavElement}
           >
-        {view === "task" && activeTaskId && (
-          <TaskView
-            key={activeTaskId}
-            taskId={activeTaskId}
-            onBack={() => {
-              setView("chat");
-            }}
-          />
-        )}
-        {view === "search" && (
-          <SearchPage
-            onBack={() => {
-              setView("chat");
-            }}
-            onSelectSession={switchSession}
-          />
-        )}
-        {view === "snapshot_history" && sessionId && (
-          <SnapshotHistoryView
-            key={sessionId}
-            sessionId={sessionId}
-            onBack={() => {
-              setView("chat");
-            }}
-            onRestored={() => {
-              setFileRefreshTick((t) => t + 1);
-              setView("chat");
-            }}
-          />
-        )}
-        {view === "chat" && (
-          <div
-            className="relative flex h-full"
-            onPaste={handlePaste}
-            onDragEnter={(e) => {
-              e.preventDefault();
-              setDragDepth((d) => d + 1);
-            }}
-            onDragLeave={(e) => {
-              e.preventDefault();
-              setDragDepth((d) => Math.max(0, d - 1));
-            }}
-            onDragOver={(e) => {
-              e.preventDefault();
-            }}
-            onDrop={(e) => {
-              e.preventDefault();
-              setDragDepth(0);
-              handleFilesSelected(e.dataTransfer.files);
-            }}
-          >
-            {dragDepth > 0 && (
-              <div className="pointer-events-none absolute inset-2 z-50 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-accent bg-surface/90">
-                <FileIcon className="h-8 w-8 text-accent" />
-                <Text weight="medium" className="text-accent">
-                  Déposer pour joindre
-                </Text>
-              </div>
+            {view === "task" && activeTaskId && (
+              <TaskView
+                key={activeTaskId}
+                taskId={activeTaskId}
+                onBack={() => {
+                  setView("chat");
+                }}
+              />
             )}
-            <ChatLayout
-              ref={chatScrollRef}
-              density="spacious"
-              className="h-full min-w-0 flex-1"
-              emptyState={
-                <EmptyState
-                  title="Nouvelle conversation"
-                  description="Écris un message pour démarrer la conversation."
-                />
-              }
-              scrollButton={
-                <ChatLayoutScrollButton
-                  isVisible={showScrollButton}
-                  label={hasNewMessage ? "Nouveaux messages" : undefined}
-                  onClick={() => {
-                    chatScrollRef.current?.scrollTo({
-                      top: chatScrollRef.current.scrollHeight,
-                      behavior: "smooth",
-                    });
-                    setHasNewMessage(false);
-                  }}
-                />
-              }
-              composer={
-                <ChatComposer
-                  value={input}
-                  onChange={setInput}
-                  onSubmit={(value) => {
-                    void sendMessage(value);
-                  }}
-                  onStop={cancelMessage}
-                  isStopShown={sending}
-                  placeholder="Écrire un message..."
-                  // sending is deliberately NOT here: isDisabled greys the
-                  // whole composer out (opacity 0.6) and makes its input
-                  // non-editable (contentEditable=false) - there's no
-                  // reason typing ahead while a response streams should be
-                  // blocked. Actually sending a new message meanwhile is
-                  // still guarded inside sendMessage itself. A
-                  // confirmation prompt is different: genuinely blocking,
-                  // has to be resolved first.
-                  isDisabled={!!pendingConfirmation}
-                  elevation="none"
-                  input={<ChatComposerInput triggers={composerTriggers} />}
-                  style={
-                    { "--_chat-composer-padding": "24px" } as CSSProperties
+            {view === "search" && (
+              <SearchPage
+                onBack={() => {
+                  setView("chat");
+                }}
+                onSelectSession={switchSession}
+              />
+            )}
+            {view === "snapshot_history" && sessionId && (
+              <SnapshotHistoryView
+                key={sessionId}
+                sessionId={sessionId}
+                onBack={() => {
+                  setView("chat");
+                }}
+                onRestored={() => {
+                  setFileRefreshTick((t) => t + 1);
+                  setView("chat");
+                }}
+              />
+            )}
+            {view === "chat" && (
+              <div
+                className="relative flex h-full"
+                onPaste={handlePaste}
+                onDragEnter={(e) => {
+                  e.preventDefault();
+                  setDragDepth((d) => d + 1);
+                }}
+                onDragLeave={(e) => {
+                  e.preventDefault();
+                  setDragDepth((d) => Math.max(0, d - 1));
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragDepth(0);
+                  handleFilesSelected(e.dataTransfer.files);
+                }}
+              >
+                {dragDepth > 0 && (
+                  <div className="pointer-events-none absolute inset-2 z-50 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-accent bg-surface/90">
+                    <FileIcon className="h-8 w-8 text-accent" />
+                    <Text weight="medium" className="text-accent">
+                      Déposer pour joindre
+                    </Text>
+                  </div>
+                )}
+                <ChatLayout
+                  ref={chatScrollRef}
+                  density="spacious"
+                  className="h-full min-w-0 flex-1"
+                  emptyState={
+                    <EmptyState
+                      title="Nouvelle conversation"
+                      description="Écris un message pour démarrer la conversation."
+                    />
                   }
-                  drawer={
-                    pendingAttachments.length > 0 || pendingTextAttachments.length > 0 ? (
-                      <ChatComposerDrawer
-                        count={pendingAttachments.length + pendingTextAttachments.length}
-                        label="pièce(s) jointe(s)"
-                      >
-                        <div className="flex flex-wrap gap-2">
-                          {pendingAttachments.map((a, i) =>
-                            isPdfDataUrl(a.dataUrl) ? (
-                              <div
-                                key={`${a.name}-${i}`}
-                                className="relative flex h-16 w-32 items-center gap-1.5 rounded-md border border-border px-2"
-                              >
-                                <FileIcon className="h-4 w-4 shrink-0 text-secondary" />
-                                <Text size="2xs" className="min-w-0 truncate">
-                                  {a.name}
-                                </Text>
-                                <IconButton
-                                  label="Retirer"
-                                  icon={<XIcon className="h-3 w-3" />}
-                                  variant="primary"
-                                  size="sm"
-                                  className="absolute -right-1.5 -top-1.5 h-5 w-5 min-w-0 rounded-full p-0"
-                                  onClick={() => { removeAttachment(i); }}
-                                />
-                              </div>
-                            ) : (
-                              <div key={`${a.name}-${i}`} className="relative">
-                                <img
-                                  src={a.dataUrl}
-                                  alt={a.name}
-                                  className="h-16 w-16 rounded-md border border-border object-cover"
-                                />
-                                <IconButton
-                                  label="Retirer"
-                                  icon={<XIcon className="h-3 w-3" />}
-                                  variant="primary"
-                                  size="sm"
-                                  className="absolute -right-1.5 -top-1.5 h-5 w-5 min-w-0 rounded-full p-0"
-                                  onClick={() => { removeAttachment(i); }}
-                                />
-                              </div>
-                            ),
-                          )}
-                          {pendingTextAttachments.map((a, i) => (
-                            <div
-                              key={`${a.name}-${i}`}
-                              className="relative flex h-16 w-32 items-center gap-1.5 rounded-md border border-border px-2"
-                            >
-                              <FileIcon className="h-4 w-4 shrink-0 text-secondary" />
-                              <Text size="2xs" className="min-w-0 truncate">
-                                {a.name}
-                              </Text>
-                              <IconButton
-                                label="Retirer"
-                                icon={<XIcon className="h-3 w-3" />}
-                                variant="primary"
-                                size="sm"
-                                className="absolute -right-1.5 -top-1.5 h-5 w-5 min-w-0 rounded-full p-0"
-                                onClick={() => { removeTextAttachment(i); }}
-                              />
-                            </div>
-                          ))}
-                        </div>
-                      </ChatComposerDrawer>
-                    ) : undefined
+                  scrollButton={
+                    <ChatLayoutScrollButton
+                      isVisible={showScrollButton}
+                      label={hasNewMessage ? "Nouveaux messages" : undefined}
+                      onClick={() => {
+                        chatScrollRef.current?.scrollTo({
+                          top: chatScrollRef.current.scrollHeight,
+                          behavior: "smooth",
+                        });
+                        setHasNewMessage(false);
+                      }}
+                    />
                   }
-                  footerActions={
-                    <>
-                      <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept={attachAccept}
-                        multiple
-                        className="hidden"
-                        onChange={(e) => {
-                          handleFilesSelected(e.target.files);
-                          e.target.value = "";
-                        }}
-                      />
-                      <IconButton
-                        label={attachLabel}
-                        icon={<PlusIcon />}
-                        variant="ghost"
-                        size="sm"
-                        isDisabled={!supportsImages && !supportsFiles}
-                        onClick={() => { fileInputRef.current?.click(); }}
-                      />
-                    </>
-                  }
-                  sendActions={
-                    <>
-                      {yoloEnabled && <Badge variant="warning" label="YOLO actif" />}
-                      {effectiveModel && <Badge variant="neutral" label={effectiveModel} />}
-                    </>
-                  }
-                />
-              }
-            >
-              <ChatMessageList isStreaming={sending}>
-                {(() => {
-                const groups = groupMessages(messages);
-                return groups.map((group, gi) => {
-                  if (group.type === "user") {
-                    const isEditingThis = editingTurnIndex === group.turnIndex;
-                    return (
-                      <ChatMessage key={gi} sender="user" className="animate-fade-in">
-                        <ChatMessageBubble
-                          metadata={
-                            <ChatMessageMetadata
-                              timestamp={
-                                <Timestamp
-                                  value={group.msg.time / 1000}
-                                  format="time"
-                                />
-                              }
-                              status="sent"
-                              footer={
-                                !isEditingThis && !sending ? (
-                                  <button
-                                    onClick={() => {
-                                      startEditingMessage(group.turnIndex, group.msg.text);
-                                    }}
-                                    className="inline-flex items-center gap-1 text-secondary hover:text-primary"
-                                    title="Modifier"
+                  composer={
+                    <ChatComposer
+                      value={input}
+                      onChange={setInput}
+                      onSubmit={(value) => {
+                        void sendMessage(value);
+                      }}
+                      onStop={cancelMessage}
+                      isStopShown={sending}
+                      placeholder="Écrire un message..."
+                      // sending is deliberately NOT here: isDisabled greys the
+                      // whole composer out (opacity 0.6) and makes its input
+                      // non-editable (contentEditable=false) - there's no
+                      // reason typing ahead while a response streams should be
+                      // blocked. Actually sending a new message meanwhile is
+                      // still guarded inside sendMessage itself. A
+                      // confirmation prompt is different: genuinely blocking,
+                      // has to be resolved first.
+                      isDisabled={!!pendingConfirmation}
+                      elevation="none"
+                      input={<ChatComposerInput triggers={composerTriggers} />}
+                      style={
+                        { "--_chat-composer-padding": "24px" } as CSSProperties
+                      }
+                      drawer={
+                        pendingAttachments.length > 0 ||
+                        pendingTextAttachments.length > 0 ? (
+                          <ChatComposerDrawer
+                            count={
+                              pendingAttachments.length +
+                              pendingTextAttachments.length
+                            }
+                            label="pièce(s) jointe(s)"
+                          >
+                            <div className="flex flex-wrap gap-2">
+                              {pendingAttachments.map((a, i) =>
+                                isPdfDataUrl(a.dataUrl) ? (
+                                  <div
+                                    key={`${a.name}-${i}`}
+                                    className="relative flex h-16 w-32 items-center gap-1.5 rounded-md border border-border px-2"
                                   >
-                                    <PencilIcon className="h-3.5 w-3.5" />
-                                  </button>
-                                ) : undefined
-                              }
-                            />
-                          }
-                        >
-                          {group.msg.images && group.msg.images.length > 0 && (
-                            <div className="mb-2 flex flex-wrap gap-2">
-                              {group.msg.images.map((src, i) => (
-                                <img
-                                  key={i}
-                                  src={src}
-                                  alt=""
-                                  className="max-h-48 rounded-md border border-border object-cover"
-                                />
-                              ))}
-                            </div>
-                          )}
-                          {group.msg.files && group.msg.files.length > 0 && (
-                            <div className="mb-2 flex flex-wrap gap-2">
-                              {group.msg.files.map((f, i) => (
+                                    <FileIcon className="h-4 w-4 shrink-0 text-secondary" />
+                                    <Text
+                                      size="2xs"
+                                      className="min-w-0 truncate"
+                                    >
+                                      {a.name}
+                                    </Text>
+                                    <IconButton
+                                      label="Retirer"
+                                      icon={<XIcon className="h-3 w-3" />}
+                                      variant="primary"
+                                      size="sm"
+                                      className="absolute -right-1.5 -top-1.5 h-5 w-5 min-w-0 rounded-full p-0"
+                                      onClick={() => {
+                                        removeAttachment(i);
+                                      }}
+                                    />
+                                  </div>
+                                ) : (
+                                  <div
+                                    key={`${a.name}-${i}`}
+                                    className="relative"
+                                  >
+                                    <img
+                                      src={a.dataUrl}
+                                      alt={a.name}
+                                      className="h-16 w-16 rounded-md border border-border object-cover"
+                                    />
+                                    <IconButton
+                                      label="Retirer"
+                                      icon={<XIcon className="h-3 w-3" />}
+                                      variant="primary"
+                                      size="sm"
+                                      className="absolute -right-1.5 -top-1.5 h-5 w-5 min-w-0 rounded-full p-0"
+                                      onClick={() => {
+                                        removeAttachment(i);
+                                      }}
+                                    />
+                                  </div>
+                                ),
+                              )}
+                              {pendingTextAttachments.map((a, i) => (
                                 <div
-                                  key={i}
-                                  className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1"
+                                  key={`${a.name}-${i}`}
+                                  className="relative flex h-16 w-32 items-center gap-1.5 rounded-md border border-border px-2"
                                 >
                                   <FileIcon className="h-4 w-4 shrink-0 text-secondary" />
-                                  <Text size="2xs">{f.name}</Text>
+                                  <Text size="2xs" className="min-w-0 truncate">
+                                    {a.name}
+                                  </Text>
+                                  <IconButton
+                                    label="Retirer"
+                                    icon={<XIcon className="h-3 w-3" />}
+                                    variant="primary"
+                                    size="sm"
+                                    className="absolute -right-1.5 -top-1.5 h-5 w-5 min-w-0 rounded-full p-0"
+                                    onClick={() => {
+                                      removeTextAttachment(i);
+                                    }}
+                                  />
                                 </div>
                               ))}
                             </div>
-                          )}
-                          {isEditingThis ? (
-                            <div className="flex flex-col gap-2">
-                              <textarea
-                                value={editingText}
-                                onChange={(e) => {
-                                  setEditingText(e.target.value);
-                                }}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter" && !e.shiftKey) {
-                                    e.preventDefault();
-                                    void submitEditedMessage();
-                                  } else if (e.key === "Escape") {
-                                    cancelEditingMessage();
-                                  }
-                                }}
-                                // ouvert par un clic explicite de l'utilisateur (pas au chargement de la page)
-                                autoFocus
-                                rows={Math.min(8, editingText.split("\n").length + 1)}
-                                className="w-full resize-none rounded-md border border-border bg-transparent p-2 text-sm"
-                              />
-                              <div className="flex justify-end gap-2">
-                                <Button
-                                  label="Annuler"
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={cancelEditingMessage}
-                                />
-                                <Button
-                                  label="Renvoyer"
-                                  variant="primary"
-                                  size="sm"
-                                  isDisabled={!editingText.trim()}
-                                  onClick={() => {
-                                    void submitEditedMessage();
-                                  }}
-                                />
-                              </div>
-                            </div>
-                          ) : (
-                            group.msg.text
-                          )}
-                        </ChatMessageBubble>
-                      </ChatMessage>
-                    );
-                  }
-
-                  if (group.type === "system") {
-                    return (
-                      <ChatSystemMessage key={gi} className="animate-fade-in">
-                        {group.msg.kind === "error" ? (
-                          <span className="text-error">{group.msg.text}</span>
-                        ) : (
-                          group.msg.text
-                        )}
-                      </ChatSystemMessage>
-                    );
-                  }
-
-                  const blocks = toBlocks(group.items);
-                  const lastItem = group.items[group.items.length - 1];
-                  // groupMessages() ne cree jamais un groupe "assistant" avec un
-                  // tableau items vide (toujours au moins un push initial) : ceci
-                  // n'est qu'un garde-fou pour TypeScript (noUncheckedIndexedAccess).
-                  if (!lastItem)
-                    throw new Error("groupe assistant sans element");
-                  const lastIsText = lastItem.kind === "assistant";
-                  // le modele qui a effectivement repondu dans ce groupe (pas
-                  // forcement celui actuellement selectionne dans les parametres,
-                  // qui a pu changer depuis) ; undefined pour un historique
-                  // enregistre avant l'ajout de ce champ, l'avatar retombe alors
-                  // sur les initiales.
-                  const groupModel = group.items.find(
-                    (it): it is AssistantMsg => it.kind === "assistant",
-                  )?.model;
-                  const messageAvatar = modelAvatar(groupModel ?? null);
-
-                  return (
-                    <ChatMessage
-                      key={gi}
-                      sender="assistant"
-                      className="animate-fade-in"
-                      avatar={
-                        <Avatar
-                          name={messageAvatar.name}
-                          src={messageAvatar.logo}
-                          size={72}
-                          // ceinture-bretelles en plus de `size` : la derniere
-                          // fois, l'image (1024x1024 a la source) a fini par
-                          // s'afficher a sa taille native au lieu d'etre
-                          // contrainte a la taille demandee, debordant tout
-                          // le fil de discussion horizontalement (plus moyen
-                          // de scroller). w-/h- fixes + overflow-hidden sur
-                          // ce meme element forcent un plafond quoi qu'il
-                          // arrive cote taille interne du composant Avatar.
-                          className="h-[72px] w-[72px] shrink-0 overflow-hidden"
-                        />
+                          </ChatComposerDrawer>
+                        ) : undefined
                       }
-                      name="Triton"
-                    >
-                      {blocks.map((block, bi) =>
-                        block.kind === "tools" ? (
-                          <ChatToolCalls
-                            key={bi}
-                            className="animate-fade-in"
-                            defaultIsExpanded
-                            calls={block.items.map((t) => {
-                              const isSubtask = t.subtaskToolCalls !== undefined;
-                              const status = t.status ?? toolCallStatus(t.result);
-                              const callCount = t.subtaskToolCalls?.length ?? 0;
-                              return {
-                                name: t.tool,
-                                status,
-                                node:
-                                  isSubtask && typeof t.args.model === "string"
-                                    ? t.args.model
-                                    : t.tool === "web_search"
-                                      ? webSearchSource(t.result)
-                                      : undefined,
-                                target: isSubtask
-                                  ? t.subtaskDescription
-                                  : t.tool === "edit_file"
-                                    ? editFileTarget(t.args)
-                                    : formatArgs(t.args),
-                                stats:
-                                  isSubtask && status === "running" && callCount > 0
-                                    ? `${callCount} outil${callCount > 1 ? "s" : ""}`
-                                    : undefined,
-                                ...(isSubtask ? {} : toolDiffStats(t)),
-                                resultDetail: isSubtask
-                                  ? multiAgentSubtaskDetail(t)
-                                  : toolResultDetail(t),
-                              };
-                            })}
+                      footerActions={
+                        <>
+                          <input
+                            ref={fileInputRef}
+                            type="file"
+                            accept={attachAccept}
+                            multiple
+                            className="hidden"
+                            onChange={(e) => {
+                              handleFilesSelected(e.target.files);
+                              e.target.value = "";
+                            }}
                           />
-                        ) : (
-                          <ChatMessageBubble
-                            key={bi}
+                          <IconButton
+                            label={attachLabel}
+                            icon={<PlusIcon />}
                             variant="ghost"
-                            width="100%"
-                            className="animate-fade-in"
-                          >
-                            <Markdown>{block.msg.text}</Markdown>
-                          </ChatMessageBubble>
-                        ),
-                      )}
-                      <ChatMessageMetadata
-                        timestamp={
-                          <Timestamp
-                            value={lastItem.time / 1000}
-                            format="time"
+                            size="sm"
+                            isDisabled={!supportsImages && !supportsFiles}
+                            onClick={() => {
+                              fileInputRef.current?.click();
+                            }}
                           />
-                        }
-                        footer={
-                          lastIsText && lastItem.text ? (
-                            <div className="inline-flex items-center gap-3">
-                              <button
-                                onClick={() => {
-                                  void copyToClipboard(lastItem.text, gi);
-                                }}
-                                className="inline-flex items-center gap-1 text-secondary hover:text-primary"
-                                title="Copier"
+                        </>
+                      }
+                      sendActions={
+                        <>
+                          {yoloEnabled && (
+                            <Badge variant="warning" label="YOLO actif" />
+                          )}
+                          {effectiveModel && (
+                            <Badge variant="neutral" label={effectiveModel} />
+                          )}
+                        </>
+                      }
+                    />
+                  }
+                >
+                  <ChatMessageList isStreaming={sending}>
+                    {(() => {
+                      const groups = groupMessages(messages);
+                      return groups.map((group, gi) => {
+                        if (group.type === "user") {
+                          const isEditingThis =
+                            editingTurnIndex === group.turnIndex;
+                          return (
+                            <ChatMessage
+                              key={gi}
+                              sender="user"
+                              className="animate-fade-in"
+                            >
+                              <ChatMessageBubble
+                                metadata={
+                                  <ChatMessageMetadata
+                                    timestamp={
+                                      <Timestamp
+                                        value={group.msg.time / 1000}
+                                        format="time"
+                                      />
+                                    }
+                                    status="sent"
+                                    footer={
+                                      !isEditingThis && !sending ? (
+                                        <button
+                                          onClick={() => {
+                                            startEditingMessage(
+                                              group.turnIndex,
+                                              group.msg.text,
+                                            );
+                                          }}
+                                          className="inline-flex items-center gap-1 text-secondary hover:text-primary"
+                                          title="Modifier"
+                                        >
+                                          <PencilIcon className="h-3.5 w-3.5" />
+                                        </button>
+                                      ) : undefined
+                                    }
+                                  />
+                                }
                               >
-                                {copiedIndex === gi ? (
-                                  <CheckIcon className="h-3.5 w-3.5" />
+                                {group.msg.images &&
+                                  group.msg.images.length > 0 && (
+                                    <div className="mb-2 flex flex-wrap gap-2">
+                                      {group.msg.images.map((src, i) => (
+                                        <img
+                                          key={i}
+                                          src={src}
+                                          alt=""
+                                          className="max-h-48 rounded-md border border-border object-cover"
+                                        />
+                                      ))}
+                                    </div>
+                                  )}
+                                {group.msg.files &&
+                                  group.msg.files.length > 0 && (
+                                    <div className="mb-2 flex flex-wrap gap-2">
+                                      {group.msg.files.map((f, i) => (
+                                        <div
+                                          key={i}
+                                          className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1"
+                                        >
+                                          <FileIcon className="h-4 w-4 shrink-0 text-secondary" />
+                                          <Text size="2xs">{f.name}</Text>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                {isEditingThis ? (
+                                  <div className="flex flex-col gap-2">
+                                    <textarea
+                                      value={editingText}
+                                      onChange={(e) => {
+                                        setEditingText(e.target.value);
+                                      }}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter" && !e.shiftKey) {
+                                          e.preventDefault();
+                                          void submitEditedMessage();
+                                        } else if (e.key === "Escape") {
+                                          cancelEditingMessage();
+                                        }
+                                      }}
+                                      // ouvert par un clic explicite de l'utilisateur (pas au chargement de la page)
+                                      autoFocus
+                                      rows={Math.min(
+                                        8,
+                                        editingText.split("\n").length + 1,
+                                      )}
+                                      className="w-full resize-none rounded-md border border-border bg-transparent p-2 text-sm"
+                                    />
+                                    <div className="flex justify-end gap-2">
+                                      <Button
+                                        label="Annuler"
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={cancelEditingMessage}
+                                      />
+                                      <Button
+                                        label="Renvoyer"
+                                        variant="primary"
+                                        size="sm"
+                                        isDisabled={!editingText.trim()}
+                                        onClick={() => {
+                                          void submitEditedMessage();
+                                        }}
+                                      />
+                                    </div>
+                                  </div>
                                 ) : (
-                                  <CopyIcon className="h-3.5 w-3.5" />
+                                  group.msg.text
                                 )}
-                              </button>
-                              {/* regenerer n'a de sens que sur la toute
+                              </ChatMessageBubble>
+                            </ChatMessage>
+                          );
+                        }
+
+                        if (group.type === "system") {
+                          return (
+                            <ChatSystemMessage
+                              key={gi}
+                              className="animate-fade-in"
+                            >
+                              {group.msg.kind === "error" ? (
+                                <span className="text-error">
+                                  {group.msg.text}
+                                </span>
+                              ) : (
+                                group.msg.text
+                              )}
+                            </ChatSystemMessage>
+                          );
+                        }
+
+                        const blocks = toBlocks(group.items);
+                        const lastItem = group.items[group.items.length - 1];
+                        // groupMessages() ne cree jamais un groupe "assistant" avec un
+                        // tableau items vide (toujours au moins un push initial) : ceci
+                        // n'est qu'un garde-fou pour TypeScript (noUncheckedIndexedAccess).
+                        if (!lastItem)
+                          throw new Error("groupe assistant sans element");
+                        const lastIsText = lastItem.kind === "assistant";
+                        // le modele qui a effectivement repondu dans ce groupe (pas
+                        // forcement celui actuellement selectionne dans les parametres,
+                        // qui a pu changer depuis) ; undefined pour un historique
+                        // enregistre avant l'ajout de ce champ, l'avatar retombe alors
+                        // sur les initiales.
+                        const groupModel = group.items.find(
+                          (it): it is AssistantMsg => it.kind === "assistant",
+                        )?.model;
+                        const messageAvatar = modelAvatar(groupModel ?? null);
+
+                        return (
+                          <ChatMessage
+                            key={gi}
+                            sender="assistant"
+                            className="animate-fade-in"
+                            avatar={
+                              <Avatar
+                                name={messageAvatar.name}
+                                src={messageAvatar.logo}
+                                size={72}
+                                // ceinture-bretelles en plus de `size` : la derniere
+                                // fois, l'image (1024x1024 a la source) a fini par
+                                // s'afficher a sa taille native au lieu d'etre
+                                // contrainte a la taille demandee, debordant tout
+                                // le fil de discussion horizontalement (plus moyen
+                                // de scroller). w-/h- fixes + overflow-hidden sur
+                                // ce meme element forcent un plafond quoi qu'il
+                                // arrive cote taille interne du composant Avatar.
+                                className="h-[72px] w-[72px] shrink-0 overflow-hidden"
+                              />
+                            }
+                            name="Triton"
+                          >
+                            {blocks.map((block, bi) =>
+                              block.kind === "tools" ? (
+                                <ChatToolCalls
+                                  key={bi}
+                                  className="animate-fade-in"
+                                  defaultIsExpanded
+                                  calls={block.items.map((t) => {
+                                    const isSubtask =
+                                      t.subtaskToolCalls !== undefined;
+                                    const status =
+                                      t.status ?? toolCallStatus(t.result);
+                                    const callCount =
+                                      t.subtaskToolCalls?.length ?? 0;
+                                    return {
+                                      name: t.tool,
+                                      status,
+                                      node:
+                                        isSubtask &&
+                                        typeof t.args.model === "string"
+                                          ? t.args.model
+                                          : t.tool === "web_search"
+                                            ? webSearchSource(t.result)
+                                            : undefined,
+                                      target: isSubtask
+                                        ? t.subtaskDescription
+                                        : t.tool === "edit_file"
+                                          ? editFileTarget(t.args)
+                                          : formatArgs(t.args),
+                                      stats:
+                                        isSubtask &&
+                                        status === "running" &&
+                                        callCount > 0
+                                          ? `${callCount} outil${callCount > 1 ? "s" : ""}`
+                                          : undefined,
+                                      ...(isSubtask ? {} : toolDiffStats(t)),
+                                      resultDetail: isSubtask
+                                        ? multiAgentSubtaskDetail(t)
+                                        : toolResultDetail(t),
+                                    };
+                                  })}
+                                />
+                              ) : (
+                                <ChatMessageBubble
+                                  key={bi}
+                                  variant="ghost"
+                                  width="100%"
+                                  className="animate-fade-in"
+                                >
+                                  <Markdown>{block.msg.text}</Markdown>
+                                </ChatMessageBubble>
+                              ),
+                            )}
+                            <ChatMessageMetadata
+                              timestamp={
+                                <Timestamp
+                                  value={lastItem.time / 1000}
+                                  format="time"
+                                />
+                              }
+                              footer={
+                                lastIsText && lastItem.text ? (
+                                  <div className="inline-flex items-center gap-3">
+                                    <button
+                                      onClick={() => {
+                                        void copyToClipboard(lastItem.text, gi);
+                                      }}
+                                      className="inline-flex items-center gap-1 text-secondary hover:text-primary"
+                                      title="Copier"
+                                    >
+                                      {copiedIndex === gi ? (
+                                        <CheckIcon className="h-3.5 w-3.5" />
+                                      ) : (
+                                        <CopyIcon className="h-3.5 w-3.5" />
+                                      )}
+                                    </button>
+                                    {/* regenerer n'a de sens que sur la toute
                                   derniere reponse - regenerer une reponse
                                   plus ancienne ecraserait tout ce qui suit,
                                   pas juste elle */}
-                              {gi === groups.length - 1 && !sending && (
-                                <button
-                                  onClick={() => {
-                                    const userMsg = userMessageAtTurn(
-                                      messages,
-                                      group.precedingTurnIndex,
-                                    );
-                                    if (userMsg) {
-                                      void regenerateResponse(group.precedingTurnIndex, userMsg);
-                                    }
-                                  }}
-                                  className="inline-flex items-center gap-1 text-secondary hover:text-primary"
-                                  title="Regenerer"
-                                >
-                                  <RefreshIcon className="h-3.5 w-3.5" />
-                                </button>
-                              )}
-                            </div>
-                          ) : undefined
-                        }
-                      />
-                    </ChatMessage>
-                  );
-                });
-                })()}
-
-                {showTypingPlaceholder && (
-                  <ChatMessage
-                    sender="assistant"
-                    className="animate-fade-in"
-                    avatar={
-                      <Avatar
-                        name={modelAvatar(effectiveModel).name}
-                        src={modelAvatar(effectiveModel).logo}
-                        size={72}
-                        className="h-[72px] w-[72px] shrink-0 overflow-hidden"
-                      />
-                    }
-                    name="Triton"
-                  >
-                    <ChatMessageBubble variant="ghost" width="100%">
-                      <Spinner size="sm" shade="subtle" aria-label="Triton réfléchit" />
-                    </ChatMessageBubble>
-                  </ChatMessage>
-                )}
-
-                {pendingConfirmation &&
-                  (() => {
-                    const { label, server } = parseToolDisplay(pendingConfirmation.tool);
-                    const hasDetails =
-                      (pendingConfirmation.tool === "edit_file" &&
-                        parseEditFileEdits(pendingConfirmation.args).length > 0) ||
-                      (pendingConfirmation.tool === "write_file" &&
-                        !!activeProject &&
-                        typeof pendingConfirmation.args.path === "string" &&
-                        typeof pendingConfirmation.args.content === "string") ||
-                      Object.keys(pendingConfirmation.args).length > 0;
-
-                    return (
-                      <div className="mx-auto flex w-full max-w-sm flex-col items-center gap-4 rounded-2xl border border-border bg-surface px-6 py-6">
-                        <Avatar name={server ?? label} size="lg" />
-
-                        <button
-                          type="button"
-                          disabled={!hasDetails}
-                          className="flex items-center gap-1 text-center text-sm disabled:cursor-default"
-                          onClick={() => {
-                            setConfirmationDetailsExpanded((v) => !v);
-                          }}
-                        >
-                          <span>
-                            Triton souhaite utiliser <strong>{label}</strong>
-                            {server && (
-                              <>
-                                {" "}
-                                de <strong>{server}</strong>
-                              </>
-                            )}
-                            .
-                          </span>
-                          {hasDetails && (
-                            <ChevronRightIcon
-                              className={`h-4 w-4 shrink-0 text-secondary transition-transform ${
-                                confirmationDetailsExpanded ? "rotate-90" : ""
-                              }`}
+                                    {gi === groups.length - 1 && !sending && (
+                                      <button
+                                        onClick={() => {
+                                          const userMsg = userMessageAtTurn(
+                                            messages,
+                                            group.precedingTurnIndex,
+                                          );
+                                          if (userMsg) {
+                                            void regenerateResponse(
+                                              group.precedingTurnIndex,
+                                              userMsg,
+                                            );
+                                          }
+                                        }}
+                                        className="inline-flex items-center gap-1 text-secondary hover:text-primary"
+                                        title="Regenerer"
+                                      >
+                                        <RefreshIcon className="h-3.5 w-3.5" />
+                                      </button>
+                                    )}
+                                  </div>
+                                ) : undefined
+                              }
                             />
-                          )}
-                        </button>
+                          </ChatMessage>
+                        );
+                      });
+                    })()}
 
-                        {confirmationDetailsExpanded && (
-                          <div className="w-full">
-                            <Text
-                              size="sm"
-                              color="secondary"
-                              className="mb-2 block break-words text-center"
+                    {showTypingPlaceholder && (
+                      <ChatMessage
+                        sender="assistant"
+                        className="animate-fade-in"
+                        avatar={
+                          <Avatar
+                            name={modelAvatar(effectiveModel).name}
+                            src={modelAvatar(effectiveModel).logo}
+                            size={72}
+                            className="h-[72px] w-[72px] shrink-0 overflow-hidden"
+                          />
+                        }
+                        name="Triton"
+                      >
+                        <ChatMessageBubble variant="ghost" width="100%">
+                          <Spinner
+                            size="sm"
+                            shade="subtle"
+                            aria-label="Triton réfléchit"
+                          />
+                        </ChatMessageBubble>
+                      </ChatMessage>
+                    )}
+
+                    {pendingConfirmation &&
+                      (() => {
+                        const { label, server } = parseToolDisplay(
+                          pendingConfirmation.tool,
+                        );
+                        const hasDetails =
+                          (pendingConfirmation.tool === "edit_file" &&
+                            parseEditFileEdits(pendingConfirmation.args)
+                              .length > 0) ||
+                          (pendingConfirmation.tool === "write_file" &&
+                            !!activeProject &&
+                            typeof pendingConfirmation.args.path === "string" &&
+                            typeof pendingConfirmation.args.content ===
+                              "string") ||
+                          Object.keys(pendingConfirmation.args).length > 0;
+
+                        return (
+                          <div className="mx-auto flex w-full max-w-sm flex-col items-center gap-4 rounded-2xl border border-border bg-surface px-6 py-6">
+                            <Avatar name={server ?? label} size="lg" />
+
+                            <button
+                              type="button"
+                              disabled={!hasDetails}
+                              className="flex items-center gap-1 text-center text-sm disabled:cursor-default"
+                              onClick={() => {
+                                setConfirmationDetailsExpanded((v) => !v);
+                              }}
                             >
-                              {pendingConfirmation.tool === "edit_file"
-                                ? editFileTarget(pendingConfirmation.args)
-                                : formatArgs(pendingConfirmation.args)}
-                            </Text>
-                            {pendingConfirmation.tool === "edit_file" &&
-                              parseEditFileEdits(pendingConfirmation.args).length > 0 && (
-                                <EditFileEdits
-                                  edits={parseEditFileEdits(pendingConfirmation.args)}
+                              <span>
+                                Triton souhaite utiliser{" "}
+                                <strong>{label}</strong>
+                                {server && (
+                                  <>
+                                    {" "}
+                                    de <strong>{server}</strong>
+                                  </>
+                                )}
+                                .
+                              </span>
+                              {hasDetails && (
+                                <ChevronRightIcon
+                                  className={`h-4 w-4 shrink-0 text-secondary transition-transform ${
+                                    confirmationDetailsExpanded
+                                      ? "rotate-90"
+                                      : ""
+                                  }`}
                                 />
                               )}
-                            {pendingConfirmation.tool === "write_file" &&
-                              activeProject &&
-                              typeof pendingConfirmation.args.path === "string" &&
-                              typeof pendingConfirmation.args.content === "string" && (
-                                <WriteFileDiff
-                                  projectId={activeProject.id}
-                                  path={pendingConfirmation.args.path}
-                                  newContent={pendingConfirmation.args.content}
-                                />
-                              )}
-                          </div>
-                        )}
+                            </button>
 
-                        <div className="flex w-full flex-col gap-2">
-                          <Button
-                            label="Refuser"
-                            variant="ghost"
-                            size="md"
-                            className="w-full"
-                            endContent={
-                              <kbd className="rounded border border-border px-1.5 py-0.5 text-xs text-secondary">
-                                Échap
-                              </kbd>
-                            }
-                            onClick={() => {
-                              void respondToConfirmation(false);
-                            }}
-                          >
-                            Refuser
-                          </Button>
-                          <Button
-                            label="Toujours autoriser pour cette conversation"
-                            variant="secondary"
-                            size="md"
-                            className="w-full"
-                            endContent={
-                              <kbd className="rounded border border-border px-1.5 py-0.5 text-xs text-secondary">
-                                ⇧⌘⏎
-                              </kbd>
-                            }
-                            onClick={() => {
-                              void respondToConfirmation(true, true);
-                            }}
-                          >
-                            Toujours autoriser
-                          </Button>
-                          <Button
-                            label="Autoriser une fois"
-                            variant="primary"
-                            size="md"
-                            className="w-full"
-                            endContent={
-                              <kbd className="rounded border border-white/30 px-1.5 py-0.5 text-xs">
-                                ⌘⏎
-                              </kbd>
-                            }
-                            onClick={() => {
-                              void respondToConfirmation(true);
-                            }}
-                          >
-                            Autoriser une fois
-                          </Button>
-                        </div>
-                      </div>
-                    );
-                  })()}
-              </ChatMessageList>
-            </ChatLayout>
-            {activeProject && openFile ? (
-              <FileViewerPanel
-                key={`${openFile.projectId}:${openFile.path}`}
-                file={openFile}
-                onClose={() => {
-                  setOpenFile(null);
-                }}
-              />
-            ) : activeProject ? (
-              <ProjectFilePanel
-                projectId={activeProject.id}
-                projectName={activeProject.name}
-                folderPath={activeProject.folder_path}
-                refreshSignal={fileRefreshTick}
-                sessionId={sessionId}
-                onOpenHistory={() => {
-                  setView("snapshot_history");
-                }}
-                tasks={backgroundTasks}
-                onOpenTask={openTask}
-                onStopTask={stopTask}
-                onDeleteTask={deleteTask}
-                onOpenFile={setOpenFile}
-              />
-            ) : (
-              <BackgroundTasksPanel
-                tasks={backgroundTasks}
-                onOpen={openTask}
-                onStop={stopTask}
-                onDelete={deleteTask}
-              />
+                            {confirmationDetailsExpanded && (
+                              <div className="w-full">
+                                <Text
+                                  size="sm"
+                                  color="secondary"
+                                  className="mb-2 block break-words text-center"
+                                >
+                                  {pendingConfirmation.tool === "edit_file"
+                                    ? editFileTarget(pendingConfirmation.args)
+                                    : formatArgs(pendingConfirmation.args)}
+                                </Text>
+                                {pendingConfirmation.tool === "edit_file" &&
+                                  parseEditFileEdits(pendingConfirmation.args)
+                                    .length > 0 && (
+                                    <EditFileEdits
+                                      edits={parseEditFileEdits(
+                                        pendingConfirmation.args,
+                                      )}
+                                    />
+                                  )}
+                                {pendingConfirmation.tool === "write_file" &&
+                                  activeProject &&
+                                  typeof pendingConfirmation.args.path ===
+                                    "string" &&
+                                  typeof pendingConfirmation.args.content ===
+                                    "string" && (
+                                    <WriteFileDiff
+                                      projectId={activeProject.id}
+                                      path={pendingConfirmation.args.path}
+                                      newContent={
+                                        pendingConfirmation.args.content
+                                      }
+                                    />
+                                  )}
+                              </div>
+                            )}
+
+                            <div className="flex w-full flex-col gap-2">
+                              <Button
+                                label="Refuser"
+                                variant="ghost"
+                                size="md"
+                                className="w-full"
+                                endContent={
+                                  <kbd className="rounded border border-border px-1.5 py-0.5 text-xs text-secondary">
+                                    Échap
+                                  </kbd>
+                                }
+                                onClick={() => {
+                                  void respondToConfirmation(false);
+                                }}
+                              >
+                                Refuser
+                              </Button>
+                              <Button
+                                label="Toujours autoriser pour cette conversation"
+                                variant="secondary"
+                                size="md"
+                                className="w-full"
+                                endContent={
+                                  <kbd className="rounded border border-border px-1.5 py-0.5 text-xs text-secondary">
+                                    ⇧⌘⏎
+                                  </kbd>
+                                }
+                                onClick={() => {
+                                  void respondToConfirmation(true, true);
+                                }}
+                              >
+                                Toujours autoriser
+                              </Button>
+                              <Button
+                                label="Autoriser une fois"
+                                variant="primary"
+                                size="md"
+                                className="w-full"
+                                endContent={
+                                  <kbd className="rounded border border-white/30 px-1.5 py-0.5 text-xs">
+                                    ⌘⏎
+                                  </kbd>
+                                }
+                                onClick={() => {
+                                  void respondToConfirmation(true);
+                                }}
+                              >
+                                Autoriser une fois
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                  </ChatMessageList>
+                </ChatLayout>
+                {activeProject && openFile ? (
+                  <FileViewerPanel
+                    key={`${openFile.projectId}:${openFile.path}`}
+                    file={openFile}
+                    onClose={() => {
+                      setOpenFile(null);
+                    }}
+                  />
+                ) : activeProject ? (
+                  <ProjectFilePanel
+                    projectId={activeProject.id}
+                    projectName={activeProject.name}
+                    folderPath={activeProject.folder_path}
+                    refreshSignal={fileRefreshTick}
+                    sessionId={sessionId}
+                    onOpenHistory={() => {
+                      setView("snapshot_history");
+                    }}
+                    tasks={backgroundTasks}
+                    onOpenTask={openTask}
+                    onStopTask={stopTask}
+                    onDeleteTask={deleteTask}
+                    onOpenFile={setOpenFile}
+                  />
+                ) : (
+                  <BackgroundTasksPanel
+                    tasks={backgroundTasks}
+                    onOpen={openTask}
+                    onStop={stopTask}
+                    onDelete={deleteTask}
+                  />
+                )}
+              </div>
             )}
-          </div>
-        )}
           </AppShell>
         </div>
       </div>
