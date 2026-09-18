@@ -22,14 +22,14 @@ export const FAMILIES: Record<string, FamilyInfo> = {
   "meta-llama": { label: "Meta (Llama)", logo: "/llama-logo.png" },
   mistralai: { label: "Mistral AI", logo: "/mistral-logo.png" },
   "x-ai": { label: "xAI (Grok)", logo: "/x-logo.png" },
-  deepseek: { label: "DeepSeek" },
+  deepseek: { label: "DeepSeek", logo: "/deepseek-logo.png" },
   "z-ai": { label: "Z.ai (GLM)", logo: "/zai-logo.png" },
   cohere: { label: "Cohere" },
   amazon: { label: "Amazon (Nova)" },
   nvidia: { label: "NVIDIA (Nemotron)" },
   perplexity: { label: "Perplexity" },
   minimax: { label: "MiniMax" },
-  moonshotai: { label: "Moonshot AI (Kimi)" },
+  moonshotai: { label: "Moonshot AI (Kimi)", logo: "/kimi-logo.png" },
   microsoft: { label: "Microsoft" },
 };
 
