@@ -2867,7 +2867,7 @@ function App() {
             )}
             {view === "chat" && (
               <div
-                className="relative flex h-full"
+                className="relative flex h-full min-h-0"
                 onPaste={handlePaste}
                 onDragEnter={(e) => {
                   e.preventDefault();
@@ -2897,7 +2897,8 @@ function App() {
                 <ChatLayout
                   ref={chatScrollRef}
                   density="spacious"
-                  className="h-full min-w-0 flex-1"
+                  style={{ marginBottom: 52 }}
+                  className="min-h-0 min-w-0 flex-1"
                   emptyState={
                     <EmptyState
                       title="Nouvelle conversation"
@@ -3247,16 +3248,18 @@ function App() {
                               // regroupes avec d'autres) garde le rendu
                               // generique ci-dessous.
                               const soleToolCall =
-                                block.kind === "tools" && block.items.length === 1
+                                block.kind === "tools" &&
+                                block.items.length === 1
                                   ? block.items[0]
                                   : undefined;
                               const richCard = soleToolCall
-                                ? richCardFromToolCall(soleToolCall.tool, soleToolCall.args)
+                                ? richCardFromToolCall(
+                                    soleToolCall.tool,
+                                    soleToolCall.args,
+                                  )
                                 : null;
                               if (richCard) {
-                                return (
-                                  <RichCard key={bi} card={richCard} />
-                                );
+                                return <RichCard key={bi} card={richCard} />;
                               }
                               return block.kind === "tools" ? (
                                 <ChatToolCalls
