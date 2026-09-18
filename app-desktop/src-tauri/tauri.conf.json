@@ -15,6 +15,12 @@
         "title": "Triton",
         "width": 900,
         "height": 700,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": {
+          "x": 18,
+          "y": 18
+        },
         "dragDropEnabled": false
       }
     ],

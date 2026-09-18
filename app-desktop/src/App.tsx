@@ -329,14 +329,17 @@ function SessionActionsMenu({
   onRename,
   onTogglePin,
   onDelete,
+  className,
 }: {
   session: Session;
   onRename: () => void;
   onTogglePin: () => void;
   onDelete: () => void;
+  className?: string;
 }) {
   return (
     <div
+      className={className}
       onClick={(e) => {
         e.stopPropagation();
       }}
@@ -390,13 +393,16 @@ function ProjectActionsMenu({
   onNewConversation,
   onRename,
   onDelete,
+  className,
 }: {
   onNewConversation: () => void;
   onRename: () => void;
   onDelete: () => void;
+  className?: string;
 }) {
   return (
     <div
+      className={className}
       onClick={(e) => {
         e.stopPropagation();
       }}
@@ -597,6 +603,14 @@ function multiAgentSubtaskDetail(t: ToolMsg): ReactNode {
 }
 
 function App() {
+  // Sous macOS/Tauri, la fenetre utilise une titlebar « Overlay ». Ce test
+  // conserve la barre native habituelle dans le navigateur de developpement
+  // et sur les autres plateformes, tout en laissant de la place aux boutons
+  // rouge/jaune/vert dans l'application desktop.
+  const usesMacTitlebarOverlay =
+    typeof window !== "undefined" &&
+    "__TAURI_INTERNALS__" in window &&
+    navigator.userAgent.includes("Mac");
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
   // ids des conversations avec un envoi en cours ("" pour une toute
@@ -688,6 +702,12 @@ function App() {
     () => localStorage.getItem("triton_sidebar_collapsed") === "1",
   );
   const [sidebarPeeking, setSidebarPeeking] = useState(false);
+  const toggleSidebar = () => {
+    const next = !sidebarCollapsed;
+    setSidebarCollapsed(next);
+    setSidebarPeeking(false);
+    localStorage.setItem("triton_sidebar_collapsed", next ? "1" : "0");
+  };
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   // turnIndex (1-based, voir groupMessages) du message utilisateur en cours
   // d'edition, null si aucun - un seul a la fois, edite en place dans sa
@@ -2289,18 +2309,15 @@ function App() {
                 icon={<Avatar src="/default-logo.png" name="Triton" size="lg" />}
                 headerEndContent={
                   <div className="flex items-center gap-0.5">
-                    <IconButton
-                      label={sidebarCollapsed ? "Épingler ouverte" : "Fermer la barre latérale"}
-                      icon={<SidebarIcon />}
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        const next = !sidebarCollapsed;
-                        setSidebarCollapsed(next);
-                        setSidebarPeeking(false);
-                        localStorage.setItem("triton_sidebar_collapsed", next ? "1" : "0");
-                      }}
-                    />
+                    {!usesMacTitlebarOverlay && (
+                      <IconButton
+                        label={sidebarCollapsed ? "Épingler ouverte" : "Fermer la barre latérale"}
+                        icon={<SidebarIcon />}
+                        variant="ghost"
+                        size="sm"
+                        onClick={toggleSidebar}
+                      />
+                    )}
                     <IconButton
                       label="Rechercher"
                       icon={<SearchIcon />}
@@ -2393,9 +2410,10 @@ function App() {
                         />
                       </div>
                     ) : (
-                      <SideNavItem
-                        label={p.name}
-                        icon={<FolderIcon className="h-4 w-4" />}
+                      <div className="group">
+                        <SideNavItem
+                          label={p.name}
+                          icon={<FolderIcon className="h-4 w-4" />}
                         isSelected={
                           p.id === activeProjectId && sessionId === null
                         }
@@ -2405,6 +2423,7 @@ function App() {
                         endContent={
                           <div className="flex items-center gap-0.5">
                             <ProjectActionsMenu
+                              className="pointer-events-none opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
                               onNewConversation={() => {
                                 startProjectSession(p.id);
                               }}
@@ -2420,7 +2439,8 @@ function App() {
                             />
                           </div>
                         }
-                      />
+                        />
+                      </div>
                     )}
                     {!isCollapsed &&
                       sessions
@@ -2449,8 +2469,8 @@ function App() {
                               />
                             </div>
                           ) : (
-                            <SideNavItem
-                              key={s.id}
+                            <div key={s.id} className="group">
+                              <SideNavItem
                               label={s.title ?? formatSessionLabel(s.id)}
                               isSelected={s.id === sessionId}
                               onClick={() => {
@@ -2471,6 +2491,7 @@ function App() {
                                     />
                                   )}
                                   <SessionActionsMenu
+                                    className="pointer-events-none opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
                                     session={s}
                                     onRename={() => {
                                       startRename(s);
@@ -2484,7 +2505,8 @@ function App() {
                                   />
                                 </div>
                               }
-                            />
+                              />
+                            </div>
                           ),
                         )}
                   </div>
@@ -2522,8 +2544,8 @@ function App() {
                     />
                   </div>
                 ) : (
-                  <SideNavItem
-                    key={s.id}
+                  <div key={s.id} className="group">
+                    <SideNavItem
                     label={s.title ?? formatSessionLabel(s.id)}
                     isSelected={s.id === sessionId}
                     onClick={() => {
@@ -2535,6 +2557,7 @@ function App() {
                           <Spinner size="sm" shade="subtle" aria-label="Réponse en cours" />
                         )}
                         <SessionActionsMenu
+                          className="pointer-events-none opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
                           session={s}
                           onRename={() => {
                             startRename(s);
@@ -2548,7 +2571,8 @@ function App() {
                         />
                       </div>
                     }
-                  />
+                    />
+                  </div>
                 ),
               )}
             </SideNavSection>
@@ -2557,29 +2581,47 @@ function App() {
 
   return (
     <Theme theme={neutralTheme} mode={themeMode}>
-      {sidebarCollapsed && (
-        <div
-          className="fixed inset-y-0 left-0 z-40 w-2"
-          onMouseEnter={() => {
-            setSidebarPeeking(true);
-          }}
-        />
-      )}
-      {sidebarCollapsed && sidebarPeeking && (
-        <div
-          className="fixed inset-y-0 left-0 z-50 shadow-2xl"
-          onMouseLeave={() => {
-            setSidebarPeeking(false);
-          }}
-        >
-          {sideNavElement}
-        </div>
-      )}
-      <AppShell
-        variant="elevated"
-        height="fill"
-        sideNav={sidebarCollapsed ? undefined : sideNavElement}
-      >
+      <div className="flex h-full min-h-0 flex-col bg-surface">
+        {usesMacTitlebarOverlay && (
+          <div className="flex h-[52px] shrink-0 items-center border-b border-border bg-surface pl-[84px]">
+            <IconButton
+              label={sidebarCollapsed ? "Afficher la barre latérale" : "Masquer la barre latérale"}
+              icon={<SidebarIcon />}
+              variant="ghost"
+              size="sm"
+              onClick={toggleSidebar}
+            />
+            <div data-tauri-drag-region className="h-full flex-1" />
+          </div>
+        )}
+        <div className="min-h-0 flex-1">
+          {sidebarCollapsed && (
+            <div
+              className={`fixed bottom-0 left-0 z-40 w-2 ${
+                usesMacTitlebarOverlay ? "top-[52px]" : "top-0"
+              }`}
+              onMouseEnter={() => {
+                setSidebarPeeking(true);
+              }}
+            />
+          )}
+          {sidebarCollapsed && sidebarPeeking && (
+            <div
+              className={`fixed bottom-0 left-0 z-50 shadow-2xl ${
+                usesMacTitlebarOverlay ? "top-[52px]" : "top-0"
+              }`}
+              onMouseLeave={() => {
+                setSidebarPeeking(false);
+              }}
+            >
+              {sideNavElement}
+            </div>
+          )}
+          <AppShell
+            variant="elevated"
+            height="fill"
+            sideNav={sidebarCollapsed ? undefined : sideNavElement}
+          >
         {view === "task" && activeTaskId && (
           <TaskView
             key={activeTaskId}
@@ -3224,7 +3266,9 @@ function App() {
             )}
           </div>
         )}
-      </AppShell>
+          </AppShell>
+        </div>
+      </div>
 
       <AlertDialog
         isOpen={deletingSession !== null}
