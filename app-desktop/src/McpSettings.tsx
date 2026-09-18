@@ -8,7 +8,7 @@ import { TextInput } from "@astryxdesign/core/TextInput";
 import { TextArea } from "@astryxdesign/core/TextArea";
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
-import { PlusIcon, TrashIcon } from "./icons";
+import { PlugIcon, PlusIcon, TerminalIcon, TrashIcon } from "./icons";
 
 const API_BASE = "http://127.0.0.1:8000";
 
@@ -39,13 +39,24 @@ function parseEnv(text: string): Record<string, string> {
   return env;
 }
 
+/** Les arguments d'un serveur peuvent contenir un header Authorization ou une
+ * clé passée en ligne de commande. L'aperçu doit rester utile sans exposer un
+ * secret dans la modale. La configuration envoyée à l'API reste inchangée. */
+function commandPreview(command: string, args: string[]): string {
+  return `${command} ${args.join(" ")}`
+    .replace(/(authorization:\s*bearer\s+)\S+/gi, "$1••••••••")
+    .replace(/((?:api[_-]?key|token|secret|password)\s*[=:]\s*)\S+/gi, "$1••••••••");
+}
+
 export function McpSettings() {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [deletingName, setDeletingName] = useState<string | null>(null);
+  const [updatingName, setUpdatingName] = useState<string | null>(null);
 
   const [name, setName] = useState("");
   const [command, setCommand] = useState("");
@@ -57,9 +68,12 @@ export function McpSettings() {
   // effet, et loading demarre deja a true via son useState initial.
   useEffect(() => {
     fetch(`${API_BASE}/mcp/servers`)
-      .then((r) => (r.ok ? r.json() : []))
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((data: McpServer[]) => { setServers(data); })
-      .catch(() => { setServers([]); })
+      .catch(() => {
+        setServers([]);
+        setError("Impossible de charger les serveurs MCP.");
+      })
       .finally(() => { setLoading(false); });
   }, []);
 
@@ -110,141 +124,216 @@ export function McpSettings() {
   }
 
   async function toggleServer(server: McpServer) {
-    const res = await fetch(`${API_BASE}/mcp/servers/${server.name}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled: !server.enabled }),
-    });
-    if (res.ok) setServers((await res.json()) as McpServer[]);
+    setUpdatingName(server.name);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/mcp/servers/${server.name}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: !server.enabled }),
+      });
+      if (!res.ok) throw new Error("MCP server update failed");
+      setServers((await res.json()) as McpServer[]);
+    } catch {
+      setError(`Impossible de modifier « ${server.name} ».`);
+    } finally {
+      setUpdatingName(null);
+    }
   }
 
   async function confirmDelete() {
     if (!deletingName) return;
-    const res = await fetch(`${API_BASE}/mcp/servers/${deletingName}`, { method: "DELETE" });
+    const nameToDelete = deletingName;
     setDeletingName(null);
-    if (res.ok) setServers((await res.json()) as McpServer[]);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/mcp/servers/${nameToDelete}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("MCP server deletion failed");
+      setServers((await res.json()) as McpServer[]);
+    } catch {
+      setError(`Impossible de supprimer « ${nameToDelete} ».`);
+    }
   }
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <Text size="lg" weight="semibold">
-          Serveurs MCP
-        </Text>
-        <Button
-          label="Ajouter un serveur"
-          icon={<PlusIcon />}
-          variant="secondary"
-          size="sm"
-          onClick={() => { setShowForm((v) => !v); }}
-        />
+      <div className="mb-4 flex items-start justify-between gap-4 pr-8">
+        <div>
+          <Text size="lg" weight="semibold" className="mb-1 block">
+            Serveurs MCP
+          </Text>
+          <Text size="sm" color="secondary" className="block max-w-xl">
+            Connecte des services externes pour donner au modèle de nouveaux outils, sans les
+            intégrer directement au harness.
+          </Text>
+        </div>
+        {!loading && servers.length > 0 && (
+          <Badge
+            variant="blue"
+            label={`${servers.length} serveur${servers.length > 1 ? "s" : ""}`}
+            className="shrink-0"
+          />
+        )}
       </div>
 
-      <Text size="sm" color="secondary" className="mb-6 block">
-        Un serveur MCP expose des outils que le modèle peut utiliser, comme ceux codés à la main
-        dans <code className="rounded bg-muted px-1 py-0.5 text-xs">tools.py</code>, mais fournis
-        par un processus externe. Même format que la config Claude Desktop (commande, arguments,
-        variables d'environnement).
-      </Text>
+      <div className="mb-4 flex flex-col gap-3 rounded-xl bg-accent-muted px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 shrink-0 text-accent">
+            <PlugIcon className="h-4 w-4" />
+          </div>
+          <Text size="2xs" color="secondary">
+            Même format que Claude Desktop : une commande, des arguments et, si besoin, des
+            variables d'environnement. Les outils deviennent disponibles au prochain run.
+          </Text>
+        </div>
+        {!showForm && (
+          <Button
+            label="Ajouter un serveur"
+            icon={<PlusIcon />}
+            variant="primary"
+            size="sm"
+            className="shrink-0"
+            onClick={() => { setShowForm(true); }}
+          />
+        )}
+      </div>
 
       {showForm && (
-        <div className="mb-6 rounded-xl border border-border bg-surface p-4">
-          <div className="mb-3 grid grid-cols-2 gap-3">
-            <TextInput
-              label="Nom"
-              value={name}
-              onChange={setName}
-              placeholder="mon-serveur"
-              size="sm"
-            />
-            <TextInput
-              label="Commande"
-              value={command}
-              onChange={setCommand}
-              placeholder="npx, uvx, node..."
-              size="sm"
-            />
+        <section className="mb-4 overflow-hidden rounded-2xl border border-accent bg-surface">
+          <div className="flex items-center gap-3 border-b border-border bg-accent-muted px-4 py-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-surface text-accent">
+              <PlusIcon className="h-5 w-5" />
+            </div>
+            <div>
+              <Text weight="semibold" className="block">
+                Nouveau serveur MCP
+              </Text>
+              <Text size="2xs" color="secondary" className="block">
+                La configuration est enregistrée puis le serveur est connecté.
+              </Text>
+            </div>
           </div>
-          <div className="mb-3 grid grid-cols-2 gap-3">
-            <TextArea
-              label="Arguments (un par ligne)"
-              value={argsText}
-              onChange={setArgsText}
-              rows={4}
-              placeholder={"-y\nmon-package-mcp"}
-            />
-            <TextArea
-              label="Variables d'environnement (CLE=valeur, une par ligne)"
-              value={envText}
-              onChange={setEnvText}
-              rows={4}
-              placeholder={"API_KEY=..."}
-            />
+          <div className="p-4">
+            <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <TextInput
+                label="Nom"
+                value={name}
+                onChange={setName}
+                placeholder="mon-serveur"
+                size="sm"
+              />
+              <TextInput
+                label="Commande"
+                value={command}
+                onChange={setCommand}
+                placeholder="npx, uvx, node..."
+                size="sm"
+              />
+            </div>
+            <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <TextArea
+                label="Arguments (un par ligne)"
+                value={argsText}
+                onChange={setArgsText}
+                rows={4}
+                placeholder={"-y\nmon-package-mcp"}
+              />
+              <TextArea
+                label="Variables d'environnement (CLE=valeur, une par ligne)"
+                value={envText}
+                onChange={setEnvText}
+                rows={4}
+                placeholder={"API_KEY=..."}
+              />
+            </div>
+            {formError && (
+              <Text size="sm" className="mb-3 block text-error">
+                {formError}
+              </Text>
+            )}
+            <div className="flex items-center gap-2">
+              <Button
+                label="Ajouter et connecter"
+                icon={<PlugIcon />}
+                variant="primary"
+                size="sm"
+                isLoading={submitting}
+                onClick={() => { void submitForm(); }}
+              />
+              <Button label="Annuler" variant="ghost" size="sm" onClick={resetForm} />
+            </div>
           </div>
-          {formError && (
-            <Text size="sm" className="mb-3 block text-error">
-              {formError}
-            </Text>
-          )}
-          <div className="flex gap-2">
-            <Button
-              label="Ajouter et connecter"
-              variant="primary"
-              size="sm"
-              isLoading={submitting}
-              onClick={() => { void submitForm(); }}
-            >
-              Ajouter et connecter
-            </Button>
-            <Button label="Annuler" variant="ghost" size="sm" onClick={resetForm}>
-              Annuler
-            </Button>
-          </div>
+        </section>
+      )}
+
+      {error && (
+        <Text size="sm" className="mb-3 block text-error">
+          {error}
+        </Text>
+      )}
+
+      {loading && (
+        <div className="flex flex-col gap-3" role="status" aria-label="Chargement des serveurs MCP">
+          {[0, 1, 2].map((item) => (
+            <div
+              key={item}
+              className="h-36 animate-pulse rounded-2xl border border-border bg-muted"
+            />
+          ))}
         </div>
       )}
 
-      {!loading && servers.length === 0 && !showForm ? (
+      {!loading && servers.length === 0 && !showForm && !error ? (
         <EmptyState
           title="Aucun serveur MCP configuré"
           description="Ajoute un serveur pour donner au modèle des outils supplémentaires, sans avoir à les coder toi-même."
         />
-      ) : (
-        <div className="space-y-2">
+      ) : !loading && servers.length > 0 ? (
+        <div className="flex flex-col gap-3">
           {servers.map((s) => (
-            <div key={s.name} className="rounded-xl border border-border bg-surface p-4">
+            <section
+              key={s.name}
+              className="rounded-2xl border border-border bg-surface px-4 py-3.5 transition-colors hover:border-accent"
+            >
               <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <Text weight="semibold">{s.name}</Text>
-                    {s.enabled ? (
-                      s.connected ? (
-                        <Badge variant="success" label={`${s.tools.length} outil(s)`} />
-                      ) : (
-                        <Badge variant="error" label="échec de connexion" />
-                      )
-                    ) : (
-                      <Badge variant="neutral" label="désactivé" />
-                    )}
+                <div className="flex min-w-0 flex-1 items-start gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-muted text-accent">
+                    <PlugIcon className="h-5 w-5" />
                   </div>
-                  <Text size="2xs" color="secondary" className="mt-1 block truncate">
-                    {s.command} {s.args.join(" ")}
-                  </Text>
-                  {s.error && (
-                    <Text size="2xs" className="mt-1 block text-error">
-                      {s.error}
+                  <div className="min-w-0 pt-0.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Text weight="semibold">{s.name}</Text>
+                      {s.enabled ? (
+                        s.connected ? (
+                          <Badge
+                            variant="success"
+                            label={`${s.tools.length} outil${s.tools.length > 1 ? "s" : ""}`}
+                          />
+                        ) : (
+                          <Badge variant="error" label="connexion échouée" />
+                        )
+                      ) : (
+                        <Badge variant="neutral" label="désactivé" />
+                      )}
+                    </div>
+                    <Text size="2xs" color="secondary" className="mt-1 block">
+                      {s.enabled
+                        ? s.connected
+                          ? "Connecté et prêt à fournir ses outils."
+                          : "Le serveur est activé mais la connexion a échoué."
+                        : "Ce serveur ne sera pas lancé lors des prochains runs."}
                     </Text>
-                  )}
-                  {s.connected && s.tools.length > 0 && (
-                    <Text size="2xs" color="secondary" className="mt-1 block truncate">
-                      {s.tools.join(", ")}
-                    </Text>
-                  )}
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  <Text size="2xs" color="secondary" className="hidden sm:block">
+                    Activé
+                  </Text>
                   <Switch
-                    label="Activé"
+                    label={`Activer ${s.name}`}
                     isLabelHidden
                     value={s.enabled}
+                    isDisabled={updatingName === s.name}
                     onChange={() => { void toggleServer(s); }}
                     size="sm"
                   />
@@ -253,14 +342,43 @@ export function McpSettings() {
                     icon={<TrashIcon />}
                     variant="ghost"
                     size="sm"
+                    isDisabled={updatingName === s.name}
                     onClick={() => { setDeletingName(s.name); }}
                   />
                 </div>
               </div>
-            </div>
+
+              <div className="mt-3 rounded-xl bg-muted px-3 py-2.5">
+                <div className="mb-1 flex items-center gap-2 text-secondary">
+                  <TerminalIcon className="h-3.5 w-3.5" />
+                  <Text size="2xs" color="secondary" className="uppercase tracking-wide">
+                    Commande
+                  </Text>
+                </div>
+                <code className="block truncate font-mono text-[11px] text-secondary">
+                  {commandPreview(s.command, s.args)}
+                </code>
+              </div>
+
+              {s.error && (
+                <Text size="2xs" className="mt-2 block rounded-lg bg-error-muted px-3 py-2 text-error">
+                  {s.error}
+                </Text>
+              )}
+              {s.connected && s.tools.length > 0 && (
+                <div className="mt-3">
+                  <Text size="2xs" color="secondary" className="mb-1 block uppercase tracking-wide">
+                    Outils disponibles
+                  </Text>
+                  <Text size="2xs" color="secondary" className="block truncate font-mono">
+                    {s.tools.join(" · ")}
+                  </Text>
+                </div>
+              )}
+            </section>
           ))}
         </div>
-      )}
+      ) : null}
 
       <AlertDialog
         isOpen={deletingName !== null}
