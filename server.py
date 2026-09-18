@@ -45,7 +45,7 @@ from triton.llm.chat_loop import (
 )
 from triton.llm.model_roles import ROLE_MODELS
 from triton.storage import scheduled_tasks
-from triton.storage.logs import LOGS_FILE, current_month_cost, log_event
+from triton.storage.logs import LOGS_FILE, current_month_cost, events_for_month, log_event
 from triton.storage.memory import append_global_memory, load_global_memory, set_global_memory
 from triton.storage.projects import (
     Project,
@@ -528,7 +528,11 @@ def run_chat_stream(
 
         try:
             for event in timed_stream_chat(
-                messages, tools=TOOLS, model=session_model, session_id=session_id
+                messages,
+                tools=TOOLS,
+                model=session_model,
+                session_id=session_id,
+                project_id=project_id,
             ):
                 if isinstance(event, str):
                     content_parts.append(event)
@@ -2041,6 +2045,162 @@ def get_logs(limit: int = 500) -> list[dict[str, object]]:
     events = [json.loads(line) for line in lines[-limit:]]
     events.reverse()
     return events
+
+
+class ModelCostBreakdown(BaseModel):
+    model: str
+    calls: int
+    total_tokens: int
+    cost_usd: float
+
+
+class ProjectCostBreakdown(BaseModel):
+    project_id: str | None
+    project_name: str
+    calls: int
+    total_tokens: int
+    cost_usd: float
+
+
+class DayCostBreakdown(BaseModel):
+    date: str
+    calls: int
+    total_tokens: int
+    cost_usd: float
+
+
+class CostSummary(BaseModel):
+    month: str
+    total_calls: int
+    total_tokens: int
+    total_cost_usd: float
+    by_model: list[ModelCostBreakdown]
+    by_project: list[ProjectCostBreakdown]
+    by_day: list[DayCostBreakdown]
+
+
+class _CostBucket(TypedDict):
+    calls: int
+    total_tokens: int
+    cost_usd: float
+
+
+@app.get("/logs/cost_summary", tags=["Logs"])
+def get_cost_summary() -> CostSummary:
+    """Aggregated view of the current calendar month's spend across every
+    conversation, subagent, and multi-agent run - by model, project, and
+    day. GET /sessions/{id}/cost (the /cost command) stays scoped to
+    one conversation; this is the "how much have I spent this month, and
+    on what" view that was missing.
+
+    Project is resolved from the event's own `project_id` when it has one
+    (orchestrator/subagent calls log it directly - see agents/
+    orchestrator.py, agents/subagents.py), otherwise from its
+    `session_id` via load_session_project (older normal chat model_call
+    events). An event with neither is bucketed under "Sans projet"; an
+    explicit project id that no longer exists is shown as "Projet supprimé".
+    Neither case is dropped, since both still represent real spend."""
+    month = datetime.now().strftime("%Y-%m")
+    events = events_for_month(month)
+
+    by_model: dict[str, _CostBucket] = {}
+    by_project: dict[str | None, _CostBucket] = {}
+    by_day: dict[str, _CostBucket] = {}
+    total_calls = 0
+    total_tokens = 0
+    total_cost = 0.0
+
+    project_names = {p.id: p.name for p in load_projects()}
+
+    for event in events:
+        raw_model = event.get("model")
+        raw_cost = event.get("cost_usd")
+        # A model call with unknown pricing still belongs in the call/token
+        # totals. Conversely, current_month_cost() intentionally counts any
+        # future event carrying cost_usd even if it forgot a model field, so
+        # keep this summary aligned with the budget source of truth by giving
+        # that rare legacy/future case an explicit fallback bucket.
+        if not isinstance(raw_model, str) and not isinstance(raw_cost, int | float):
+            continue  # a tool_call, an error event, etc.
+        model = raw_model if isinstance(raw_model, str) else "Modèle inconnu"
+        cost = float(raw_cost) if isinstance(raw_cost, int | float) else 0.0
+
+        raw_tokens = event.get("total_tokens")
+        if isinstance(raw_tokens, int):
+            tokens = raw_tokens
+        else:
+            prompt_tokens = event.get("prompt_tokens")
+            completion_tokens = event.get("completion_tokens")
+            tokens = (prompt_tokens if isinstance(prompt_tokens, int) else 0) + (
+                completion_tokens if isinstance(completion_tokens, int) else 0
+            )
+
+        total_calls += 1
+        total_tokens += tokens
+        total_cost += cost
+
+        model_bucket = by_model.setdefault(model, {"calls": 0, "total_tokens": 0, "cost_usd": 0.0})
+        model_bucket["calls"] += 1
+        model_bucket["total_tokens"] += tokens
+        model_bucket["cost_usd"] += cost
+
+        project_id = event.get("project_id")
+        if not isinstance(project_id, str):
+            session_id = event.get("session_id")
+            project_id = load_session_project(session_id) if isinstance(session_id, str) else None
+
+        project_bucket = by_project.setdefault(
+            project_id, {"calls": 0, "total_tokens": 0, "cost_usd": 0.0}
+        )
+        project_bucket["calls"] += 1
+        project_bucket["total_tokens"] += tokens
+        project_bucket["cost_usd"] += cost
+
+        timestamp = event.get("timestamp")
+        day = timestamp[:10] if isinstance(timestamp, str) else "Date inconnue"
+        day_bucket = by_day.setdefault(day, {"calls": 0, "total_tokens": 0, "cost_usd": 0.0})
+        day_bucket["calls"] += 1
+        day_bucket["total_tokens"] += tokens
+        day_bucket["cost_usd"] += cost
+
+    return CostSummary(
+        month=month,
+        total_calls=total_calls,
+        total_tokens=total_tokens,
+        total_cost_usd=round(total_cost, 6),
+        by_model=[
+            ModelCostBreakdown(
+                model=model,
+                calls=int(b["calls"]),
+                total_tokens=int(b["total_tokens"]),
+                cost_usd=round(b["cost_usd"], 6),
+            )
+            for model, b in sorted(by_model.items(), key=lambda kv: -kv[1]["cost_usd"])
+        ],
+        by_project=[
+            ProjectCostBreakdown(
+                project_id=project_id,
+                project_name=(
+                    "Sans projet"
+                    if project_id is None
+                    else project_names.get(project_id, "Projet supprimé")
+                ),
+                calls=int(b["calls"]),
+                total_tokens=int(b["total_tokens"]),
+                cost_usd=round(b["cost_usd"], 6),
+            )
+            for project_id, b in sorted(by_project.items(), key=lambda kv: -kv[1]["cost_usd"])
+        ],
+        by_day=[
+            DayCostBreakdown(
+                date=day,
+                calls=int(b["calls"]),
+                total_tokens=int(b["total_tokens"]),
+                cost_usd=round(b["cost_usd"], 6),
+            )
+            for day, b in sorted(by_day.items())
+        ],
+    )
 
 
 if __name__ == "__main__":

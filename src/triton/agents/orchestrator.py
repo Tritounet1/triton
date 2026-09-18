@@ -480,6 +480,7 @@ def _run_subtask(
                 total_tokens=reply.total_tokens,
                 tool_calls=len(reply.tool_calls),
                 cost_usd=estimate_cost(reply.model, reply.prompt_tokens, reply.completion_tokens),
+                project_id=project.id if project else None,
             )
 
             if not reply.tool_calls:
@@ -571,6 +572,7 @@ def _run_subtask(
             total_tokens=final.total_tokens,
             tool_calls=0,
             cost_usd=estimate_cost(final.model, final.prompt_tokens, final.completion_tokens),
+            project_id=project.id if project else None,
         )
         subtask.result = final.content or (
             f"(stopped after {MAX_SUBTASK_ITERATIONS} iterations without concluding)"
@@ -611,6 +613,7 @@ def _run(run: OrchestratorRun) -> None:
             cost_usd=estimate_cost(
                 plan_reply.model, plan_reply.prompt_tokens, plan_reply.completion_tokens
             ),
+            project_id=run.project_id,
         )
         if plan_reply.content is None:
             raise ValueError("planner returned no plan")
@@ -695,6 +698,7 @@ def _execute_subtasks(
             cost_usd=estimate_cost(
                 synth_reply.model, synth_reply.prompt_tokens, synth_reply.completion_tokens
             ),
+            project_id=run.project_id,
         )
         run.final_result = synth_reply.content or "(the planner returned no synthesis)"
         run.status = "done"

@@ -123,7 +123,10 @@ def test_confirmation_required_event_carries_the_session_id(tmp_path, monkeypatc
         finish_reason="tool_calls",
     )
 
-    def fake_timed_stream_chat(*_args, **_kwargs):
+    captured_stream_kwargs = {}
+
+    def fake_timed_stream_chat(*_args, **kwargs):
+        captured_stream_kwargs.update(kwargs)
         yield write_reply
 
     monkeypatch.setattr(server, "timed_stream_chat", fake_timed_stream_chat)
@@ -139,4 +142,5 @@ def test_confirmation_required_event_carries_the_session_id(tmp_path, monkeypatc
     confirmation_events = [data for event, data in events if event == "confirmation_required"]
     assert len(confirmation_events) == 1
     assert confirmation_events[0]["session_id"] == session_id
+    assert captured_stream_kwargs["project_id"] == project.id
     server.PENDING_CONFIRMATIONS.clear()

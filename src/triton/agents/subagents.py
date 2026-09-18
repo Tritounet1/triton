@@ -126,6 +126,7 @@ def _run(task_entry: SubagentTask, project: Project | None) -> None:
                 total_tokens=reply.total_tokens,
                 tool_calls=len(reply.tool_calls),
                 cost_usd=estimate_cost(reply.model, reply.prompt_tokens, reply.completion_tokens),
+                project_id=project.id if project else None,
             )
 
             if not reply.tool_calls:
@@ -215,6 +216,7 @@ def _run(task_entry: SubagentTask, project: Project | None) -> None:
             total_tokens=final.total_tokens,
             tool_calls=0,
             cost_usd=estimate_cost(final.model, final.prompt_tokens, final.completion_tokens),
+            project_id=project.id if project else None,
         )
         task_entry.result = final.content or (
             f"(sub-agent stopped after {SUBAGENT_MAX_ITERATIONS} iterations without concluding)"

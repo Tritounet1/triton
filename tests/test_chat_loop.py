@@ -208,7 +208,7 @@ def test_summarize_redacts_attachments_instead_of_resending_them(monkeypatch):
     assert "here's my CV" in transcript
 
 
-def test_timed_stream_chat_forwards_model_and_logs_session_id(monkeypatch):
+def test_timed_stream_chat_forwards_model_and_logs_session_and_project_ids(monkeypatch):
     """Both new to timed_stream_chat for the /model and /cost commands:
     `model` must reach stream_chat (the per-session override), and
     `session_id` must reach the logged event (what GET
@@ -224,12 +224,18 @@ def test_timed_stream_chat_forwards_model_and_logs_session_id(monkeypatch):
     monkeypatch.setattr(chat_loop, "log_event", lambda **kwargs: captured_events.append(kwargs))
 
     list(
-        chat_loop.timed_stream_chat([_user("hi")], model="override/model", session_id="session-123")
+        chat_loop.timed_stream_chat(
+            [_user("hi")],
+            model="override/model",
+            session_id="session-123",
+            project_id="project-456",
+        )
     )
 
     assert captured_stream_kwargs["model"] == "override/model"
     assert len(captured_events) == 1
     assert captured_events[0]["session_id"] == "session-123"
+    assert captured_events[0]["project_id"] == "project-456"
     assert captured_events[0]["model"] == "override/model"
 
 
@@ -248,3 +254,4 @@ def test_timed_stream_chat_defaults_model_and_session_id_to_none(monkeypatch):
 
     assert captured_stream_kwargs["model"] is None
     assert captured_events[0]["session_id"] is None
+    assert captured_events[0]["project_id"] is None

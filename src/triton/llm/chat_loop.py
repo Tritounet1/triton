@@ -140,6 +140,7 @@ def timed_stream_chat(
     tools: list[ChatCompletionToolParam] | None = None,
     model: str | None = None,
     session_id: str | None = None,
+    project_id: str | None = None,
 ) -> Iterator[str | ChatResult]:
     """Streaming version of timed_call_chat: relays text chunks as they
     arrive, and logs the call once the final ChatResult is received.
@@ -148,7 +149,9 @@ def timed_stream_chat(
     here, is what the /cost command's GET /sessions/{id}/cost endpoint
     filters model_call events by - omit it (as every caller except
     server.py's run_chat_stream does) and this call is simply left out of
-    any per-conversation cost total."""
+    any per-conversation cost total. `project_id` is persisted directly too,
+    so the global cost dashboard keeps the original attribution even if the
+    project is later deleted and its session marker is cleared."""
     start = time.perf_counter()
     for event in stream_chat(messages, tools=tools, model=model):
         if isinstance(event, str):
@@ -159,6 +162,7 @@ def timed_stream_chat(
         log_event(
             type="model_call",
             session_id=session_id,
+            project_id=project_id,
             model=event.model,
             prompt_tokens=event.prompt_tokens,
             completion_tokens=event.completion_tokens,

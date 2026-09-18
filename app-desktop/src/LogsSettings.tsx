@@ -55,6 +55,40 @@ interface ToolCallEvent {
 type LogEvent = ModelCallEvent | SubagentModelCallEvent | ToolCallEvent;
 type CostEvent = ModelCallEvent | SubagentModelCallEvent;
 
+interface ModelCostBreakdown {
+  [key: string]: unknown;
+  model: string;
+  calls: number;
+  total_tokens: number;
+  cost_usd: number;
+}
+
+interface ProjectCostBreakdown {
+  [key: string]: unknown;
+  project_id: string | null;
+  project_name: string;
+  calls: number;
+  total_tokens: number;
+  cost_usd: number;
+}
+
+interface DayCostBreakdown {
+  date: string;
+  calls: number;
+  total_tokens: number;
+  cost_usd: number;
+}
+
+interface CostSummary {
+  month: string;
+  total_calls: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  by_model: ModelCostBreakdown[];
+  by_project: ProjectCostBreakdown[];
+  by_day: DayCostBreakdown[];
+}
+
 function isModelCall(e: LogEvent): e is ModelCallEvent {
   return e.type === "model_call";
 }
@@ -139,19 +173,28 @@ function useDailyStats(events: CostEvent[]): DayStats[] {
       byDay.set(key, entry);
     }
 
-    // comble les jours sans appel (barre a 0) pour un axe continu, du plus
-    // ancien jour observe jusqu'a aujourd'hui, puis ne garde que les
-    // CHART_DAYS derniers jours
-    const earliest = [...byDay.keys()].sort()[0];
-    if (!earliest) return [];
-    const days: DayStats[] = [];
-    for (let d = new Date(earliest); d <= new Date(); d.setDate(d.getDate() + 1)) {
-      const key = d.toISOString().slice(0, 10);
-      const entry = byDay.get(key) ?? { tokens: 0, cost: 0 };
-      days.push({ date: key, tokens: entry.tokens, cost: entry.cost });
-    }
-    return days.slice(-CHART_DAYS);
+    return completeDailyStats(
+      [...byDay].map(([date, values]) => ({ date, tokens: values.tokens, cost: values.cost })),
+    );
   }, [events]);
+}
+
+/** Comble les jours sans appel pour conserver un axe continu. Le résumé
+ * mensuel du serveur et le repli sur les logs récents passent par la même
+ * normalisation, donc le graphique ne change pas de forme si l'endpoint de
+ * synthèse est momentanément indisponible. */
+function completeDailyStats(observed: DayStats[]): DayStats[] {
+  if (observed.length === 0) return [];
+  const byDay = new Map(observed.map((day) => [day.date, day]));
+  const earliest = [...byDay.keys()].sort()[0];
+  if (!earliest) return [];
+
+  const days: DayStats[] = [];
+  for (let d = new Date(earliest); d <= new Date(); d.setDate(d.getDate() + 1)) {
+    const key = d.toISOString().slice(0, 10);
+    days.push(byDay.get(key) ?? { date: key, tokens: 0, cost: 0 });
+  }
+  return days.slice(-CHART_DAYS);
 }
 
 interface DailyBarChartProps {
@@ -219,6 +262,7 @@ function DailyBarChart({ days, title, getValue }: DailyBarChartProps) {
 
 export function LogsSettings() {
   const [events, setEvents] = useState<LogEvent[]>([]);
+  const [costSummary, setCostSummary] = useState<CostSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [budget, setBudget] = useState<number | null>(null);
   const [budgetInput, setBudgetInput] = useState<number | null>(null);
@@ -237,12 +281,18 @@ export function LogsSettings() {
   // telle quelle dans l'effet de montage ci-dessous : react-hooks
   // (set-state-in-effect) interdit d'appeler setState de facon synchrone
   // dans le corps d'un effet.
-  function fetchLogs() {
-    fetch(`${API_BASE}/logs`)
+  function fetchLogs(): Promise<void> {
+    return fetch(`${API_BASE}/logs`)
       .then((r) => (r.ok ? r.json() : []))
       .then((data: LogEvent[]) => { setEvents(data); })
-      .catch(() => { setEvents([]); })
-      .finally(() => { setLoading(false); });
+      .catch(() => { setEvents([]); });
+  }
+
+  function fetchCostSummary(): Promise<void> {
+    return fetch(`${API_BASE}/logs/cost_summary`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: CostSummary | null) => { setCostSummary(data); })
+      .catch(() => { setCostSummary(null); });
   }
 
   // seule source de verite pour "le budget est-il depasse" : le meme calcul
@@ -250,8 +300,8 @@ export function LogsSettings() {
   // dispatch_orchestrator bloquent reellement les nouveaux appels - un calcul
   // refait ici a partir des /logs bruts pourrait diverger (ex. en oubliant un
   // type d'evenement) de ce qui est vraiment applique.
-  function fetchBudget() {
-    fetch(`${API_BASE}/settings/budget/status`)
+  function fetchBudget(): Promise<void> {
+    return fetch(`${API_BASE}/settings/budget/status`)
       .then((r) =>
         r.ok ? r.json() : { monthly_budget_usd: null, spent_usd: 0, exceeded: false },
       )
@@ -271,13 +321,13 @@ export function LogsSettings() {
   // gestionnaire d'evenement (juste pas dans un effet).
   function refresh() {
     setLoading(true);
-    fetchLogs();
-    fetchBudget();
+    loadAll();
   }
 
   function loadAll() {
-    fetchLogs();
-    fetchBudget();
+    void Promise.all([fetchLogs(), fetchCostSummary(), fetchBudget()]).finally(() => {
+      setLoading(false);
+    });
   }
 
   useEffect(loadAll, []);
@@ -292,7 +342,7 @@ export function LogsSettings() {
       });
       if (res.ok) {
         setBudget(budgetInput);
-        fetchBudget();
+        void fetchBudget();
       }
     } finally {
       setSavingBudget(false);
@@ -309,16 +359,32 @@ export function LogsSettings() {
     [modelCalls, subagentModelCalls],
   );
 
-  const totalTokens = useMemo(
+  const recentTotalTokens = useMemo(
     () => costEvents.reduce((sum, e) => sum + (e.total_tokens ?? 0), 0),
     [costEvents],
   );
-  const totalCost = useMemo(
+  const recentTotalCost = useMemo(
     () => costEvents.reduce((sum, e) => sum + (e.cost_usd ?? 0), 0),
     [costEvents],
   );
 
-  const days = useDailyStats(costEvents);
+  const recentDays = useDailyStats(costEvents);
+  const totalCalls = costSummary?.total_calls ?? costEvents.length;
+  const totalTokens = costSummary?.total_tokens ?? recentTotalTokens;
+  const totalCost = costSummary?.total_cost_usd ?? recentTotalCost;
+  const days = useMemo(
+    () =>
+      costSummary
+        ? completeDailyStats(
+            costSummary.by_day.map((day) => ({
+              date: day.date,
+              tokens: day.total_tokens,
+              cost: day.cost_usd,
+            })),
+          )
+        : recentDays,
+    [costSummary, recentDays],
+  );
 
   const modelColumns: TableColumn<ModelCallEvent>[] = [
     {
@@ -414,6 +480,66 @@ export function LogsSettings() {
     },
   ];
 
+  const summaryModelColumns: TableColumn<ModelCostBreakdown>[] = [
+    {
+      key: "model",
+      header: "Modèle",
+      width: proportional(2),
+      renderCell: (row) => <Text size="sm">{row.model}</Text>,
+    },
+    {
+      key: "calls",
+      header: "Appels",
+      width: pixel(75),
+      align: "end",
+      renderCell: (row) => <Text size="sm">{row.calls}</Text>,
+    },
+    {
+      key: "tokens",
+      header: "Tokens",
+      width: pixel(110),
+      align: "end",
+      renderCell: (row) => <Text size="sm">{row.total_tokens.toLocaleString("fr-FR")}</Text>,
+    },
+    {
+      key: "cost",
+      header: "Coût",
+      width: pixel(85),
+      align: "end",
+      renderCell: (row) => <Text size="sm">{formatCost(row.cost_usd)}</Text>,
+    },
+  ];
+
+  const summaryProjectColumns: TableColumn<ProjectCostBreakdown>[] = [
+    {
+      key: "project",
+      header: "Projet",
+      width: proportional(2),
+      renderCell: (row) => <Text size="sm">{row.project_name}</Text>,
+    },
+    {
+      key: "calls",
+      header: "Appels",
+      width: pixel(75),
+      align: "end",
+      renderCell: (row) => <Text size="sm">{row.calls}</Text>,
+    },
+    {
+      key: "tokens",
+      header: "Tokens",
+      width: pixel(110),
+      align: "end",
+      renderCell: (row) => <Text size="sm">{row.total_tokens.toLocaleString("fr-FR")}</Text>,
+    },
+    {
+      key: "cost",
+      header: "Coût",
+      width: pixel(85),
+      align: "end",
+      renderCell: (row) => <Text size="sm">{formatCost(row.cost_usd)}</Text>,
+    },
+  ];
+
   return (
     <div>
       <div className="mb-4 flex items-center justify-between">
@@ -429,7 +555,7 @@ export function LogsSettings() {
         />
       </div>
 
-      {!loading && events.length === 0 ? (
+      {!loading && events.length === 0 && totalCalls === 0 ? (
         <EmptyState
           title="Aucun log pour l'instant"
           description="Les appels au modèle et aux outils apparaîtront ici au fil des conversations."
@@ -446,10 +572,41 @@ export function LogsSettings() {
           )}
 
           <div className="mb-8 grid grid-cols-3 gap-3">
-            <StatTile label="Appels modèle" value={String(costEvents.length)} />
-            <StatTile label="Tokens totaux" value={totalTokens.toLocaleString("fr-FR")} />
-            <StatTile label="Coût total" value={formatCost(totalCost)} />
+            <StatTile label="Appels modèle ce mois-ci" value={String(totalCalls)} />
+            <StatTile label="Tokens ce mois-ci" value={totalTokens.toLocaleString("fr-FR")} />
+            <StatTile label="Coût ce mois-ci" value={formatCost(totalCost)} />
           </div>
+
+          {costSummary && costSummary.total_calls > 0 && (
+            <div className="mb-8 grid grid-cols-1 gap-4 xl:grid-cols-2">
+              <div>
+                <Text size="sm" weight="semibold" className="mb-2 block">
+                  Répartition mensuelle par modèle
+                </Text>
+                <div className="overflow-hidden rounded-xl border border-border">
+                  <Table
+                    data={costSummary.by_model}
+                    columns={summaryModelColumns}
+                    density="compact"
+                    hasHover
+                  />
+                </div>
+              </div>
+              <div>
+                <Text size="sm" weight="semibold" className="mb-2 block">
+                  Répartition mensuelle par projet
+                </Text>
+                <div className="overflow-hidden rounded-xl border border-border">
+                  <Table
+                    data={costSummary.by_project}
+                    columns={summaryProjectColumns}
+                    density="compact"
+                    hasHover
+                  />
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-2">
             <DailyBarChart days={days} title="Tokens consommés par jour" getValue={(d) => d.tokens} />
