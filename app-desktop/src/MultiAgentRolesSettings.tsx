@@ -148,7 +148,7 @@ export function MultiAgentRolesSettings() {
         Les rôles que le planificateur peut attribuer à une sous-tâche (
         <code className="rounded bg-muted px-1 py-0.5 text-xs">/multi-agents</code>), et combien
         de sous-tâches un run peut créer au maximum. Le modèle utilisé par chaque rôle se règle
-        dans « Rôles multi-agent » (modèles), à part.
+        dans « Modèles des rôles », à part.
       </Text>
 
       {!loading && (

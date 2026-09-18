@@ -14,6 +14,19 @@ export interface FamilyInfo {
 
 const DEFAULT_LOGO = "/default-logo.png";
 
+// Familles volontairement absentes des sélecteurs de modèles : elles restent
+// connues ici pour afficher correctement un éventuel modèle déjà enregistré
+// (avatar, logs, etc.), mais ne sont pas proposées dans l'interface.
+const HIDDEN_MODEL_FAMILIES = new Set([
+  "cohere",
+  "amazon",
+  "nvidia",
+  "perplexity",
+  "minimax",
+  "microsoft",
+  "other",
+]);
+
 export const FAMILIES: Record<string, FamilyInfo> = {
   anthropic: { label: "Anthropic (Claude)", logo: "/anthropic-logo.png" },
   openai: { label: "OpenAI (ChatGPT)", logo: "/chatgpt-logo.png" },
@@ -50,6 +63,13 @@ export function familyKey(id: string): string {
 export function familyInfo(key: string): FamilyInfo {
   const info = FAMILIES[key] ?? { label: "Autres" };
   return { ...info, logo: info.logo ?? DEFAULT_LOGO };
+}
+
+/** Indique si la famille d'un modèle fait partie de la sélection volontairement
+ * exposée dans les réglages. Partagé par le modèle principal et les rôles pour
+ * que leurs catalogues restent strictement cohérents. */
+export function isModelFamilyVisible(modelId: string): boolean {
+  return !HIDDEN_MODEL_FAMILIES.has(familyKey(modelId));
 }
 
 /** Nom + logo a passer a un composant Avatar pour representer le modele

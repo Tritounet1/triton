@@ -53,7 +53,7 @@ const CATEGORIES: CategoryDef[] = [
   },
   {
     id: "role_models",
-    label: "Rôles multi-agent (modèles)",
+    label: "Modèles des rôles",
     icon: <NetworkIcon className="h-4 w-4" />,
   },
   { id: "mcp", label: "Serveurs MCP", icon: <PlugIcon className="h-4 w-4" /> },

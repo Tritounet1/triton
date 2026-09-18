@@ -9,7 +9,7 @@ import { Table, proportional, pixel, type TableColumn } from "@astryxdesign/core
 import { Tooltip } from "@astryxdesign/core/Tooltip";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { CheckIcon, ChevronRightIcon, SearchIcon } from "./icons";
-import { familyKey, familyInfo } from "./modelFamilies";
+import { familyKey, familyInfo, isModelFamilyVisible } from "./modelFamilies";
 
 const API_BASE = "http://127.0.0.1:8000";
 
@@ -34,24 +34,6 @@ interface ModelSettingsProps {
 // grandes familles en premier (dans cet ordre), puis le reste des familles
 // nommees par ordre alphabetique, "Autres" toujours en dernier
 const FAMILY_PRIORITY = ["anthropic", "openai", "google", "qwen"];
-
-// familles jamais utilisees en pratique - masquees de cette page pour
-// alleger la liste (pas retirees de modelFamilies.ts : un modele de l'une
-// d'elles reste correctement affiche partout ailleurs - avatar du chat,
-// selecteurs de role... - si jamais il finit selectionne malgre tout, ex.
-// via /model en tapant l'id a la main). Un modele deja selectionne quand
-// sa famille est masquee ici resterait invisible dans cette liste - pas
-// geree pour l'instant, cas limite improbable vu la raison d'etre de cette
-// liste. Remettre une famille ici en la retirant si besoin plus tard.
-const HIDDEN_FAMILIES = new Set([
-  "cohere",
-  "amazon",
-  "nvidia",
-  "perplexity",
-  "minimax",
-  "microsoft",
-  "other",
-]);
 
 function formatContextLength(n: number): string {
   if (n <= 0) return "-";
@@ -148,12 +130,12 @@ export function ModelSettings({ onModelChanged }: ModelSettingsProps) {
     const q = search.trim().toLowerCase();
     const filtered = models
       .filter((m) => !toolsOnly || m.supports_tools)
+      .filter((m) => isModelFamilyVisible(m.id))
       .filter((m) => !q || m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q));
 
     const byFamily = new Map<string, ModelInfo[]>();
     for (const m of filtered) {
       const key = familyKey(m.id);
-      if (HIDDEN_FAMILIES.has(key)) continue;
       const list = byFamily.get(key) ?? [];
       list.push(m);
       byFamily.set(key, list);
