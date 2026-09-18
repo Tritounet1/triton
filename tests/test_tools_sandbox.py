@@ -234,3 +234,62 @@ def test_omitted_path_is_not_defaulted_when_not_in_defaultable_set(tmp_path):
     error = enforce_project_sandbox("read_file", args, project)
     assert error is None
     assert "path" not in args
+
+
+# --- hard denylist: blocked outright, even with no confirmation/yolo check
+# involved at all (this module is called before that logic ever runs) ---
+
+
+def test_denylist_blocks_recursive_delete_of_home(tmp_path):
+    project = _project(tmp_path)
+    args: dict[str, object] = {"command": "rm -rf ~", "directory": str(tmp_path / "myproject")}
+    error = enforce_project_sandbox("run_shell", args, project)
+    assert error is not None
+    assert "denied outright" in error
+
+
+def test_denylist_blocks_recursive_delete_of_root(tmp_path):
+    project = _project(tmp_path)
+    args: dict[str, object] = {
+        "command": "sudo rm -rf /",
+        "directory": str(tmp_path / "myproject"),
+    }
+    error = enforce_project_sandbox("run_shell", args, project)
+    assert error is not None
+
+
+def test_denylist_blocks_git_force_push(tmp_path):
+    project = _project(tmp_path)
+    args: dict[str, object] = {
+        "command": "git push --force origin main",
+        "directory": str(tmp_path / "myproject"),
+    }
+    error = enforce_project_sandbox("run_shell", args, project)
+    assert error is not None
+
+
+def test_denylist_blocks_disk_format_and_raw_device_write(tmp_path):
+    project = _project(tmp_path)
+    root = str(tmp_path / "myproject")
+    format_args: dict[str, object] = {"command": "mkfs.ext4 /dev/sda1", "directory": root}
+    assert enforce_project_sandbox("run_shell", format_args, project) is not None
+    dd_args: dict[str, object] = {"command": "dd if=/dev/zero of=/dev/sda", "directory": root}
+    assert enforce_project_sandbox("run_shell", dd_args, project) is not None
+
+
+def test_denylist_leaves_ordinary_commands_alone(tmp_path):
+    project = _project(tmp_path)
+    root = str(tmp_path / "myproject")
+    build_args: dict[str, object] = {"command": "rm -rf build", "directory": root}
+    assert enforce_project_sandbox("run_shell", build_args, project) is None
+    modules_args: dict[str, object] = {"command": "rm -rf ./node_modules", "directory": root}
+    assert enforce_project_sandbox("run_shell", modules_args, project) is None
+    push_args: dict[str, object] = {"command": "git push origin main", "directory": root}
+    assert enforce_project_sandbox("run_shell", push_args, project) is None
+
+
+def test_denylist_applies_even_with_no_project_at_all():
+    args: dict[str, object] = {"command": "rm -rf ~"}
+    error = enforce_project_sandbox("run_shell", args, None)
+    assert error is not None
+    assert "denied outright" in error

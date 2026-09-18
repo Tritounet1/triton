@@ -6,6 +6,7 @@ without depending on __init__.py, which itself imports every category
 module to assemble TOOLS_REGISTRY - a category module importing back from
 __init__ would be circular."""
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -175,12 +176,59 @@ def _enforce_edit_file_sandbox(args: dict[str, object], root: Path) -> str | Non
     return None
 
 
+# a small, non-bypassable hard denylist of catastrophic run_shell commands -
+# inspired by yc-software/qm, whose most permissive ("Dangerous") posture
+# still keeps a short hard-deny list (recursive delete, destructive DDL...)
+# that applies regardless of posture. The project-folder write confinement
+# above, plus process.py's real sandbox-exec write confinement on macOS,
+# already stop most damage - but neither covers a command's own *text* on
+# Linux/Windows, and a regex hit here gives a clear "denied outright"
+# message instead of a silent OS-level permission failure. Deliberately not
+# an attempt at full shell-semantics parsing (trivially defeated by enough
+# obfuscation) - just the handful of commands nobody has a legitimate
+# reason to run from a project-scoped task, checked in
+# enforce_project_sandbox so every call site (server.py, orchestrator.py,
+# subagents.py) gets it for free, before that site's own confirmation/yolo
+# check ever runs.
+_HARD_DENYLIST: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(r"\brm\s+(-\w*)?[rR][fF]?\w*\s+(-\w+\s+)*(/|~|\$HOME)(\s|/|$)"),
+        "a recursive delete of the home directory or filesystem root",
+    ),
+    (
+        re.compile(r"\bgit\s+push\b.*(--force\b|--force-with-lease\b|\s-f\b)"),
+        "a force-push",
+    ),
+    (re.compile(r"\bmkfs(\.\w+)?\b"), "formatting a filesystem"),
+    (re.compile(r"\bdd\b[^\n]*\bof=/dev/"), "writing directly to a block device"),
+    (re.compile(r":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:"), "a fork bomb"),
+)
+
+
+def _check_hard_denylist(name: str, args: dict[str, object]) -> str | None:
+    if name != "run_shell":
+        return None
+    command = args.get("command")
+    if not isinstance(command, str):
+        return None
+    for pattern, label in _HARD_DENYLIST:
+        if pattern.search(command):
+            return (
+                f"error: this command looks like {label}, which is denied outright - "
+                "this stays blocked even with /yolo active, not just pending confirmation."
+            )
+    return None
+
+
 def enforce_project_sandbox(
     name: str, args: dict[str, object], project: Project | None
 ) -> str | None:
     """Returns an error message if a tool call is disallowed, or None if
-    it's allowed. Two things it enforces:
+    it's allowed. Three things it enforces:
 
+    - _check_hard_denylist's small, non-bypassable set of catastrophic
+      run_shell commands, checked first and regardless of project state -
+      see its own docstring.
     - Every tool that touches the local filesystem or spawns a process
       (SANDBOXED_PATH_ARGS's keys, plus edit_file) needs a project: with
       none scoped to this conversation, the call is blocked outright
@@ -194,6 +242,10 @@ def enforce_project_sandbox(
 
     Mutates `args` in place to default an omitted directory argument to
     the project folder for tools in DEFAULTABLE_PATH_ARGS."""
+    denylist_error = _check_hard_denylist(name, args)
+    if denylist_error is not None:
+        return denylist_error
+
     is_filesystem_tool = name == "edit_file" or name in SANDBOXED_PATH_ARGS
     if not is_filesystem_tool:
         return None
