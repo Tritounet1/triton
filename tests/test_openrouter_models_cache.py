@@ -108,6 +108,40 @@ def test_network_failure_serves_the_stale_cache_instead_of_erroring(monkeypatch)
     assert second == first
 
 
+def test_batch_variants_are_filtered_out(monkeypatch):
+    def _response():
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {
+                "data": [
+                    {
+                        "id": "openai/gpt-6-astra",
+                        "name": "GPT-6 Astra",
+                        "context_length": 128000,
+                        "pricing": {"prompt": "0.000001", "completion": "0.000002"},
+                        "supported_parameters": ["tools"],
+                        "architecture": {"input_modalities": ["text"]},
+                    },
+                    {
+                        "id": "openai/gpt-6-astra:batch",
+                        "name": "GPT-6 Astra (batch)",
+                        "context_length": 128000,
+                        "pricing": {"prompt": "0.0000005", "completion": "0.000001"},
+                        "supported_parameters": ["tools"],
+                        "architecture": {"input_modalities": ["text"]},
+                    },
+                ]
+            },
+        )
+
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _response())
+
+    models = server.list_openrouter_models()
+
+    ids = [m["id"] for m in models]
+    assert ids == ["openai/gpt-6-astra"]
+
+
 def test_network_failure_with_no_cache_yet_raises(monkeypatch):
     def _boom(*_a: object, **_k: object):
         raise requests.RequestException("network is down")

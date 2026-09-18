@@ -1078,6 +1078,13 @@ def list_openrouter_models() -> list[ModelInfo]:
 
     models: list[ModelInfo] = []
     for m in resp.json().get("data", []):
+        # ":batch" variants (e.g. "openai/gpt-6-astra:batch") are OpenRouter's
+        # async, delayed-response tier - meant for bulk offline processing,
+        # not a fit for this harness's synchronous chat loop. Filtered here
+        # (the single source every model picker in the desktop app reads
+        # from) rather than in each picker separately.
+        if m["id"].endswith(":batch"):
+            continue
         pricing = m.get("pricing") or {}
         try:
             prompt_price = float(pricing.get("prompt", 0)) * 1_000_000
