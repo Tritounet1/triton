@@ -18,6 +18,8 @@ exactly as it did before.
 - background.py dispatch_subagent/check_subagent, start/stop/list
                  background tasks - thin wrappers, the real logic lives in
                  triton.agents.subagents / triton.background_tasks
+- cards.py      show_map/show_link_preview - rich cards the desktop app
+                 renders specially instead of a plain tool-call row
 - mcp.py        add_mcp_server - thin wrapper around triton.mcp_client,
                  imported lazily inside the function body (see its own
                  module docstring for why)
@@ -29,7 +31,7 @@ exactly as it did before.
 
 from openai.types.chat import ChatCompletionToolParam
 
-from triton.tools import background, filesystem, git, mcp, memory, process, search, web
+from triton.tools import background, cards, filesystem, git, mcp, memory, process, search, web
 from triton.tools._shared import (
     DEFAULTABLE_PATH_ARGS,
     SANDBOXED_PATH_ARGS,
@@ -90,6 +92,7 @@ TOOLS_REGISTRY: dict[str, Tool] = {
     **memory.REGISTRY,
     **background.REGISTRY,
     **mcp.REGISTRY,
+    **cards.REGISTRY,
 }
 
 TOOLS: list[ChatCompletionToolParam] = [tool.schema for tool in TOOLS_REGISTRY.values()]

@@ -99,6 +99,8 @@ import { modelAvatar } from "./modelFamilies";
 import { NewProjectModal } from "./NewProjectModal";
 import { notifyIfBackground } from "./notifications";
 import { ProjectFilePanel } from "./ProjectFilePanel";
+import { RichCard } from "./RichCard";
+import { richCardFromToolCall } from "./richCardData";
 import { SearchPage } from "./SearchPage";
 import { SettingsModal } from "./SettingsModal";
 import {
@@ -3236,8 +3238,27 @@ function App() {
                             }
                             name="Triton"
                           >
-                            {blocks.map((block, bi) =>
-                              block.kind === "tools" ? (
+                            {blocks.map((block, bi) => {
+                              // un show_map/show_link_preview isole (pas
+                              // regroupe avec d'autres appels d'outils,
+                              // voir toBlocks) se rend en carte plutot
+                              // qu'en ligne de tool-call repliable - tout
+                              // le reste (y compris ces deux outils
+                              // regroupes avec d'autres) garde le rendu
+                              // generique ci-dessous.
+                              const soleToolCall =
+                                block.kind === "tools" && block.items.length === 1
+                                  ? block.items[0]
+                                  : undefined;
+                              const richCard = soleToolCall
+                                ? richCardFromToolCall(soleToolCall.tool, soleToolCall.args)
+                                : null;
+                              if (richCard) {
+                                return (
+                                  <RichCard key={bi} card={richCard} />
+                                );
+                              }
+                              return block.kind === "tools" ? (
                                 <ChatToolCalls
                                   key={bi}
                                   className="animate-fade-in"
@@ -3286,8 +3307,8 @@ function App() {
                                 >
                                   <Markdown>{block.msg.text}</Markdown>
                                 </ChatMessageBubble>
-                              ),
-                            )}
+                              );
+                            })}
                             <ChatMessageMetadata
                               timestamp={
                                 <Timestamp
