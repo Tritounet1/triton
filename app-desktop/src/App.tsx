@@ -72,6 +72,11 @@ import {
   type ToolCallLike,
   type ToolMsg,
 } from "./chatMessages";
+import {
+  interruptedAssistantText,
+  isAbortError,
+  upsertAssistantMessage,
+} from "./chatStreamState";
 import { type OpenFile } from "./fileViewer";
 import { FileViewerPanel } from "./FileViewerPanel";
 import { formatArgs } from "./format";
@@ -2185,14 +2190,7 @@ function App() {
         if (!isDisplayed()) return;
         const textSoFar = assistantText;
         setMessages((prev) => {
-          const last = prev[prev.length - 1];
-          if (last?.kind === "assistant") {
-            return [...prev.slice(0, -1), { ...last, text: textSoFar }];
-          }
-          return [
-            ...prev,
-            { kind: "assistant", text: textSoFar, time: Date.now() },
-          ];
+          return upsertAssistantMessage(prev, textSoFar);
         });
       });
     }
@@ -2325,16 +2323,7 @@ function App() {
               const content = data.content as string;
               setMessages((prev) => {
                 const last = prev[prev.length - 1];
-                if (last?.kind === "assistant") {
-                  return [
-                    ...prev.slice(0, -1),
-                    { ...last, text: content || last.text, model },
-                  ];
-                }
-                return [
-                  ...prev,
-                  { kind: "assistant", text: content, time: Date.now(), model },
-                ];
+                return upsertAssistantMessage(prev, content || (last?.kind === "assistant" ? last.text : ""), model);
               });
             }
             break;
@@ -2386,21 +2375,9 @@ function App() {
         }
       }
     } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") {
+      if (isAbortError(err)) {
         if (isDisplayed()) {
-          const finalText = assistantText
-            ? `${assistantText}\n\n*(interrompu)*`
-            : "*(interrompu)*";
-          setMessages((prev) => {
-            const last = prev[prev.length - 1];
-            if (last?.kind === "assistant") {
-              return [...prev.slice(0, -1), { ...last, text: finalText }];
-            }
-            return [
-              ...prev,
-              { kind: "assistant", text: finalText, time: Date.now() },
-            ];
-          });
+          setMessages((prev) => upsertAssistantMessage(prev, interruptedAssistantText(assistantText)));
         }
       } else {
         console.error("erreur pendant l'échange avec l'API Triton :", err);
