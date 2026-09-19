@@ -1324,19 +1324,32 @@ def list_openrouter_image_models() -> list[ImageModelInfo]:
 # OpenRouter's file) that every model advertising the matching input
 # modality accepts.
 MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
+# A request with many individually-valid attachments could otherwise still
+# allocate tens or hundreds of MB before reaching the provider. Keep enough
+# room for two high-resolution files while bounding request memory/network.
+MAX_TOTAL_ATTACHMENT_BYTES = 16 * 1024 * 1024
 
 
 def validate_attachments(attachments: list[Attachment]) -> None:
+    total_bytes = 0
     for a in attachments:
         is_image_or_pdf = a.data_url.startswith(("data:image/", "data:application/pdf"))
         if not is_image_or_pdf:
             raise HTTPException(400, f"attachment {a.name!r} is not a supported image or PDF")
         _, _, b64_payload = a.data_url.partition(",")
-        if len(b64_payload) * 3 // 4 > MAX_ATTACHMENT_BYTES:
+        attachment_bytes = len(b64_payload) * 3 // 4
+        if attachment_bytes > MAX_ATTACHMENT_BYTES:
             raise HTTPException(
                 400,
                 f"attachment {a.name!r} exceeds the "
                 f"{MAX_ATTACHMENT_BYTES // (1024 * 1024)}MB limit",
+            )
+        total_bytes += attachment_bytes
+        if total_bytes > MAX_TOTAL_ATTACHMENT_BYTES:
+            raise HTTPException(
+                400,
+                "attachments exceed the total "
+                f"{MAX_TOTAL_ATTACHMENT_BYTES // (1024 * 1024)}MB request limit",
             )
 
 
