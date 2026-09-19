@@ -47,6 +47,7 @@ import "./App.css";
 import { BackgroundTasksPanel } from "./BackgroundTasksPanel";
 import { type BackgroundTask } from "./BackgroundTasksSection";
 import { ConversationSidebarSection } from "./ConversationSidebarSection";
+import { startChatStream } from "./chatTransport";
 import { DesktopTitlebar } from "./DesktopTitlebar";
 import {
   assistantGroupModel,
@@ -2214,10 +2215,8 @@ function App() {
     abortControllersRef.current.set(currentSessionKey, controller);
 
     try {
-      const res = await fetch(`${API_BASE}/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const res = await startChatStream(
+        {
           session_id: startSessionId,
           message: outgoingText,
           project_id: activeProjectId,
@@ -2227,9 +2226,9 @@ function App() {
           })),
           edit_turn_index: editTurnIndex ?? null,
           model: requestModel,
-        }),
-        signal: controller.signal,
-      });
+        },
+        controller.signal,
+      );
 
       for await (const { event, data } of parseSSE(res)) {
         noteSseEvent();
