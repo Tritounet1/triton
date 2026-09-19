@@ -24,7 +24,6 @@ import { Markdown } from "@astryxdesign/core/Markdown";
 import {
   SideNav,
   SideNavItem,
-  SideNavSection,
 } from "@astryxdesign/core/SideNav";
 import { Spinner } from "@astryxdesign/core/Spinner";
 import { Text } from "@astryxdesign/core/Text";
@@ -101,6 +100,7 @@ import { modelAvatar } from "./modelFamilies";
 import { NewProjectModal } from "./NewProjectModal";
 import { notifyIfBackground } from "./notifications";
 import { ProjectFilePanel } from "./ProjectFilePanel";
+import { ProjectSidebarSection } from "./ProjectSidebarSection";
 import { RichCard } from "./RichCard";
 import { richCardFromToolCall } from "./richCardData";
 import { SearchPage } from "./SearchPage";
@@ -2577,19 +2577,10 @@ function App() {
       header={sidebarHeader.header}
       topContent={sidebarHeader.topContent}
     >
-      <SideNavSection
-        title="Projets"
-        endContent={
-          <IconButton
-            label="Nouveau projet"
-            icon={<PlusIcon />}
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              setShowProjectForm(true);
-            }}
-          />
-        }
+      <ProjectSidebarSection
+        onNewProject={() => {
+          setShowProjectForm(true);
+        }}
       >
         {projects.length === 0 && (
           <Text size="2xs" color="secondary" className="block px-2 py-1">
@@ -2721,7 +2712,7 @@ function App() {
             </div>
           );
         })}
-      </SideNavSection>
+      </ProjectSidebarSection>
 
       <SubagentsPanel />
 
