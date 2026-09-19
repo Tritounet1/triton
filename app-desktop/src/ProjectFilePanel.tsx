@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { TreeList, type TreeListItemData } from "@astryxdesign/core/TreeList";
 import { Text } from "@astryxdesign/core/Text";
 import { IconButton } from "@astryxdesign/core/IconButton";
@@ -81,9 +80,9 @@ function toTreeItems(
             onOpenFile({ projectId, path: node.path, name: node.name });
             return;
           }
-          // pas de visualiseur pour ce type : ouvre avec l'application par
-          // defaut du systeme (IDE, visionneuse...) comme avant
-          void openPath(node.path);
+          // Les fichiers non visualisables ne sont pas delegues a une
+          // application externe : cela demanderait une permission Tauri
+          // d'ouverture de tout le dossier utilisateur.
         },
   }));
 }
