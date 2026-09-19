@@ -23,7 +23,6 @@ import { IconButton } from "@astryxdesign/core/IconButton";
 import { Markdown } from "@astryxdesign/core/Markdown";
 import {
   SideNav,
-  SideNavHeading,
   SideNavItem,
   SideNavSection,
 } from "@astryxdesign/core/SideNav";
@@ -48,6 +47,7 @@ import {
 import "./App.css";
 import { BackgroundTasksPanel } from "./BackgroundTasksPanel";
 import { type BackgroundTask } from "./BackgroundTasksSection";
+import { DesktopTitlebar } from "./DesktopTitlebar";
 import {
   assistantGroupModel,
   editFileTarget,
@@ -88,8 +88,6 @@ import {
   PencilIcon,
   PlusIcon,
   RefreshIcon,
-  SearchIcon,
-  SidebarIcon,
   SunIcon,
   XIcon,
 } from "./icons";
@@ -102,6 +100,7 @@ import { richCardFromToolCall } from "./richCardData";
 import { SearchPage } from "./SearchPage";
 import { ProjectActionsMenu, SessionActionsMenu } from "./SidebarMenus";
 import { SettingsModal } from "./SettingsModal";
+import { SidebarHeader } from "./SidebarHeader";
 import {
   describeSnapshotDiff,
   fetchSnapshotDiff,
@@ -2587,50 +2586,20 @@ function App() {
           ? "Joindre un PDF ou un fichier texte"
           : "Joindre un fichier texte";
 
+  const sidebarHeader = SidebarHeader({
+    usesMacTitlebarOverlay,
+    sidebarCollapsed,
+    onToggleSidebar: toggleSidebar,
+    onSearch: () => {
+      setView("search");
+    },
+    onNewConversation: startNewSession,
+  });
+
   const sideNavElement = (
     <SideNav
-      header={
-        <SideNavHeading
-          heading="Triton"
-          icon={<Avatar src="/default-logo.png" name="Triton" size="lg" />}
-          headerEndContent={
-            <div className="flex items-center gap-0.5">
-              {!usesMacTitlebarOverlay && (
-                <IconButton
-                  label={
-                    sidebarCollapsed
-                      ? "Épingler ouverte"
-                      : "Fermer la barre latérale"
-                  }
-                  icon={<SidebarIcon />}
-                  variant="ghost"
-                  size="sm"
-                  onClick={toggleSidebar}
-                />
-              )}
-              <IconButton
-                label="Rechercher"
-                icon={<SearchIcon />}
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setView("search");
-                }}
-              />
-            </div>
-          }
-        />
-      }
-      topContent={
-        <Button
-          label="Nouvelle conversation"
-          icon={<PlusIcon />}
-          variant="secondary"
-          size="sm"
-          onClick={startNewSession}
-          className="w-full justify-start"
-        />
-      }
+      header={sidebarHeader.header}
+      topContent={sidebarHeader.topContent}
     >
       <SideNavSection
         title="Projets"
@@ -2851,26 +2820,10 @@ function App() {
     <Theme theme={neutralTheme} mode={themeMode}>
       <div className="flex h-full min-h-0 flex-col bg-surface">
         {usesMacTitlebarOverlay && (
-          <div className="flex h-[44px] shrink-0 items-center border-b border-border bg-surface pl-[84px]">
-            {/* 44px (pas 52) : hauteur choisie pour que items-center place
-                deja ce bouton au niveau des feux rouge/jaune/vert (dessines
-                par macOS a une position fixe, trafficLightPosition dans
-                tauri.conf.json) sans decalage supplementaire - une barre
-                plus haute que ca ne fait que rajouter du vide sous les
-                boutons avant le trait de separation. */}
-            <IconButton
-              label={
-                sidebarCollapsed
-                  ? "Afficher la barre latérale"
-                  : "Masquer la barre latérale"
-              }
-              icon={<SidebarIcon />}
-              variant="ghost"
-              size="sm"
-              onClick={toggleSidebar}
-            />
-            <div data-tauri-drag-region className="h-full flex-1" />
-          </div>
+          <DesktopTitlebar
+            sidebarCollapsed={sidebarCollapsed}
+            onToggleSidebar={toggleSidebar}
+          />
         )}
         <div className="min-h-0 flex-1">
           {sidebarCollapsed && (
