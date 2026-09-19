@@ -61,6 +61,11 @@ def _client() -> OpenAI:
         # make the real number of attempts, and the total wait time before
         # a failure actually surfaces, unpredictable.
         max_retries=0,
+        # Without an explicit SDK timeout, an unresponsive upstream could
+        # keep an SSE/chat request (or a scheduled task draining it) stuck
+        # for the HTTP client's much longer default. `_with_retry` handles
+        # the resulting APITimeoutError with the one retry policy below.
+        timeout=OPENROUTER_REQUEST_TIMEOUT_SECONDS,
     )
 
 
@@ -72,6 +77,10 @@ MAX_RETRIES = 3
 # doubles each attempt: 1s, 2s, 4s - generous enough to ride out a brief
 # rate-limit window without the client feeling stuck for tens of seconds.
 RETRY_BASE_DELAY_SECONDS = 1.0
+# Bounded per attempt, including stream establishment and an idle response
+# read. A provider that continues to stream tokens is not interrupted; a
+# completely stalled connection is retried then surfaced as an error.
+OPENROUTER_REQUEST_TIMEOUT_SECONDS = 60.0
 
 
 def is_transient_error(exc: Exception) -> bool:

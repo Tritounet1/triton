@@ -8,6 +8,7 @@ called directly, same as other tests call run_chat_stream directly
 instead of going through a real HTTP round-trip."""
 
 import json
+import threading
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -363,3 +364,59 @@ def test_run_scheduled_task_skips_silently_if_its_session_was_deleted(tmp_path, 
     )
 
     server._run_scheduled_task(task)  # must not raise
+
+
+def test_scheduler_dispatches_due_tasks_without_waiting_for_previous_ones(monkeypatch):
+    """The poll loop only dispatches; each due task gets its own worker.
+
+    The fake threads deliberately never run their targets: this makes the
+    assertion prove that dispatching two tasks does not synchronously enter
+    (and wait for) the first model call.
+    """
+    task_one = scheduled_tasks.ScheduledTask(
+        id="one",
+        prompt="one",
+        frequency="daily",
+        time_of_day="09:00",
+        day_of_week=None,
+        project_id="p1",
+        session_id="s1",
+        enabled=True,
+        next_run=datetime.now(UTC).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    task_two = scheduled_tasks.ScheduledTask(
+        id="two",
+        prompt="two",
+        frequency="daily",
+        time_of_day="09:00",
+        day_of_week=None,
+        project_id="p2",
+        session_id="s2",
+        enabled=True,
+        next_run=datetime.now(UTC).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    started: list[tuple[object, tuple[object, ...], bool]] = []
+    fired: list[str] = []
+
+    class FakeThread:
+        def __init__(self, *, target, args, daemon, name):
+            self.target = target
+            self.args = args
+            self.daemon = daemon
+            self.name = name
+
+        def start(self):
+            started.append((self.target, self.args, self.daemon))
+
+    monkeypatch.setattr(server, "_scheduled_task_slots", threading.BoundedSemaphore(2))
+    monkeypatch.setattr(server.threading, "Thread", FakeThread)
+    monkeypatch.setattr(scheduled_tasks, "due_tasks", lambda _now: [task_one, task_two])
+    monkeypatch.setattr(scheduled_tasks, "mark_fired", lambda task_id, _now: fired.append(task_id))
+
+    server._dispatch_due_scheduled_tasks(datetime.now(UTC))
+
+    assert fired == ["one", "two"]
+    assert [args[0] for _, args, _ in started] == [task_one, task_two]
+    assert all(daemon for _, _, daemon in started)

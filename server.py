@@ -187,7 +187,9 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 # storage/scheduled_tasks.py's own module docstring for the "no catch-up"
 # design this poll loop relies on.
 SCHEDULED_TASKS_POLL_INTERVAL_SECONDS = 60
+SCHEDULED_TASKS_MAX_CONCURRENT = 2
 _scheduler_stop_event = threading.Event()
+_scheduled_task_slots = threading.BoundedSemaphore(SCHEDULED_TASKS_MAX_CONCURRENT)
 
 
 def _run_scheduled_task(task: scheduled_tasks.ScheduledTask) -> None:
@@ -220,6 +222,44 @@ def _run_scheduled_task(task: scheduled_tasks.ScheduledTask) -> None:
         logging.getLogger("uvicorn").exception("scheduled task %s failed", task.id)
 
 
+def _run_scheduled_task_worker(task: scheduled_tasks.ScheduledTask) -> None:
+    """Runs one task outside the scheduler loop and always frees its slot."""
+    try:
+        _run_scheduled_task(task)
+    finally:
+        _scheduled_task_slots.release()
+
+
+def _dispatch_due_scheduled_tasks(now: datetime) -> None:
+    """Starts due tasks independently, with a small concurrency ceiling.
+
+    A task may wait on the model or its stream timeout for a while. It must
+    not hold up the poll loop (and therefore unrelated schedules), but an
+    unbounded thread per due task would create a different availability
+    problem. Tasks left due because both slots are occupied are retried on
+    the next poll; they are intentionally not marked fired until dispatched.
+    """
+    for task in scheduled_tasks.due_tasks(now):
+        if not _scheduled_task_slots.acquire(blocking=False):
+            logging.getLogger("uvicorn").warning(
+                "scheduled task %s delayed: all %d task slots are busy",
+                task.id,
+                SCHEDULED_TASKS_MAX_CONCURRENT,
+            )
+            continue
+        scheduled_tasks.mark_fired(task.id, now)
+        try:
+            threading.Thread(
+                target=_run_scheduled_task_worker,
+                args=(task,),
+                daemon=True,
+                name=f"triton-scheduled-{task.id[:8]}",
+            ).start()
+        except Exception:
+            _scheduled_task_slots.release()
+            logging.getLogger("uvicorn").exception("scheduled task %s could not start", task.id)
+
+
 def _scheduled_tasks_poll_loop() -> None:
     """Runs in its own daemon thread (started from lifespan), never as an
     asyncio task on the main event loop: run_chat_stream is a plain
@@ -229,10 +269,7 @@ def _scheduled_tasks_poll_loop() -> None:
     agents/orchestrator.py already use for background agentic work."""
     while not _scheduler_stop_event.is_set():
         try:
-            now = datetime.now(UTC)
-            for task in scheduled_tasks.due_tasks(now):
-                scheduled_tasks.mark_fired(task.id, now)
-                _run_scheduled_task(task)
+            _dispatch_due_scheduled_tasks(datetime.now(UTC))
         except Exception:
             logging.getLogger("uvicorn").exception("scheduled task poll failed")
         _scheduler_stop_event.wait(SCHEDULED_TASKS_POLL_INTERVAL_SECONDS)
