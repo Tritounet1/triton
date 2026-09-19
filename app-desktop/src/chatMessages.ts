@@ -19,7 +19,7 @@ export interface MultiAgentSubtaskToolCall {
 
 export type ChatMsg =
   | { kind: "user"; text: string; time: number; images?: string[]; files?: SentFile[] }
-  | { kind: "assistant"; text: string; time: number; model?: string }
+  | { kind: "assistant"; text: string; time: number; model?: string; images?: string[] }
   | {
       kind: "tool";
       // presente seulement pour une sous-tache multi-agent en direct
@@ -60,6 +60,7 @@ export interface RawSessionMessage {
   tool_call_id?: string;
   tool_calls?: { id: string; function: { name: string; arguments: string } }[];
   model?: string;
+  generated_images?: string[];
 }
 
 /** Un message utilisateur enregistre peut etre soit une simple chaine, soit
@@ -167,12 +168,13 @@ export function historyToMessages(raw: RawSessionMessage[]): ChatMsg[] {
           model: m.model,
         });
       }
-      if (typeof m.content === "string" && m.content) {
+      if ((typeof m.content === "string" && m.content) || m.generated_images?.length) {
         out.push({
           kind: "assistant",
-          text: m.content,
+          text: typeof m.content === "string" ? m.content : "",
           time: now,
           model: m.model,
+          images: m.generated_images?.length ? m.generated_images : undefined,
         });
       }
     }

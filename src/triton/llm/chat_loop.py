@@ -175,7 +175,10 @@ def timed_stream_chat(
 
 
 def estimate_size(messages: list[ChatCompletionMessageParam]) -> int:
-    return len(json.dumps(messages))
+    # Generated images are retained in session JSON for the UI, but they are
+    # not conversational context. Counting their base64 payload here would
+    # trigger an immediate, enormous history compression after one image.
+    return len(json.dumps(_without_attachments(messages)))
 
 
 def turn_start_indices(messages: list[ChatCompletionMessageParam]) -> list[int]:
@@ -198,9 +201,18 @@ def _without_attachments(
     messages finally pushed the history over MAX_CONTEXT_CHARS)."""
     redacted: list[ChatCompletionMessageParam] = []
     for message in messages:
-        content = message.get("content")
+        generated_images = message.get("generated_images")
+        # `generated_images` is Triton-only history metadata, never a field
+        # the provider should receive. Preserve one small factual marker for
+        # a future summary instead of its potentially multi-megabyte pixels.
+        clean_message = {
+            key: value for key, value in message.items() if key not in {"model", "generated_images"}
+        }
+        if generated_images and not clean_message.get("content"):
+            clean_message["content"] = "[image generated for the preceding user prompt]"
+        content = clean_message.get("content")
         if not isinstance(content, list):
-            redacted.append(message)
+            redacted.append(cast("ChatCompletionMessageParam", clean_message))
             continue
         new_parts: list[object] = []
         for part in content:
@@ -213,7 +225,7 @@ def _without_attachments(
                 new_parts.append({"type": "text", "text": f"[file attachment omitted: {filename}]"})
             else:
                 new_parts.append(part)
-        redacted.append(cast("ChatCompletionMessageParam", {**message, "content": new_parts}))
+        redacted.append(cast("ChatCompletionMessageParam", {**clean_message, "content": new_parts}))
     return redacted
 
 

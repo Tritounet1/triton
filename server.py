@@ -34,6 +34,7 @@ from triton.backup import build_backup_zip
 from triton.llm.api import (
     ChatResult,
     call_chat,
+    generate_image,
     get_model,
     is_api_key_configured,
     is_transient_error,
@@ -84,9 +85,11 @@ from triton.storage.sessions import (
 )
 from triton.storage.settings import (
     DEFAULT_MAX_SUBTASKS,
+    load_image_model,
     load_max_subtasks,
     load_monthly_budget,
     load_role_model_overrides,
+    save_image_model,
     save_max_subtasks,
     save_model,
     save_monthly_budget,
@@ -279,6 +282,7 @@ OPENAPI_TAGS = [
         "change.",
     },
     {"name": "Models", "description": "The OpenRouter model catalog."},
+    {"name": "Images", "description": "Image generation and its OpenRouter model catalog."},
     {"name": "Logs", "description": "Raw event log (model/tool calls) for observability."},
     {"name": "Health", "description": "Liveness check."},
 ]
@@ -346,6 +350,9 @@ class ChatRequest(BaseModel):
     message: str
     project_id: str | None = None
     attachments: list[Attachment] = []
+    # Only for this request: unlike /model, this is never persisted as the
+    # conversation-wide override.
+    model: str | None = None
     # 1-based turn index (same convention as turn_index_of/ensure_snapshot):
     # when set, the turn it points to and everything after it is dropped
     # before appending `message` as a fresh user turn - see
@@ -360,6 +367,16 @@ class ConfirmRequest(BaseModel):
     confirmation_id: str
     approved: bool
     remember: bool = False
+
+
+class ImageGenerateRequest(BaseModel):
+    session_id: str | None = None
+    prompt: str
+    project_id: str | None = None
+    attachments: list[Attachment] = []
+    # Omit to use the dedicated global image setting; passing a value is a
+    # one-shot choice that never alters that default.
+    model: str | None = None
 
 
 class CancelRequest(BaseModel):
@@ -508,6 +525,7 @@ def run_chat_stream(
     messages: list[ChatCompletionMessageParam],
     first_message: str | None = None,
     force_yolo: bool = False,
+    model_override: str | None = None,
 ) -> Iterator[str]:
     session_id = session_path.stem
 
@@ -546,7 +564,7 @@ def run_chat_stream(
 
     project_id = load_session_project(session_id)
     project = get_project(project_id) if project_id else None
-    session_model = load_session_model(session_id)
+    session_model = model_override or load_session_model(session_id)
     # computed before compression can collapse old turns away - see
     # turn_index_of's own docstring
     turn_index = turn_index_of(messages)
@@ -911,6 +929,12 @@ class ModelInfo(TypedDict):
     supports_files: bool
 
 
+class ImageModelInfo(TypedDict):
+    id: str
+    name: str
+    description: str
+
+
 @app.get("/settings/model", tags=["Settings"])
 def get_current_model() -> dict[str, str]:
     return {"model": get_model()}
@@ -919,6 +943,17 @@ def get_current_model() -> dict[str, str]:
 @app.put("/settings/model", tags=["Settings"])
 def set_current_model(body: ModelUpdate) -> dict[str, str]:
     save_model(body.model)
+    return {"model": body.model}
+
+
+@app.get("/settings/image_model", tags=["Settings"])
+def get_current_image_model() -> dict[str, str]:
+    return {"model": load_image_model()}
+
+
+@app.put("/settings/image_model", tags=["Settings"])
+def set_current_image_model(body: ModelUpdate) -> dict[str, str]:
+    save_image_model(body.model)
     return {"model": body.model}
 
 
@@ -1131,6 +1166,8 @@ def reset_multi_agent_roles() -> list[MultiAgentRoleModel]:
 _MODELS_CACHE_TTL_SECONDS = 300
 _models_cache: list[ModelInfo] | None = None
 _models_cache_time = 0.0
+_image_models_cache: list[ImageModelInfo] | None = None
+_image_models_cache_time = 0.0
 
 
 @app.get("/openrouter/models", tags=["Models"])
@@ -1191,6 +1228,44 @@ def list_openrouter_models() -> list[ModelInfo]:
     return models
 
 
+@app.get("/openrouter/image-models", tags=["Models"])
+def list_openrouter_image_models() -> list[ImageModelInfo]:
+    """Lists image-generation models from OpenRouter's separate catalog."""
+    global _image_models_cache, _image_models_cache_time
+
+    cache_age = time.monotonic() - _image_models_cache_time
+    if _image_models_cache is not None and cache_age < _MODELS_CACHE_TTL_SECONDS:
+        return _image_models_cache
+
+    try:
+        resp = requests.get("https://openrouter.ai/api/v1/images/models", timeout=15)
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        if _image_models_cache is not None:
+            return _image_models_cache
+        raise HTTPException(502, f"could not reach OpenRouter ({exc})") from exc
+
+    models: list[ImageModelInfo] = []
+    for item in resp.json().get("data", []):
+        if not isinstance(item, dict):
+            continue
+        model_id = item.get("id")
+        if not isinstance(model_id, str) or not model_id:
+            continue
+        name = item.get("name")
+        description = item.get("description")
+        models.append(
+            {
+                "id": model_id,
+                "name": name if isinstance(name, str) and name else model_id,
+                "description": description if isinstance(description, str) else "",
+            }
+        )
+    _image_models_cache = models
+    _image_models_cache_time = time.monotonic()
+    return models
+
+
 # images and PDFs only: other file types are handled inconsistently across
 # providers (some accept arbitrary documents, most don't), whereas these two
 # map to well-defined OpenAI-compatible content parts (image_url and
@@ -1211,6 +1286,16 @@ def validate_attachments(attachments: list[Attachment]) -> None:
                 f"attachment {a.name!r} exceeds the "
                 f"{MAX_ATTACHMENT_BYTES // (1024 * 1024)}MB limit",
             )
+
+
+def validate_image_references(attachments: list[Attachment]) -> None:
+    """The Images API takes reference images, never PDFs or other files."""
+    validate_attachments(attachments)
+    if len(attachments) > 8:
+        raise HTTPException(400, "at most 8 image references are supported")
+    for attachment in attachments:
+        if not attachment.data_url.startswith("data:image/"):
+            raise HTTPException(400, "image generation references must be images")
 
 
 def attachment_content_part(a: Attachment) -> dict[str, object]:
@@ -1261,10 +1346,93 @@ def chat(body: ChatRequest) -> StreamingResponse:
         )
     )
 
+    stream_kwargs: dict[str, object] = {"first_message": body.message if is_new else None}
+    # Keep the legacy no-override call shape too: a few integrations and
+    # tests intentionally replace run_chat_stream with the original small
+    # signature, and no model argument is needed in the normal path.
+    if body.model:
+        stream_kwargs["model_override"] = body.model
     return StreamingResponse(
-        run_chat_stream(session_path, messages, first_message=body.message if is_new else None),
+        run_chat_stream(session_path, messages, **stream_kwargs),  # type: ignore[arg-type]
         media_type="text/event-stream",
     )
+
+
+@app.post("/images/generate", tags=["Images"])
+def generate_conversation_image(body: ImageGenerateRequest) -> dict[str, object]:
+    """Generates an image and persists it as an assistant message.
+
+    The data URL and the producing model live in the regular session JSON,
+    so a reload keeps both the image and its correct model avatar.
+    """
+    prompt = body.prompt.strip()
+    if not prompt:
+        raise HTTPException(400, "image prompt must not be empty")
+    if len(prompt) > 12_000:
+        raise HTTPException(400, "image prompt exceeds 12000 characters")
+    validate_image_references(body.attachments)
+    if not is_api_key_configured():
+        raise HTTPException(400, "Aucune clé API OpenRouter configurée.")
+    budget = load_monthly_budget()
+    if budget is not None and current_month_cost() > budget:
+        raise HTTPException(403, "Budget mensuel dépassé - génération bloquée.")
+
+    session_path, messages, is_new = resolve_session(body.session_id, body.project_id)
+    messages.append(
+        cast(
+            ChatCompletionMessageParam,
+            {"role": "user", "content": build_user_content(prompt, body.attachments)},
+        )
+    )
+    try:
+        result = generate_image(
+            prompt,
+            body.model,
+            [attachment.data_url for attachment in body.attachments],
+        )
+    except (RuntimeError, ValueError) as exc:
+        log_event(
+            type="image_generation_error",
+            model=body.model or load_image_model(),
+            message=str(exc),
+        )
+        raise HTTPException(502, str(exc)) from exc
+
+    messages.append(
+        cast(
+            ChatCompletionMessageParam,
+            {
+                "role": "assistant",
+                "content": "",
+                "model": result.model,
+                "generated_images": result.images,
+            },
+        )
+    )
+    save_session(session_path, messages)
+
+    title: str | None = None
+    if is_new:
+        title = prompt[:MAX_TITLE_CHARS].rstrip()
+        if len(prompt) > MAX_TITLE_CHARS:
+            title = title[: MAX_TITLE_CHARS - 1].rstrip() + "…"
+        save_title(session_path.stem, title)
+
+    log_event(
+        type="image_generation",
+        session_id=session_path.stem,
+        project_id=body.project_id,
+        model=result.model,
+        prompt_chars=len(prompt),
+        reference_count=len(body.attachments),
+        image_count=len(result.images),
+    )
+    return {
+        "session_id": session_path.stem,
+        "title": title,
+        "model": result.model,
+        "images": result.images,
+    }
 
 
 @app.post("/chat/confirm", tags=["Chat"])

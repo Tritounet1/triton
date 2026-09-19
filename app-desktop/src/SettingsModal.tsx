@@ -6,12 +6,14 @@ import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { ApiKeySettings } from "./ApiKeySettings";
 import { BackupSettings } from "./BackupSettings";
+import { ImageGenerationSettings } from "./ImageGenerationSettings";
 import {
   BrainIcon,
   ChartBarIcon,
   ClockIcon,
   CpuIcon,
   DownloadIcon,
+  ImageIcon,
   KeyIcon,
   NetworkIcon,
   PlugIcon,
@@ -29,6 +31,7 @@ import { ScheduledTasksSettings } from "./ScheduledTasksSettings";
 type SettingsCategory =
   | "api_key"
   | "model"
+  | "image_generation"
   | "role_models"
   | "multi_agent_roles"
   | "mcp"
@@ -46,6 +49,11 @@ interface CategoryDef {
 const CATEGORIES: CategoryDef[] = [
   { id: "api_key", label: "Clé API", icon: <KeyIcon className="h-4 w-4" /> },
   { id: "model", label: "Modèle", icon: <CpuIcon className="h-4 w-4" /> },
+  {
+    id: "image_generation",
+    label: "Génération d’images",
+    icon: <ImageIcon className="h-4 w-4" />,
+  },
   {
     id: "multi_agent_roles",
     label: "Rôles multi-agent",
@@ -75,6 +83,7 @@ interface SettingsModalProps {
   // qu'un changement se reflete tout de suite, sans attendre la fermeture
   // de la modale.
   onModelChanged: () => void;
+  onImageModelChanged: () => void;
 }
 
 /** Modale de reglages a deux volets (recherche + categories a gauche,
@@ -82,7 +91,7 @@ interface SettingsModalProps {
  * que des pages a part entiere : ferme au clic en dehors ou sur Echap
  * (Dialog purpose="info"), remplace SettingsPage/LogsPage/McpServersPage/
  * ModelPage. */
-export function SettingsModal({ isOpen, onClose, onModelChanged }: SettingsModalProps) {
+export function SettingsModal({ isOpen, onClose, onModelChanged, onImageModelChanged }: SettingsModalProps) {
   const [category, setCategory] = useState<SettingsCategory>("api_key");
   const [search, setSearch] = useState("");
 
@@ -145,6 +154,9 @@ export function SettingsModal({ isOpen, onClose, onModelChanged }: SettingsModal
           <div key={category} className="animate-fade-in">
             {category === "api_key" && <ApiKeySettings />}
             {category === "model" && <ModelSettings onModelChanged={onModelChanged} />}
+            {category === "image_generation" && (
+              <ImageGenerationSettings onModelChanged={onImageModelChanged} />
+            )}
             {category === "multi_agent_roles" && <MultiAgentRolesSettings />}
             {category === "role_models" && <RoleModelsSettings />}
             {category === "mcp" && <McpSettings />}

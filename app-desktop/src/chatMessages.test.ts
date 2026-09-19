@@ -146,6 +146,25 @@ describe("historyToMessages", () => {
     expect(out.map((m) => m.kind)).toEqual(["tool", "assistant"]);
     expect(out[1]).toMatchObject({ kind: "assistant", text: "done", model: "gpt-5" });
   });
+
+  it("keeps generated images with the producing model", () => {
+    const out = historyToMessages([
+      {
+        role: "assistant",
+        content: "",
+        model: "openai/gpt-image-1",
+        generated_images: ["data:image/png;base64,abc"],
+      },
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({
+      kind: "assistant",
+      text: "",
+      images: ["data:image/png;base64,abc"],
+      model: "openai/gpt-image-1",
+    });
+    expect(typeof out[0]?.time).toBe("number");
+  });
 });
 
 describe("groupMessages / toBlocks", () => {

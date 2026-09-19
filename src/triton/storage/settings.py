@@ -7,6 +7,10 @@ from triton.paths import ROOT_DIR
 
 SETTINGS_FILE = ROOT_DIR / "settings.json"
 DEFAULT_MODEL = "anthropic/claude-haiku-4.5"
+# The image endpoint has its own model catalog and pricing. Keeping its
+# default separate from DEFAULT_MODEL means selecting a chat model never
+# accidentally changes image generation (and vice versa).
+DEFAULT_IMAGE_MODEL = "openai/gpt-image-2.5-sunburst"
 
 
 def _load() -> dict[str, object]:
@@ -34,6 +38,15 @@ def load_model() -> str:
 
 def save_model(model: str) -> None:
     _save({"model": model})
+
+
+def load_image_model() -> str:
+    model = _load().get("image_model")
+    return model if isinstance(model, str) and model else DEFAULT_IMAGE_MODEL
+
+
+def save_image_model(model: str) -> None:
+    _save({"image_model": model})
 
 
 def load_monthly_budget() -> float | None:

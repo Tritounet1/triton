@@ -155,6 +155,28 @@ def test_force_still_leaves_a_short_conversation_untouched(monkeypatch):
     assert log_message is None
 
 
+def test_generated_image_bytes_are_not_counted_or_sent_to_a_summary():
+    huge_base64_payload = "A" * 500_000
+    messages = [
+        _system("system"),
+        _user("draw a cat"),
+        cast(
+            ChatCompletionMessageParam,
+            {
+                "role": "assistant",
+                "content": "",
+                "model": "openai/gpt-image-1",
+                "generated_images": [f"data:image/png;base64,{huge_base64_payload}"],
+            },
+        ),
+    ]
+
+    redacted = chat_loop._without_attachments(messages)
+    assert chat_loop.estimate_size(messages) < chat_loop.MAX_CONTEXT_CHARS
+    assert "generated_images" not in redacted[-1]
+    assert redacted[-1].get("content") == "[image generated for the preceding user prompt]"
+
+
 def test_summarize_redacts_attachments_instead_of_resending_them(monkeypatch):
     """Regression test: summarizing old turns that included an image/PDF
     used to re-send that attachment's full base64 data as part of the

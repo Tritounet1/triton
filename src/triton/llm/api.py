@@ -2,7 +2,9 @@ import os
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from typing import cast
 
+import requests
 from dotenv import load_dotenv
 from openai import (
     APIConnectionError,
@@ -21,7 +23,7 @@ from openai.types.chat import (
 from openai.types.chat.chat_completion_message_function_tool_call import Function
 
 from triton.paths import ROOT_DIR
-from triton.storage.settings import load_model, load_openrouter_api_key
+from triton.storage.settings import load_image_model, load_model, load_openrouter_api_key
 
 # explicit path rather than load_dotenv()'s default CWD-upward search: once
 # frozen (PyInstaller), the process's CWD has nothing to do with ROOT_DIR
@@ -94,7 +96,7 @@ def is_transient_error(exc: Exception) -> bool:
     every named failure mode (bad request, auth, not found...), which all
     arrive as a more specific subclass via the normal HTTP-status path
     instead and are correctly left alone below."""
-    if isinstance(exc, (APIConnectionError, APITimeoutError, RateLimitError)):
+    if isinstance(exc, APIConnectionError | APITimeoutError | RateLimitError):
         return True
     if isinstance(exc, APIStatusError) and exc.status_code >= 500:
         return True
@@ -156,6 +158,107 @@ class ChatResult:
     finish_reason: str | None = None
 
 
+@dataclass
+class ImageGenerationResult:
+    """A generated image encoded as a data URL, ready for the desktop UI.
+
+    The history deliberately stores a data URL instead of a transient
+    provider URL: it keeps an image visible after restart and avoids making
+    old conversations depend on an expiring OpenRouter asset.
+    """
+
+    images: list[str]
+    model: str
+
+
+def _provider_messages(
+    messages: list[ChatCompletionMessageParam],
+) -> list[ChatCompletionMessageParam]:
+    """Drops Triton's display-only metadata before calling OpenRouter.
+
+    Session history records the producing model and generated images so the
+    UI can show the right avatar. Those are not OpenAI chat message fields;
+    forwarding them would make a later text turn depend on the provider
+    tolerating unknown keys.
+    """
+    return [
+        cast(
+            ChatCompletionMessageParam,
+            {
+                key: value
+                for key, value in message.items()
+                if key not in {"model", "generated_images"}
+            },
+        )
+        for message in messages
+    ]
+
+
+def generate_image(
+    prompt: str,
+    model: str | None = None,
+    input_references: list[str] | None = None,
+) -> ImageGenerationResult:
+    """Uses OpenRouter's dedicated Images API, not a chat completion.
+
+    This gives image models their own explicit picker and keeps generation
+    from entering the tool-call loop used for a normal conversation turn.
+    """
+    selected_model = model or load_image_model()
+    api_key = _effective_api_key()
+    if not api_key:
+        raise ValueError("Aucune clé API OpenRouter configurée.")
+
+    try:
+        response = requests.post(
+            "https://openrouter.ai/api/v1/images",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": selected_model,
+                "prompt": prompt,
+                **(
+                    {
+                        "input_references": [
+                            {"type": "image_url", "image_url": {"url": reference}}
+                            for reference in input_references
+                        ]
+                    }
+                    if input_references
+                    else {}
+                ),
+            },
+            timeout=120,
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise RuntimeError(f"OpenRouter image generation failed: {exc}") from exc
+
+    try:
+        data = response.json().get("data", [])
+    except ValueError as exc:
+        raise RuntimeError("OpenRouter returned an invalid image response.") from exc
+
+    images: list[str] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        encoded = item.get("b64_json")
+        if isinstance(encoded, str) and encoded:
+            media_type = item.get("media_type")
+            if not isinstance(media_type, str) or not media_type.startswith("image/"):
+                media_type = "image/png"
+            images.append(f"data:{media_type};base64,{encoded}")
+        elif isinstance(item.get("url"), str):
+            # Kept for providers returning a URL despite the documented
+            # b64_json shape. The UI can still render it, while the normal
+            # OpenRouter path remains self-contained in the session JSON.
+            images.append(item["url"])
+
+    if not images:
+        raise RuntimeError("OpenRouter did not return an image.")
+    return ImageGenerationResult(images=images, model=selected_model)
+
+
 def call_chat(
     messages: list[ChatCompletionMessageParam],
     tools: list[ChatCompletionToolParam] | None = None,
@@ -167,11 +270,12 @@ def call_chat(
     Omit it (the default) to keep using get_model(), as every other caller
     does."""
     model = model or get_model()
+    provider_messages = _provider_messages(messages)
     if tools:
         resp = _with_retry(
             lambda: _client().chat.completions.create(
                 model=model,
-                messages=messages,
+                messages=provider_messages,
                 tools=tools,
                 max_tokens=MAX_TOKENS,
             )
@@ -180,7 +284,7 @@ def call_chat(
         resp = _with_retry(
             lambda: _client().chat.completions.create(
                 model=model,
-                messages=messages,
+                messages=provider_messages,
                 max_tokens=MAX_TOKENS,
             )
         )
@@ -223,12 +327,13 @@ def stream_chat(
     the request been sent yet" - once true, a failure is left to raise
     as-is, same reasoning _with_retry documents for why it stops there."""
     model = model or get_model()
+    provider_messages = _provider_messages(messages)
 
     def _open_stream():
         if tools:
             return _client().chat.completions.create(
                 model=model,
-                messages=messages,
+                messages=provider_messages,
                 tools=tools,
                 max_tokens=MAX_TOKENS,
                 stream=True,
@@ -236,7 +341,7 @@ def stream_chat(
             )
         return _client().chat.completions.create(
             model=model,
-            messages=messages,
+            messages=provider_messages,
             max_tokens=MAX_TOKENS,
             stream=True,
             stream_options={"include_usage": True},

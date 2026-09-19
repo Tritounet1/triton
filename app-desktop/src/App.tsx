@@ -83,6 +83,7 @@ import {
   FileIcon,
   FolderIcon,
   GearIcon,
+  ImageIcon,
   MoonIcon,
   MoreIcon,
   PencilIcon,
@@ -671,6 +672,12 @@ function App() {
   // voir sendMessage's noteSseEvent, appele a chaque evenement recu.
   const [awaitingSseEvent, setAwaitingSseEvent] = useState(false);
   const [apiModel, setApiModel] = useState<string | null>(null);
+  // Equivalent du modele de chat par defaut, mais specifique a l'endpoint
+  // Images. Les deux reglages restent totalement independants.
+  const [imageModel, setImageModel] = useState<string | null>(null);
+  const [oneShotChatModel, setOneShotChatModel] = useState<string | null>(null);
+  const [oneShotImageModel, setOneShotImageModel] = useState<string | null>(null);
+  const [imageMode, setImageMode] = useState(false);
   // modele propre a la conversation en cours, mis via la commande /model
   // (PUT /sessions/{id}/model) - prend le pas sur apiModel (le defaut
   // global) tant qu'il est defini. null = pas de surcharge, la conversation
@@ -694,6 +701,9 @@ function App() {
       supports_images: boolean;
       supports_files: boolean;
     }[]
+  >([]);
+  const [imageModelsCatalog, setImageModelsCatalog] = useState<
+    { id: string; name: string; description: string }[]
   >([]);
   const [pendingAttachments, setPendingAttachments] = useState<
     PendingAttachment[]
@@ -899,6 +909,17 @@ function App() {
       });
   }
 
+  function refreshImageModel() {
+    fetch(`${API_BASE}/settings/image_model`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { model: string } | null) => {
+        setImageModel(data?.model ?? null);
+      })
+      .catch(() => {
+        setImageModel(null);
+      });
+  }
+
   // renvoie la liste chargee (en plus de mettre a jour l'etat) pour que le
   // montage initial puisse en retirer le project_id de la session restauree
   // depuis localStorage (voir l'effet ci-dessous) - un simple `setSessions`
@@ -1023,6 +1044,7 @@ function App() {
 
   useEffect(() => {
     refreshApiModel();
+    refreshImageModel();
 
     fetch(`${API_BASE}/openrouter/models`)
       .then((r) => (r.ok ? r.json() : []))
@@ -1040,6 +1062,16 @@ function App() {
       )
       .catch(() => {
         // API OpenRouter injoignable : le bouton "joindre" reste desactive
+      });
+
+    fetch(`${API_BASE}/openrouter/image-models`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data: { id: string; name: string; description: string }[]) => {
+        setImageModelsCatalog(data);
+      })
+      .catch(() => {
+        // Le mode image reste present, mais le selecteur conserve alors le
+        // modele par defaut configure plutot qu'une liste obsolète.
       });
 
     // uniquement au demarrage, pour une session deja connue (localStorage) ;
@@ -1259,6 +1291,17 @@ function App() {
     if (!fileList) return;
     for (const file of Array.from(fileList)) {
       if (isTextAttachmentFile(file)) {
+        if (imageMode) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              kind: "error",
+              text: "La génération d’images accepte uniquement des images de référence.",
+              time: Date.now(),
+            },
+          ]);
+          continue;
+        }
         if (file.size > MAX_TEXT_ATTACHMENT_BYTES) {
           setMessages((prev) => [
             ...prev,
@@ -1282,8 +1325,8 @@ function App() {
       const isImage = file.type.startsWith("image/");
       const isPdf = file.type === "application/pdf";
       if (
-        (isImage && !supportsImages) ||
-        (isPdf && !supportsFiles) ||
+        (isImage && !imageMode && !supportsImages) ||
+        (isPdf && (imageMode || !supportsFiles)) ||
         (!isImage && !isPdf)
       ) {
         continue;
@@ -1984,6 +2027,134 @@ function App() {
     });
   }
 
+  async function generateImage(rawPrompt: string) {
+    const prompt = rawPrompt.trim();
+    if (!prompt || sending) {
+      if (sending) setInput(rawPrompt);
+      return;
+    }
+    if (pendingTextAttachments.length || pendingAttachments.some((attachment) => isPdfDataUrl(attachment.dataUrl))) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          kind: "error",
+          text: "La génération d’images accepte des images de référence, pas des PDF ou des fichiers texte.",
+          time: Date.now(),
+        },
+      ]);
+      setInput(rawPrompt);
+      return;
+    }
+
+    // The temporary choice is consumed now. It is sent to this request but
+    // never written into settings.json, and the next image starts from the
+    // default selected in Settings again.
+    const requestModel = oneShotImageModel;
+    const references = pendingAttachments;
+    setOneShotImageModel(null);
+    setInput("");
+    setPendingAttachments([]);
+
+    const startSessionId = sessionId;
+    let currentSessionId = startSessionId;
+    let currentSessionKey = startSessionId ?? "";
+    const isDisplayed = () => displayedSessionIdRef.current === currentSessionId;
+
+    if (isDisplayed()) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          kind: "user",
+          text: prompt,
+          images: references.map((attachment) => attachment.dataUrl),
+          time: Date.now(),
+        },
+      ]);
+    }
+    markSending(currentSessionKey, true);
+    const controller = new AbortController();
+    abortControllersRef.current.set(currentSessionKey, controller);
+
+    try {
+      const response = await fetch(`${API_BASE}/images/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: startSessionId,
+          prompt,
+          project_id: activeProjectId,
+          model: requestModel,
+          attachments: references.map((attachment) => ({
+            name: attachment.name,
+            data_url: attachment.dataUrl,
+          })),
+        }),
+        signal: controller.signal,
+      });
+      const payload = (await response.json()) as {
+        session_id?: string;
+        title?: string | null;
+        model?: string;
+        images?: string[];
+        detail?: string;
+      };
+      if (!response.ok) throw new Error(payload.detail ?? `Erreur ${response.status}`);
+
+      const newId = payload.session_id;
+      if (!newId) throw new Error("L’API n’a pas retourné de conversation.");
+      const wasNew = currentSessionId === null;
+      currentSessionId = newId;
+      if (wasNew) {
+        moveSendingKey(currentSessionKey, newId);
+        const controllerForThis = abortControllersRef.current.get(currentSessionKey);
+        abortControllersRef.current.delete(currentSessionKey);
+        currentSessionKey = newId;
+        if (controllerForThis) abortControllersRef.current.set(newId, controllerForThis);
+        if (displayedSessionIdRef.current === startSessionId) {
+          setSessionId(newId);
+          localStorage.setItem("triton_session_id", newId);
+          displayedSessionIdRef.current = newId;
+        }
+      }
+
+      const title = payload.title;
+      if (title) {
+        setSessions((prev) =>
+          prev.some((item) => item.id === newId)
+            ? prev.map((item) => (item.id === newId ? { ...item, title } : item))
+            : [{ id: newId, title, project_id: activeProjectId, pinned: false }, ...prev],
+        );
+      }
+      if (isDisplayed()) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            kind: "assistant",
+            text: "",
+            images: payload.images ?? [],
+            model: payload.model,
+            time: Date.now(),
+          },
+        ]);
+      }
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "AbortError") && isDisplayed()) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            kind: "error",
+            text: error instanceof Error ? error.message : "Impossible de générer l’image.",
+            time: Date.now(),
+          },
+        ]);
+      }
+    } finally {
+      abortControllersRef.current.delete(currentSessionKey);
+      markSending(currentSessionKey, false);
+      void loadSessions();
+    }
+  }
+
   async function sendMessage(
     rawText: string,
     editTurnIndex?: number,
@@ -2039,6 +2210,8 @@ function App() {
       }
     }
 
+    const requestModel = isEdit ? null : oneShotChatModel;
+    if (!isEdit) setOneShotChatModel(null);
     const startTime = performance.now();
     const attachments = isEdit
       ? (attachmentsOverride ?? [])
@@ -2160,6 +2333,7 @@ function App() {
             data_url: a.dataUrl,
           })),
           edit_turn_index: editTurnIndex ?? null,
+          model: requestModel,
         }),
         signal: controller.signal,
       });
@@ -2560,30 +2734,6 @@ function App() {
           className="w-full justify-start"
         />
       }
-      footer={
-        <div className="flex items-center justify-end gap-0.5 px-1 py-1">
-          <IconButton
-            label="Paramètres"
-            icon={<GearIcon />}
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              setSettingsOpen(true);
-            }}
-          />
-          <IconButton
-            label={
-              themeMode === "dark"
-                ? "Passer en thème clair"
-                : "Passer en thème sombre"
-            }
-            icon={themeMode === "dark" ? <MoonIcon /> : <SunIcon />}
-            variant="ghost"
-            size="sm"
-            onClick={toggleTheme}
-          />
-        </div>
-      }
     >
       <SideNavSection
         title="Projets"
@@ -2941,11 +3091,15 @@ function App() {
                       value={input}
                       onChange={setInput}
                       onSubmit={(value) => {
-                        void sendMessage(value);
+                        if (imageMode) {
+                          void generateImage(value);
+                        } else {
+                          void sendMessage(value);
+                        }
                       }}
                       onStop={cancelMessage}
                       isStopShown={sending}
-                      placeholder="Écrire un message..."
+                      placeholder={imageMode ? "Décrire l’image à générer…" : "Écrire un message..."}
                       // sending is deliberately NOT here: isDisabled greys the
                       // whole composer out (opacity 0.6) and makes its input
                       // non-editable (contentEditable=false) - there's no
@@ -3048,7 +3202,7 @@ function App() {
                           <input
                             ref={fileInputRef}
                             type="file"
-                            accept={attachAccept}
+                            accept={imageMode ? "image/*" : attachAccept}
                             multiple
                             className="hidden"
                             onChange={(e) => {
@@ -3057,13 +3211,26 @@ function App() {
                             }}
                           />
                           <IconButton
-                            label={attachLabel}
+                            label={imageMode ? "Ajouter une image de référence" : attachLabel}
                             icon={<PlusIcon />}
                             variant="ghost"
                             size="sm"
-                            isDisabled={!supportsImages && !supportsFiles}
+                            isDisabled={!imageMode && !supportsImages && !supportsFiles}
                             onClick={() => {
                               fileInputRef.current?.click();
+                            }}
+                          />
+                          <IconButton
+                            label={imageMode ? "Revenir au chat" : "Générer une image"}
+                            icon={<ImageIcon />}
+                            variant={imageMode ? "primary" : "ghost"}
+                            size="sm"
+                            isDisabled={
+                              pendingTextAttachments.length > 0 ||
+                              pendingAttachments.some((attachment) => isPdfDataUrl(attachment.dataUrl))
+                            }
+                            onClick={() => {
+                              setImageMode((active) => !active);
                             }}
                           />
                         </>
@@ -3073,9 +3240,43 @@ function App() {
                           {yoloEnabled && (
                             <Badge variant="warning" label="YOLO actif" />
                           )}
-                          {effectiveModel && (
-                            <Badge variant="neutral" label={effectiveModel} />
-                          )}
+                          <select
+                            aria-label={imageMode ? "Modèle image pour cette génération" : "Modèle chat pour ce message"}
+                            value={imageMode ? (oneShotImageModel ?? "") : (oneShotChatModel ?? "")}
+                            className="max-w-48 rounded-md border border-border bg-surface px-2 py-1 text-xs text-primary outline-none focus:border-accent"
+                            onChange={(event) => {
+                              if (imageMode) setOneShotImageModel(event.target.value || null);
+                              else setOneShotChatModel(event.target.value || null);
+                            }}
+                          >
+                            {imageMode ? (
+                              <>
+                                <option value="">Par défaut : {imageModel ?? "—"}</option>
+                                {imageModelsCatalog.map((model) => (
+                                  <option key={model.id} value={model.id}>{model.name}</option>
+                                ))}
+                              </>
+                            ) : (
+                              <>
+                                <option value="">Conversation : {effectiveModel ?? "—"}</option>
+                                {modelsCatalog.map((model) => (
+                                  <option key={model.id} value={model.id}>{model.name}</option>
+                                ))}
+                              </>
+                            )}
+                          </select>
+                          <Badge
+                            variant={imageMode ? "warning" : "neutral"}
+                            label={
+                              imageMode
+                                ? oneShotImageModel
+                                  ? "Modèle temporaire"
+                                  : "Image"
+                                : oneShotChatModel
+                                  ? "Modèle temporaire"
+                                  : effectiveModel ?? "Modèle"
+                            }
+                          />
                         </>
                       }
                     />
@@ -3217,6 +3418,9 @@ function App() {
                         }
 
                         const blocks = toBlocks(group.items);
+                        const generatedImages = group.items.flatMap((item) =>
+                          item.kind === "assistant" ? item.images ?? [] : [],
+                        );
                         const lastItem = group.items[group.items.length - 1];
                         // groupMessages() ne cree jamais un groupe "assistant" avec un
                         // tableau items vide (toujours au moins un push initial) : ceci
@@ -3262,6 +3466,26 @@ function App() {
                             }
                             name="Triton"
                           >
+                            {generatedImages.length > 0 && (
+                              <div className="mb-3 flex flex-wrap gap-3">
+                                {generatedImages.map((src, imageIndex) => (
+                                  <a
+                                    key={`${src.slice(0, 48)}-${imageIndex}`}
+                                    href={src}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="block overflow-hidden rounded-xl border border-border bg-surface"
+                                    title="Ouvrir l’image"
+                                  >
+                                    <img
+                                      src={src}
+                                      alt="Image générée"
+                                      className="max-h-[32rem] max-w-full object-contain"
+                                    />
+                                  </a>
+                                ))}
+                              </div>
+                            )}
                             {blocks.map((block, bi) => {
                               // un show_map/show_link_preview isole (pas
                               // regroupe avec d'autres appels d'outils,
@@ -3324,7 +3548,7 @@ function App() {
                                     };
                                   })}
                                 />
-                              ) : (
+                              ) : block.msg.text ? (
                                 <ChatMessageBubble
                                   key={bi}
                                   variant="ghost"
@@ -3333,7 +3557,7 @@ function App() {
                                 >
                                   <Markdown>{block.msg.text}</Markdown>
                                 </ChatMessageBubble>
-                              );
+                              ) : null;
                             })}
                             <ChatMessageMetadata
                               timestamp={
@@ -3592,6 +3816,30 @@ function App() {
               </div>
             )}
           </AppShell>
+          {!sidebarCollapsed && (
+            <div className="fixed bottom-3 left-0 z-30 flex w-[260px] justify-end gap-0.5 px-2">
+              <IconButton
+                label="Paramètres"
+                icon={<GearIcon />}
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setSettingsOpen(true);
+                }}
+              />
+              <IconButton
+                label={
+                  themeMode === "dark"
+                    ? "Passer en thème clair"
+                    : "Passer en thème sombre"
+                }
+                icon={themeMode === "dark" ? <MoonIcon /> : <SunIcon />}
+                variant="ghost"
+                size="sm"
+                onClick={toggleTheme}
+              />
+            </div>
+          )}
         </div>
       </div>
 
@@ -3638,6 +3886,7 @@ function App() {
           setSettingsOpen(false);
         }}
         onModelChanged={refreshApiModel}
+        onImageModelChanged={refreshImageModel}
       />
 
       <NewProjectModal
