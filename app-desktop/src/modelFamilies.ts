@@ -43,7 +43,7 @@ export const FAMILIES: Record<string, FamilyInfo> = {
   perplexity: { label: "Perplexity" },
   minimax: { label: "MiniMax" },
   moonshotai: { label: "Moonshot AI (Kimi)", logo: "/kimi-logo.png" },
-  microsoft: { label: "Microsoft" },
+  microsoft: { label: "Microsoft", logo: "/microsoft-logo.png" },
 };
 
 // prefixes OpenRouter differents pour une meme famille (ex. "meta" et
@@ -75,7 +75,10 @@ export function isModelFamilyVisible(modelId: string): boolean {
 /** Nom + logo a passer a un composant Avatar pour representer le modele
  * actuellement selectionne (toujours un logo - default-logo.png si la
  * famille n'en a pas de propre, ou si aucun modele n'est encore connu). */
-export function modelAvatar(modelId: string | null): { name: string; logo?: string } {
+export function modelAvatar(modelId: string | null): {
+  name: string;
+  logo?: string;
+} {
   if (!modelId) return { name: "?", logo: DEFAULT_LOGO };
   const info = familyInfo(familyKey(modelId));
   return { name: info.label, logo: info.logo };

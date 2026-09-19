@@ -19,6 +19,7 @@ import {
   type ChatComposerTrigger,
 } from "@astryxdesign/core/Chat";
 import { DropdownMenu } from "@astryxdesign/core/DropdownMenu";
+import { Dialog } from "@astryxdesign/core/Dialog";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { IconButton } from "@astryxdesign/core/IconButton";
 import { Markdown } from "@astryxdesign/core/Markdown";
@@ -663,6 +664,11 @@ function App() {
   const [sendingSessionIds, setSendingSessionIds] = useState<Set<string>>(
     () => new Set(),
   );
+  // Modele associe a une requete encore en cours. Il peut differer du
+  // modele de chat par defaut, par exemple pour une image Gemini ponctuelle.
+  const [inFlightModels, setInFlightModels] = useState<Record<string, string>>(
+    {},
+  );
   // vrai des qu'aucun evenement SSE n'est arrive depuis SSE_IDLE_MS pour la
   // conversation affichee - couvre le "silence" pendant qu'un outil tourne
   // cote serveur juste apres un morceau de texte assistant (ex. "Je vais
@@ -678,6 +684,7 @@ function App() {
   const [oneShotChatModel, setOneShotChatModel] = useState<string | null>(null);
   const [oneShotImageModel, setOneShotImageModel] = useState<string | null>(null);
   const [imageMode, setImageMode] = useState(false);
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
   // modele propre a la conversation en cours, mis via la commande /model
   // (PUT /sessions/{id}/model) - prend le pas sur apiModel (le defaut
   // global) tant qu'il est defini. null = pas de surcharge, la conversation
@@ -2011,6 +2018,19 @@ function App() {
     });
   }
 
+  function markInFlightModel(key: string, model: string | null) {
+    setInFlightModels((previous) => {
+      if (model) {
+        return previous[key] === model ? previous : { ...previous, [key]: model };
+      }
+      if (!(key in previous)) return previous;
+      const remaining = Object.fromEntries(
+        Object.entries(previous).filter(([candidate]) => candidate !== key),
+      );
+      return remaining;
+    });
+  }
+
   /** Deplace une entree de sendingSessionIds d'une cle vers une autre, en
    * une seule mise a jour d'etat (pas un delete + un add separes) - une
    * toute nouvelle conversation passe de la cle "" a son vrai id des que
@@ -2025,6 +2045,38 @@ function App() {
       next.add(newKey);
       return next;
     });
+    setInFlightModels((previous) => {
+      if (!(oldKey in previous) || oldKey === newKey) return previous;
+      const model = previous[oldKey];
+      const remaining = Object.fromEntries(
+        Object.entries(previous).filter(([candidate]) => candidate !== oldKey),
+      );
+      return model ? { ...remaining, [newKey]: model } : remaining;
+    });
+  }
+
+  function downloadGeneratedImage(src: string) {
+    const download = document.createElement("a");
+    const mediaType = /^data:image\/([^;,]+)/i.exec(src)?.[1] ?? "png";
+    const extension = mediaType === "jpeg" ? "jpg" : mediaType.split("+")[0];
+    download.href = src;
+    download.download = `triton-image.${extension}`;
+    document.body.appendChild(download);
+    download.click();
+    download.remove();
+  }
+
+  function requestImageChange(src: string) {
+    setPendingAttachments((previous) =>
+      previous.some((attachment) => attachment.dataUrl === src)
+        ? previous
+        : [
+            ...previous,
+            { name: "image-de-reference.png", dataUrl: src },
+          ],
+    );
+    setImageMode(true);
+    setPreviewImage(null);
   }
 
   async function generateImage(rawPrompt: string) {
@@ -2050,6 +2102,7 @@ function App() {
     // never written into settings.json, and the next image starts from the
     // default selected in Settings again.
     const requestModel = oneShotImageModel;
+    const inFlightModel = requestModel ?? imageModel;
     const references = pendingAttachments;
     setOneShotImageModel(null);
     setInput("");
@@ -2072,6 +2125,7 @@ function App() {
       ]);
     }
     markSending(currentSessionKey, true);
+    markInFlightModel(currentSessionKey, inFlightModel);
     const controller = new AbortController();
     abortControllersRef.current.set(currentSessionKey, controller);
 
@@ -2151,6 +2205,7 @@ function App() {
     } finally {
       abortControllersRef.current.delete(currentSessionKey);
       markSending(currentSessionKey, false);
+      markInFlightModel(currentSessionKey, null);
       void loadSessions();
     }
   }
@@ -2211,6 +2266,7 @@ function App() {
     }
 
     const requestModel = isEdit ? null : oneShotChatModel;
+    const inFlightModel = requestModel ?? effectiveModel;
     if (!isEdit) setOneShotChatModel(null);
     const startTime = performance.now();
     const attachments = isEdit
@@ -2272,6 +2328,7 @@ function App() {
       });
     }
     markSending(currentSessionKey, true);
+    markInFlightModel(currentSessionKey, inFlightModel);
 
     let assistantText = "";
     let flushScheduled = false;
@@ -2524,6 +2581,7 @@ function App() {
       abortControllersRef.current.delete(currentSessionKey);
       pendingConfirmationsRef.current.delete(currentSessionKey);
       markSending(currentSessionKey, false);
+      markInFlightModel(currentSessionKey, null);
       if (isDisplayed()) setPendingConfirmation(null);
       if (sseIdleTimerRef.current !== null) {
         clearTimeout(sseIdleTimerRef.current);
@@ -2667,6 +2725,7 @@ function App() {
   // compte - c'est celui-ci qui doit determiner l'affichage (badge, avatar,
   // capacites de piece jointe), pas le defaut global apiModel seul.
   const effectiveModel = sessionModelOverride ?? apiModel;
+  const displayedInFlightModel = inFlightModels[sessionId ?? ""] ?? effectiveModel;
   const currentModelInfo = modelsCatalog.find((m) => m.id === effectiveModel);
   const supportsImages = currentModelInfo?.supports_images ?? false;
   const supportsFiles = currentModelInfo?.supports_files ?? false;
@@ -3469,20 +3528,21 @@ function App() {
                             {generatedImages.length > 0 && (
                               <div className="mb-3 flex flex-wrap gap-3">
                                 {generatedImages.map((src, imageIndex) => (
-                                  <a
+                                  <button
+                                    type="button"
                                     key={`${src.slice(0, 48)}-${imageIndex}`}
-                                    href={src}
-                                    target="_blank"
-                                    rel="noreferrer"
                                     className="block overflow-hidden rounded-xl border border-border bg-surface"
-                                    title="Ouvrir l’image"
+                                    title="Agrandir l’image"
+                                    onClick={() => {
+                                      setPreviewImage(src);
+                                    }}
                                   >
                                     <img
                                       src={src}
                                       alt="Image générée"
                                       className="max-h-[32rem] max-w-full object-contain"
                                     />
-                                  </a>
+                                  </button>
                                 ))}
                               </div>
                             )}
@@ -3621,8 +3681,8 @@ function App() {
                         className="animate-fade-in"
                         avatar={
                           <Avatar
-                            name={modelAvatar(effectiveModel).name}
-                            src={modelAvatar(effectiveModel).logo}
+                            name={modelAvatar(displayedInFlightModel).name}
+                            src={modelAvatar(displayedInFlightModel).logo}
                             size={72}
                             className="h-[72px] w-[72px] shrink-0 overflow-hidden"
                           />
@@ -3842,6 +3902,62 @@ function App() {
           )}
         </div>
       </div>
+
+      <Dialog
+        isOpen={previewImage !== null}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) setPreviewImage(null);
+        }}
+        purpose="info"
+        width={980}
+        maxHeight="90dvh"
+        padding={0}
+        aria-label="Aperçu de l’image générée"
+      >
+        {previewImage && (
+          <div className="flex max-h-[90dvh] flex-col">
+            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+              <Text size="sm" weight="semibold">
+                Image générée
+              </Text>
+              <IconButton
+                label="Fermer"
+                icon={<XIcon />}
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setPreviewImage(null);
+                }}
+              />
+            </div>
+            <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-surface-raised p-4">
+              <img
+                src={previewImage}
+                alt="Image générée en grand format"
+                className="max-h-[68dvh] max-w-full object-contain"
+              />
+            </div>
+            <div className="flex flex-wrap justify-end gap-2 border-t border-border px-4 py-3">
+              <Button
+                label="Télécharger"
+                icon={<DownloadIcon />}
+                variant="secondary"
+                onClick={() => {
+                  downloadGeneratedImage(previewImage);
+                }}
+              />
+              <Button
+                label="Demander une modification"
+                icon={<ImageIcon />}
+                variant="primary"
+                onClick={() => {
+                  requestImageChange(previewImage);
+                }}
+              />
+            </div>
+          </div>
+        )}
+      </Dialog>
 
       <AlertDialog
         isOpen={deletingSession !== null}
