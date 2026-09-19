@@ -25,15 +25,18 @@ from triton.llm.chat_loop import (
     to_tool_call_params,
 )
 from triton.storage.logs import log_event
+from triton.storage.projects import Project, get_project, load_projects
 from triton.storage.sessions import (
     allow_always,
     latest_session_path,
     load_always_allowed,
     load_session,
+    load_session_project,
     new_session_path,
     save_session,
+    save_session_project,
 )
-from triton.tools import TOOLS, TOOLS_REGISTRY, invoke_tool
+from triton.tools import TOOLS, TOOLS_REGISTRY, enforce_project_sandbox, invoke_tool
 
 MAX_ARG_PREVIEW = 200
 
@@ -54,7 +57,10 @@ def format_args(args: dict[str, object]) -> str:
 
 
 def run_tool_calls(
-    console: Console, session_id: str, tool_calls: list[ChatCompletionMessageToolCallUnion]
+    console: Console,
+    session_id: str,
+    tool_calls: list[ChatCompletionMessageToolCallUnion],
+    project: Project | None,
 ) -> list[ChatCompletionMessageParam]:
     """Runs each tool call requested by the model (asking for confirmation
     before tools that modify something), displays the result, and returns
@@ -81,6 +87,11 @@ def run_tool_calls(
 
             if tool is None:
                 result = f"unknown tool: {name}"
+            elif sandbox_error := enforce_project_sandbox(name, args, project):
+                # This must run before the read-only/always-allow shortcuts:
+                # otherwise a model could read arbitrary files from the CLI
+                # without a prompt, despite the desktop API being confined.
+                result = sandbox_error
             elif tool.read_only or name in load_always_allowed(session_id):
                 start = time.perf_counter()
                 result = invoke_tool(tool, name, args, session_id)
@@ -132,6 +143,54 @@ def run_tool_calls(
     return tool_messages
 
 
+def select_project_for_cli(console: Console, session_id: str) -> Project | None:
+    """Returns the saved project bound to this CLI session, or lets the
+    user select one before tools are enabled.
+
+    Chat without a project remains useful, but every local filesystem and
+    process tool is then rejected by ``enforce_project_sandbox``. This is
+    deliberately not inferred from the CLI's current working directory: a
+    directory must be an explicit, persisted project chosen by the user.
+    """
+    saved_project_id = load_session_project(session_id)
+    if saved_project_id:
+        saved_project = get_project(saved_project_id)
+        if saved_project is not None:
+            console.print(f"[dim]project: {saved_project.name} ({saved_project.folder_path})[/dim]")
+            return saved_project
+        console.print(
+            "[yellow]the project previously linked to this session no longer exists.[/yellow]"
+        )
+
+    projects = load_projects()
+    if not projects:
+        console.print(
+            "[yellow]no project is configured: local filesystem and shell tools are disabled. "
+            "Create a project in the desktop app first.[/yellow]"
+        )
+        return None
+
+    choices = [str(index) for index in range(1, len(projects) + 1)]
+    for index, candidate in enumerate(projects, start=1):
+        console.print(f"[dim]{index}. {candidate.name} — {candidate.folder_path}[/dim]")
+    choice = Prompt.ask(
+        "select a project for this session, or chat only",
+        choices=[*choices, "n"],
+        default="n",
+        console=console,
+    )
+    if choice == "n":
+        console.print(
+            "[yellow]chat-only session: local filesystem and shell tools are disabled.[/yellow]"
+        )
+        return None
+
+    project = projects[int(choice) - 1]
+    save_session_project(session_id, project.id)
+    console.print(f"[dim]project selected: {project.name} ({project.folder_path})[/dim]")
+    return project
+
+
 def compress_history(
     console: Console, messages: list[ChatCompletionMessageParam]
 ) -> list[ChatCompletionMessageParam]:
@@ -157,6 +216,8 @@ def main():
     else:
         session_path = new_session_path()
         messages = [build_system_message(session_path.stem)]
+
+    project = select_project_for_cli(console, session_path.stem)
 
     console.rule("[bold cyan]Triton[/bold cyan]")
 
@@ -244,7 +305,9 @@ def main():
                         "tool_calls": to_tool_call_params(reply.tool_calls),
                     }
                 )
-                messages.extend(run_tool_calls(console, session_path.stem, reply.tool_calls))
+                messages.extend(
+                    run_tool_calls(console, session_path.stem, reply.tool_calls, project)
+                )
                 continue
 
             if reply.content is None:
