@@ -72,6 +72,11 @@ def test_pin_endpoint_404_for_unknown_session(client):
     assert r.status_code == 404
 
 
+def test_session_routes_reject_an_invalid_path_like_id(client):
+    r = client.get("/sessions/%2E%2E")
+    assert r.status_code == 400
+
+
 def test_list_sessions_reports_pinned_state(client):
     session_id = _new_session()
     sessions.set_pinned(session_id, True)

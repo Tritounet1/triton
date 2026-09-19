@@ -83,6 +83,7 @@ from triton.storage.sessions import (
     set_session_memory,
     set_yolo_enabled,
 )
+from triton.storage.sessions import session_path as storage_session_path
 from triton.storage.settings import (
     DEFAULT_MAX_SUBTASKS,
     load_image_model,
@@ -154,6 +155,14 @@ LOCAL_API_TOKEN: str | None = None
 LOCAL_API_TOKEN_HEADER = "X-Triton-Local-Token"
 
 
+def _session_file_path(session_id: str) -> Path:
+    """Turns a route parameter into a safe session JSON path."""
+    try:
+        return storage_session_path(session_id)
+    except ValueError as exc:
+        raise HTTPException(400, "invalid session id") from exc
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     mcp_client.manager.connect_all_enabled()
@@ -199,7 +208,13 @@ def _run_scheduled_task(task: scheduled_tasks.ScheduledTask) -> None:
     watching to answer a confirmation prompt for an unattended run, so
     without it every write/run_shell call would just sit until
     PENDING_CONFIRMATIONS' 300s timeout denies it by default."""
-    session_path = SESSIONS_DIR / f"{task.session_id}.json"
+    try:
+        session_path = storage_session_path(task.session_id)
+    except ValueError:
+        logging.getLogger("uvicorn").warning(
+            "scheduled task %s has an invalid session id, skipping", task.id
+        )
+        return
     if not session_path.exists():
         logging.getLogger("uvicorn").warning(
             "scheduled task %s: session %s no longer exists, skipping",
@@ -470,7 +485,7 @@ def resolve_session(
     needs generating). `project_id`, when given, only applies to a newly
     created session: it binds the conversation to that project's folder."""
     if session_id:
-        path = SESSIONS_DIR / f"{session_id}.json"
+        path = _session_file_path(session_id)
         if path.exists():
             return path, load_session(path), False
 
@@ -1516,7 +1531,7 @@ class PinRequest(BaseModel):
 
 @app.put("/sessions/{session_id}/pin", tags=["Sessions"])
 def pin_session(session_id: str, body: PinRequest) -> dict[str, bool]:
-    path = SESSIONS_DIR / f"{session_id}.json"
+    path = _session_file_path(session_id)
     if not path.exists():
         raise HTTPException(404, "session not found")
     set_pinned(session_id, body.pinned)
@@ -1529,7 +1544,7 @@ def get_session_yolo(session_id: str) -> dict[str, bool]:
     is_yolo_enabled) - the desktop app reads this on session switch/load
     to show a persistent warning, not just a one-off toast when toggled,
     since it silently changes what every following message does."""
-    path = SESSIONS_DIR / f"{session_id}.json"
+    path = _session_file_path(session_id)
     if not path.exists():
         raise HTTPException(404, "session not found")
     return {"enabled": is_yolo_enabled(session_id)}
@@ -1544,7 +1559,7 @@ def toggle_session_yolo(session_id: str) -> dict[str, bool]:
     at all: a project-less conversation, a path outside the project,
     ROOT_DIR... all stay blocked exactly as before, this only ever
     removes the confirmation step itself."""
-    path = SESSIONS_DIR / f"{session_id}.json"
+    path = _session_file_path(session_id)
     if not path.exists():
         raise HTTPException(404, "session not found")
     enabled = not is_yolo_enabled(session_id)
@@ -1561,12 +1576,15 @@ def get_session_model(session_id: str) -> dict[str, str | None]:
     """The /model command's override for this conversation, if any (see
     load_session_model) - None means it's using the global default
     (GET /settings/model), like every conversation before this existed."""
+    path = _session_file_path(session_id)
+    if not path.exists():
+        raise HTTPException(404, "session not found")
     return {"model": load_session_model(session_id)}
 
 
 @app.put("/sessions/{session_id}/model", tags=["Sessions"])
 def set_session_model(session_id: str, body: ModelRequest) -> dict[str, str]:
-    path = SESSIONS_DIR / f"{session_id}.json"
+    path = _session_file_path(session_id)
     if not path.exists():
         raise HTTPException(404, "session not found")
     save_session_model(session_id, body.model)
@@ -1587,6 +1605,7 @@ def get_session_cost(session_id: str) -> SessionCost:
     timed_stream_chat) - the /cost command's data source. A conversation
     that only ever ran before this field existed sums to zero, not an
     error: there's nothing to attribute those older calls to."""
+    _session_file_path(session_id)
     calls = prompt_tokens = completion_tokens = 0
     cost_usd = 0.0
     if LOGS_FILE.exists():
@@ -1619,7 +1638,7 @@ def remember_in_session(session_id: str, body: RememberRequest) -> dict[str, str
     itself (tools/memory.py) rather than duplicating its project-vs-session
     scoping logic, so this lands in exactly the same place a model-issued
     remember call for this session would."""
-    path = SESSIONS_DIR / f"{session_id}.json"
+    path = _session_file_path(session_id)
     if not path.exists():
         raise HTTPException(404, "session not found")
     return {"result": remember(body.note, session_id=session_id)}
@@ -1632,7 +1651,7 @@ def compact_session(session_id: str) -> dict[str, str]:
     automatic trigger in run_chat_stream (context already over
     MAX_CONTEXT_CHARS). Saves the compressed history back so it's what the
     next turn (and the next automatic check) build on."""
-    path = SESSIONS_DIR / f"{session_id}.json"
+    path = _session_file_path(session_id)
     if not path.exists():
         raise HTTPException(404, "session not found")
 
@@ -1693,14 +1712,14 @@ def put_project_memory(project_id: str, body: MemoryContent) -> MemoryContent:
 
 @app.get("/sessions/{session_id}/memory", tags=["Memory"])
 def get_session_memory(session_id: str) -> MemoryContent:
-    if not (SESSIONS_DIR / f"{session_id}.json").exists():
+    if not _session_file_path(session_id).exists():
         raise HTTPException(404, "session not found")
     return MemoryContent(content=load_session_memory(session_id))
 
 
 @app.put("/sessions/{session_id}/memory", tags=["Memory"])
 def put_session_memory(session_id: str, body: MemoryContent) -> MemoryContent:
-    if not (SESSIONS_DIR / f"{session_id}.json").exists():
+    if not _session_file_path(session_id).exists():
         raise HTTPException(404, "session not found")
     set_session_memory(session_id, body.content)
     return body
@@ -1740,7 +1759,7 @@ def get_session(session_id: str) -> list[dict[str, object]]:
     return type made FastAPI's response serialization silently strip extra
     keys we stash on assistant messages (e.g. "model", used by the desktop
     app to show which model answered)."""
-    path = SESSIONS_DIR / f"{session_id}.json"
+    path = _session_file_path(session_id)
     if not path.exists():
         raise HTTPException(404, "session not found")
     return cast(list[dict[str, object]], load_session(path))
@@ -1832,7 +1851,7 @@ def export_session_as_markdown(messages: list[dict[str, object]], title: str) ->
 
 @app.get("/sessions/{session_id}/export", tags=["Sessions"])
 def export_session(session_id: str, export_format: str = "markdown") -> Response:
-    path = SESSIONS_DIR / f"{session_id}.json"
+    path = _session_file_path(session_id)
     if not path.exists():
         raise HTTPException(404, "session not found")
     messages = cast(list[dict[str, object]], load_session(path))
@@ -1854,7 +1873,7 @@ def export_session(session_id: str, export_format: str = "markdown") -> Response
 
 @app.put("/sessions/{session_id}/title", tags=["Sessions"])
 def rename_session(session_id: str, body: RenameRequest) -> dict[str, bool]:
-    path = SESSIONS_DIR / f"{session_id}.json"
+    path = _session_file_path(session_id)
     if not path.exists():
         raise HTTPException(404, "session not found")
     save_title(session_id, body.title)
@@ -1863,6 +1882,7 @@ def rename_session(session_id: str, body: RenameRequest) -> dict[str, bool]:
 
 @app.delete("/sessions/{session_id}", tags=["Sessions"])
 def remove_session(session_id: str) -> dict[str, bool]:
+    _session_file_path(session_id)
     if not delete_session(session_id):
         raise HTTPException(404, "session not found")
     discard_snapshot(session_id)
@@ -1878,7 +1898,10 @@ def _user_message_preview(session_id: str, turn_index: int) -> str | None:
     turn number, so picking one to restore to is actually meaningful.
     None if the session/message is gone, or that message was purely an
     attachment with no text part."""
-    path = SESSIONS_DIR / f"{session_id}.json"
+    try:
+        path = storage_session_path(session_id)
+    except ValueError:
+        return None
     if not path.exists():
         return None
     try:
@@ -1923,6 +1946,7 @@ def list_session_snapshots(session_id: str) -> list[SnapshotPoint]:
     oldest first. Empty rather than a 404 when there are none: the
     desktop app uses an empty list the same way it used to use a 404, to
     decide whether to offer a restore action at all."""
+    _session_file_path(session_id)
     return [
         SnapshotPoint(
             turn_index=s.turn_index,
@@ -1956,6 +1980,7 @@ def get_session_snapshot_diff(
     to compare against the snapshot's manifest - see
     triton/tools/snapshot.py) that only matters right before the user is
     about to commit to it."""
+    _session_file_path(session_id)
     snapshot = get_snapshot(session_id, turn_index)
     if snapshot is None:
         raise HTTPException(404, "no snapshot for this session at that turn")
@@ -1991,6 +2016,7 @@ def get_session_snapshot_file(
     restore-history browser's per-file diff view (SnapshotHistoryView.tsx).
     `path` is relative to the project folder, exactly as it appears in the
     diff response."""
+    _session_file_path(session_id)
     snapshot = get_snapshot(session_id, turn_index)
     if snapshot is None:
         raise HTTPException(404, "no snapshot for this session at that turn")
@@ -2032,6 +2058,7 @@ def restore_session_snapshot(session_id: str, body: SnapshotRestoreRequest) -> d
     Destructive (see tools/snapshot.py's restore_snapshot) - the desktop
     app is expected to confirm with the user before calling this, the
     same way it does for any other irreversible action."""
+    _session_file_path(session_id)
     snapshot = get_snapshot(session_id, body.turn_index)
     if snapshot is None:
         raise HTTPException(404, "no snapshot for this session at that turn")

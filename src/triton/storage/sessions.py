@@ -1,5 +1,9 @@
 import datetime
 import json
+import os
+import re
+import tempfile
+import uuid
 from pathlib import Path
 from typing import cast
 
@@ -8,6 +12,30 @@ from openai.types.chat import ChatCompletionMessageParam
 from triton.paths import ROOT_DIR
 
 SESSIONS_DIR = ROOT_DIR / "sessions"
+SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+
+
+def validate_session_id(session_id: str) -> str:
+    """Reject path-like IDs before they are used in any session filename."""
+    if not SESSION_ID_PATTERN.fullmatch(session_id):
+        raise ValueError("invalid session id")
+    return session_id
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Durably replace a data file without ever exposing a partial JSON file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def latest_session_path() -> Path | None:
@@ -23,7 +51,11 @@ def new_session_path() -> Path:
     multiple separate conversations rather than a single global memory."""
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    return SESSIONS_DIR / f"{timestamp}.json"
+    # The old second-resolution ID could collide when two tabs created a
+    # conversation concurrently. Keep the readable date prefix, add a
+    # random suffix, and never derive a filesystem path from user input.
+    session_id = f"{timestamp}-{uuid.uuid4().hex[:10]}"
+    return session_path(session_id)
 
 
 def load_session(path: Path) -> list[ChatCompletionMessageParam]:
@@ -31,11 +63,11 @@ def load_session(path: Path) -> list[ChatCompletionMessageParam]:
 
 
 def save_session(path: Path, messages: list[ChatCompletionMessageParam]) -> None:
-    path.write_text(json.dumps(messages, ensure_ascii=False, indent=2))
+    _atomic_write_text(path, json.dumps(messages, ensure_ascii=False, indent=2))
 
 
 def title_path(session_id: str) -> Path:
-    return SESSIONS_DIR / f"{session_id}.title.txt"
+    return SESSIONS_DIR / f"{validate_session_id(session_id)}.title.txt"
 
 
 def load_title(session_id: str) -> str | None:
@@ -55,7 +87,7 @@ def save_title(session_id: str, title: str) -> None:
 
 
 def permissions_path(session_id: str) -> Path:
-    return SESSIONS_DIR / f"{session_id}.permissions.json"
+    return SESSIONS_DIR / f"{validate_session_id(session_id)}.permissions.json"
 
 
 def load_always_allowed(session_id: str) -> set[str]:
@@ -77,7 +109,7 @@ def allow_always(session_id: str, tool_name: str) -> None:
 
 
 def project_path(session_id: str) -> Path:
-    return SESSIONS_DIR / f"{session_id}.project.txt"
+    return SESSIONS_DIR / f"{validate_session_id(session_id)}.project.txt"
 
 
 def load_session_project(session_id: str) -> str | None:
@@ -100,7 +132,7 @@ def clear_session_project(session_id: str) -> None:
 
 
 def pinned_path(session_id: str) -> Path:
-    return SESSIONS_DIR / f"{session_id}.pinned"
+    return SESSIONS_DIR / f"{validate_session_id(session_id)}.pinned"
 
 
 def is_pinned(session_id: str) -> bool:
@@ -119,7 +151,7 @@ def set_pinned(session_id: str, pinned: bool) -> None:
 
 
 def yolo_path(session_id: str) -> Path:
-    return SESSIONS_DIR / f"{session_id}.yolo"
+    return SESSIONS_DIR / f"{validate_session_id(session_id)}.yolo"
 
 
 def is_yolo_enabled(session_id: str) -> bool:
@@ -144,7 +176,7 @@ def set_yolo_enabled(session_id: str, enabled: bool) -> None:
 
 
 def model_path(session_id: str) -> Path:
-    return SESSIONS_DIR / f"{session_id}.model.txt"
+    return SESSIONS_DIR / f"{validate_session_id(session_id)}.model.txt"
 
 
 def load_session_model(session_id: str) -> str | None:
@@ -165,7 +197,7 @@ def save_session_model(session_id: str, model: str) -> None:
 
 
 def memory_path(session_id: str) -> Path:
-    return SESSIONS_DIR / f"{session_id}.memory.md"
+    return SESSIONS_DIR / f"{validate_session_id(session_id)}.memory.md"
 
 
 def load_session_memory(session_id: str) -> str:
@@ -194,7 +226,7 @@ def set_session_memory(session_id: str, content: str) -> None:
 
 
 def session_path(session_id: str) -> Path:
-    return SESSIONS_DIR / f"{session_id}.json"
+    return SESSIONS_DIR / f"{validate_session_id(session_id)}.json"
 
 
 def delete_session(session_id: str) -> bool:

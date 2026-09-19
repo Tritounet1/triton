@@ -125,7 +125,7 @@ export function userMessageAtTurn(
 
 /** id de session au format 2026-08-28_101500 -> "28/08/2026 10:15" */
 export function formatSessionLabel(id: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})$/.exec(id);
+  const m = /^(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})(?:-[a-f0-9]{10})?$/.exec(id);
   if (!m) return id;
   const [, y = "", mo = "", d = "", h = "", mi = ""] = m;
   return `${d}/${mo}/${y} ${h}:${mi}`;
