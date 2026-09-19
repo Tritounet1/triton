@@ -5,9 +5,14 @@ every conversation, previously unbounded. Real subprocess spawns here
 usage and test_run_code.py's real interpreter calls - every task started
 during a test is explicitly stopped in teardown so nothing outlives it."""
 
+import sys
+import time
+import uuid
+
 import pytest
 
 from triton import background_tasks as bg
+from triton.paths import ROOT_DIR
 
 
 @pytest.fixture(autouse=True)
@@ -22,27 +27,27 @@ def _isolated_state(tmp_path, monkeypatch):
             bg.stop(task.id)
 
 
-def _start(session_id: str = "s1") -> str:
-    return bg.start(session_id, "sleep 5", name="test")
+def _start(tmp_path, session_id: str = "s1") -> str:
+    return bg.start(session_id, "sleep 5", name="test", directory=str(tmp_path))
 
 
 def test_max_concurrent_tasks_default_is_five():
     assert bg.MAX_CONCURRENT_TASKS == 5
 
 
-def test_running_count_only_counts_running_tasks():
+def test_running_count_only_counts_running_tasks(tmp_path):
     assert bg.running_count() == 0
-    _start()
+    _start(tmp_path)
     assert bg.running_count() == 1
 
 
-def test_start_is_rejected_once_the_cap_is_reached(monkeypatch):
+def test_start_is_rejected_once_the_cap_is_reached(tmp_path, monkeypatch):
     monkeypatch.setattr(bg, "MAX_CONCURRENT_TASKS", 2)
-    _start()
-    _start()
+    _start(tmp_path)
+    _start(tmp_path)
     assert bg.running_count() == 2
 
-    result = _start()
+    result = _start(tmp_path)
 
     assert result == (
         "error: 2 background tasks are already running (across every conversation) - "
@@ -51,31 +56,60 @@ def test_start_is_rejected_once_the_cap_is_reached(monkeypatch):
     assert bg.running_count() == 2
 
 
-def test_the_cap_applies_across_sessions_not_per_session(monkeypatch):
+def test_the_cap_applies_across_sessions_not_per_session(tmp_path, monkeypatch):
     monkeypatch.setattr(bg, "MAX_CONCURRENT_TASKS", 1)
-    _start(session_id="session-a")
+    _start(tmp_path, session_id="session-a")
 
-    result = _start(session_id="session-b")
+    result = _start(tmp_path, session_id="session-b")
 
     assert result.startswith("error:")
     assert bg.running_count() == 1
 
 
-def test_start_succeeds_again_after_one_is_stopped(monkeypatch):
+def test_start_succeeds_again_after_one_is_stopped(tmp_path, monkeypatch):
     monkeypatch.setattr(bg, "MAX_CONCURRENT_TASKS", 1)
-    _start()
+    _start(tmp_path)
     [task_id] = list(bg.TASKS)
     assert bg.running_count() == 1
 
-    assert _start().startswith("error:")
+    assert _start(tmp_path).startswith("error:")
 
     bg.stop(task_id)
     assert bg.running_count() == 0
 
-    result = _start()
+    result = _start(tmp_path)
 
     assert result.startswith("Background task started")
     assert bg.running_count() == 1
+
+
+def test_start_requires_a_project_directory():
+    result = bg.start("s1", "sleep 5", name="test")
+
+    assert result.startswith("error: start_background_task needs a project directory")
+    assert bg.running_count() == 0
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="sandbox-exec is macOS-only")
+def test_background_process_cannot_write_outside_its_project(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    # tmp_path is inside the system temporary directory, deliberately
+    # writable by the macOS profile for compilers/package managers. Use the
+    # harness root instead: it is readable but must never be writable by a
+    # task scoped to this separate project.
+    outside = ROOT_DIR / f".background-task-escape-{uuid.uuid4().hex}"
+
+    try:
+        result = bg.start("s1", f"echo blocked > {outside}", name="escape", directory=str(project))
+        assert result.startswith("Background task started")
+
+        deadline = time.monotonic() + 5
+        while bg.running_count() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not outside.exists()
+    finally:
+        outside.unlink(missing_ok=True)
 
 
 def test_start_is_reported_in_the_tool_schema_description():

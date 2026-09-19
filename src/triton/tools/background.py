@@ -25,7 +25,7 @@ def check_subagent(task_id: str) -> str:
 
 
 def start_background_task(
-    command: str, session_id: str, name: str = "", directory: str = "."
+    command: str, session_id: str, name: str = "", directory: str = ""
 ) -> str:
     return background_tasks.start(session_id, command, name, directory)
 

@@ -179,12 +179,22 @@ def running_count() -> int:
     return sum(1 for t in TASKS.values() if t.status == "running")
 
 
-def start(session_id: str, command: str, name: str = "", directory: str = ".") -> str:
+def start(session_id: str, command: str, name: str = "", directory: str = "") -> str:
     """Starts `command` in the background and returns immediately. The
     process runs in its own process group (start_new_session) so stop() can
     kill an entire process tree, e.g. a wrapper script and the server it
     spawns, not just the immediate child - and so it survives this harness
     process exiting rather than being torn down with it."""
+    if not directory:
+        return (
+            "error: start_background_task needs a project directory - select a project before "
+            "starting a background process"
+        )
+
+    project_directory = Path(directory).resolve()
+    if not project_directory.is_dir():
+        return f"error: background task directory does not exist: {project_directory}"
+
     if running_count() >= MAX_CONCURRENT_TASKS:
         return (
             f"error: {MAX_CONCURRENT_TASKS} background tasks are already running (across "
@@ -198,13 +208,15 @@ def start(session_id: str, command: str, name: str = "", directory: str = ".") -
 
     with _log_path(task_id).open("wb") as log_file:
         try:
-            process = subprocess.Popen(
+            # Imported here rather than at module load: triton.tools also
+            # exposes this background module, so importing it above would
+            # create a package-initialisation cycle.
+            from triton.tools.process import start_confined_process
+
+            process = start_confined_process(
                 command,
-                shell=True,
-                cwd=directory,
+                str(project_directory),
                 stdout=log_file,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
             )
         except OSError as e:
             return f"error: could not start command ({e})"
@@ -214,7 +226,7 @@ def start(session_id: str, command: str, name: str = "", directory: str = ".") -
         session_id=session_id,
         name=label,
         command=command,
-        directory=directory,
+        directory=str(project_directory),
         pid=process.pid,
         process=process,
     )
@@ -222,7 +234,7 @@ def start(session_id: str, command: str, name: str = "", directory: str = ".") -
     _persist_state()
     threading.Thread(target=_watch_child, args=(task,), daemon=True).start()
     return (
-        f"Background task started (id={task.id}, name={label!r}) in {directory}. It keeps "
+        f"Background task started (id={task.id}, name={label!r}) in {project_directory}. It keeps "
         "running after this call returns - it doesn't block the conversation. Check its "
         "status with list_background_tasks, and stop it with stop_background_task when "
         "you're done with it. The user can also see it, read its live output, and stop it "

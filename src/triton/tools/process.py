@@ -35,6 +35,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import BinaryIO
 
 from triton.paths import ROOT_DIR
 from triton.tools._shared import Tool
@@ -233,6 +234,36 @@ def _run_confined(
         capture_output=True,
         text=True,
         timeout=timeout,
+    )
+
+
+def start_confined_process(
+    command: str, directory: str, stdout: BinaryIO
+) -> subprocess.Popen[bytes]:
+    """Start a long-running shell command with the same macOS confinement.
+
+    ``start_background_task`` has no timeout by design, but it must not lose
+    the project-write sandbox that :func:`run_shell` gets merely because it
+    continues after the chat turn. The caller is responsible for validating
+    that ``directory`` is an allowed project path before reaching here.
+    """
+    root = Path(directory).resolve()
+    if sys.platform == "darwin":
+        argv = [*_macos_sandbox_argv(root), "/bin/sh", "-c", command]
+        return subprocess.Popen(
+            argv,
+            cwd=root,
+            stdout=stdout,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    return subprocess.Popen(
+        command,
+        shell=True,
+        cwd=root,
+        stdout=stdout,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
     )
 
 
