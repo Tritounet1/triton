@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.9"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: app-desktop/pnpm-lock.yaml
+      - name: Install Python dependencies
+        run: uv sync --all-groups
+      - name: Install frontend dependencies
+        run: pnpm --dir app-desktop install --frozen-lockfile
+      - name: Ruff check
+        run: uv run ruff check .
+      - name: Ruff format
+        run: uv run ruff format --check .
+      - name: Python type check
+        run: uv run basedpyright
+      - name: Python tests
+        run: uv run pytest -q
+      - name: ESLint
+        run: pnpm --dir app-desktop exec eslint . --max-warnings=0
+      - name: TypeScript
+        run: pnpm --dir app-desktop exec tsc --noEmit
+      - name: Frontend build
+        run: pnpm --dir app-desktop build
