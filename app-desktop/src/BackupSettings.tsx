@@ -68,7 +68,7 @@ export function BackupSettings() {
       <Banner
         status="warning"
         title="Contient tes clés API en clair"
-        description="Le zip inclut settings.json (clé OpenRouter, clé Tavily), mcp_servers.json (tout token configuré pour un serveur MCP) et .env si présent - rien n'est retiré ni masqué. Garde ce fichier en lieu sûr, au même titre que les clés elles-mêmes."
+        description="Le zip inclut les réglages et les configurations MCP, mais pas les clés API ni les variables secrètes MCP : elles restent dans le trousseau système. Le fichier .env, s'il existe, reste inclus et doit être conservé en lieu sûr."
         className="mb-6"
       />
 

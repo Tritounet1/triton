@@ -4,6 +4,7 @@ persisted to settings.json so choices survive restarts."""
 import json
 
 from triton.paths import ROOT_DIR
+from triton.storage.keychain import get_secret, set_secret
 
 SETTINGS_FILE = ROOT_DIR / "settings.json"
 DEFAULT_MODEL = "anthropic/claude-haiku-4.5"
@@ -28,6 +29,14 @@ def _save(updates: dict[str, object]) -> None:
     # the budget doesn't wipe out the selected model and vice versa
     data = _load()
     data.update(updates)
+    SETTINGS_FILE.write_text(json.dumps(data, indent=2))
+
+
+def _remove_legacy_secret(field: str) -> None:
+    data = _load()
+    if field not in data:
+        return
+    data.pop(field)
     SETTINGS_FILE.write_text(json.dumps(data, indent=2))
 
 
@@ -62,12 +71,20 @@ def load_openrouter_api_key() -> str | None:
     """The key entered through the Settings UI, if any - api.py falls back
     to the OPEN_ROUTER_API_KEY env var (.env) when this is unset, so the
     existing dev/CLI setup keeps working untouched."""
-    key = _load().get("openrouter_api_key")
-    return key if isinstance(key, str) and key.strip() else None
+    key = get_secret("openrouter_api_key")
+    if key:
+        return key
+    legacy = _load().get("openrouter_api_key")
+    if isinstance(legacy, str) and legacy.strip():
+        set_secret("openrouter_api_key", legacy.strip())
+        _remove_legacy_secret("openrouter_api_key")
+        return legacy.strip()
+    return None
 
 
 def save_openrouter_api_key(key: str | None) -> None:
-    _save({"openrouter_api_key": key})
+    set_secret("openrouter_api_key", key.strip() if key else None)
+    _remove_legacy_secret("openrouter_api_key")
 
 
 def load_tavily_api_key() -> str | None:
@@ -76,12 +93,20 @@ def load_tavily_api_key() -> str | None:
     same convention as load_openrouter_api_key. Without either, web_search
     skips Tavily entirely and goes straight to the DuckDuckGo fallback -
     Tavily is optional, unlike the OpenRouter key."""
-    key = _load().get("tavily_api_key")
-    return key if isinstance(key, str) and key.strip() else None
+    key = get_secret("tavily_api_key")
+    if key:
+        return key
+    legacy = _load().get("tavily_api_key")
+    if isinstance(legacy, str) and legacy.strip():
+        set_secret("tavily_api_key", legacy.strip())
+        _remove_legacy_secret("tavily_api_key")
+        return legacy.strip()
+    return None
 
 
 def save_tavily_api_key(key: str | None) -> None:
-    _save({"tavily_api_key": key})
+    set_secret("tavily_api_key", key.strip() if key else None)
+    _remove_legacy_secret("tavily_api_key")
 
 
 def load_role_model_overrides() -> dict[str, str]:

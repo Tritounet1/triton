@@ -15,7 +15,7 @@ import asyncio
 import json
 import threading
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import TypedDict
 
 from mcp import ClientSession, StdioServerParameters
@@ -24,6 +24,7 @@ from mcp.types import TextContent
 from mcp.types import Tool as MCPTool
 
 from triton.paths import ROOT_DIR
+from triton.storage.keychain import get_secret, set_secret
 from triton.tools import TOOLS_REGISTRY, Tool, rebuild_tools_list
 
 CONFIG_PATH = ROOT_DIR / "mcp_servers.json"
@@ -50,15 +51,68 @@ class MCPServerConfig:
     enabled: bool = True
 
 
+def _env_secret_name(server_name: str, variable: str) -> str:
+    return f"mcp:{server_name}:{variable}"
+
+
 def load_configs() -> list[MCPServerConfig]:
     if not CONFIG_PATH.exists():
         return []
     raw = json.loads(CONFIG_PATH.read_text())
-    return [MCPServerConfig(**c) for c in raw]
+    configs: list[MCPServerConfig] = []
+    migrated = False
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        persisted_env = item.get("env", {})
+        env_keys = item.get("env_keys", [])
+        if not isinstance(name, str) or not isinstance(persisted_env, dict):
+            continue
+        keys = [key for key in env_keys if isinstance(key, str)]
+        # Old configurations contain plaintext env values. Migrate them on
+        # first load, then rewrite the config with names only.
+        for key, value in persisted_env.items():
+            if isinstance(key, str) and isinstance(value, str) and value:
+                set_secret(_env_secret_name(name, key), value)
+                if key not in keys:
+                    keys.append(key)
+                migrated = True
+        resolved: dict[str, str] = {}
+        for key in keys:
+            value = get_secret(_env_secret_name(name, key))
+            if value:
+                resolved[key] = value
+        configs.append(
+            MCPServerConfig(
+                name=name,
+                command=str(item.get("command", "")),
+                args=[arg for arg in item.get("args", []) if isinstance(arg, str)],
+                env=resolved,
+                enabled=bool(item.get("enabled", True)),
+            )
+        )
+    if migrated:
+        save_configs(configs)
+    return configs
 
 
 def save_configs(configs: list[MCPServerConfig]) -> None:
-    CONFIG_PATH.write_text(json.dumps([asdict(c) for c in configs], ensure_ascii=False, indent=2))
+    persisted: list[dict[str, object]] = []
+    for config in configs:
+        for key, value in config.env.items():
+            set_secret(_env_secret_name(config.name, key), value)
+        persisted.append(
+            {
+                "name": config.name,
+                "command": config.command,
+                "args": config.args,
+                "env": {},
+                "env_keys": sorted(config.env),
+                "enabled": config.enabled,
+            }
+        )
+    CONFIG_PATH.write_text(json.dumps(persisted, ensure_ascii=False, indent=2))
 
 
 @dataclass

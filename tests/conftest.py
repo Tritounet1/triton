@@ -21,7 +21,8 @@ comment below for why both need it)."""
 import pytest
 
 import server
-from triton.storage import logs
+from triton import mcp_client
+from triton.storage import logs, settings
 
 
 @pytest.fixture(autouse=True)
@@ -33,3 +34,23 @@ def _isolate_logs(tmp_path, monkeypatch):
     # copy, not storage/logs.py's) - both need patching, same footgun
     # documented in test_budget_enforcement.py/test_session_model_and_cost.py.
     monkeypatch.setattr(server, "LOGS_FILE", logs_file)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_keychain(monkeypatch):
+    """Tests must never create/overwrite credentials in the user's Keychain."""
+    secrets: dict[str, str] = {}
+
+    def get_secret(account: str) -> str | None:
+        return secrets.get(account)
+
+    def set_secret(account: str, value: str | None) -> None:
+        if value is None:
+            secrets.pop(account, None)
+        else:
+            secrets[account] = value
+
+    monkeypatch.setattr(settings, "get_secret", get_secret)
+    monkeypatch.setattr(settings, "set_secret", set_secret)
+    monkeypatch.setattr(mcp_client, "get_secret", get_secret)
+    monkeypatch.setattr(mcp_client, "set_secret", set_secret)
