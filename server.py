@@ -25,7 +25,7 @@ from fastapi.responses import (
 )
 from openai import APIError
 from openai.types.chat import ChatCompletionMessageParam
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from scalar_fastapi import get_scalar_api_reference
 
 from triton import background_tasks, mcp_client
@@ -2123,10 +2123,10 @@ def remove_mcp_server(name: str) -> list[mcp_client.ServerStatus]:
 class ScheduledTaskCreate(BaseModel):
     prompt: str
     frequency: Literal["hourly", "daily", "weekly"]
-    time_of_day: str
+    time_of_day: str = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
     project_id: str
     # 0=Monday..6=Sunday - required for "weekly", ignored otherwise
-    day_of_week: int | None = None
+    day_of_week: int | None = Field(default=None, ge=0, le=6)
 
 
 class ScheduledTaskToggle(BaseModel):
