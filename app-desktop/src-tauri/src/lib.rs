@@ -1,11 +1,23 @@
-#[cfg(not(debug_assertions))]
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 #[cfg(not(debug_assertions))]
 use tauri::Manager;
 #[cfg(not(debug_assertions))]
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 #[cfg(not(debug_assertions))]
 use tauri_plugin_shell::ShellExt;
+#[cfg(not(debug_assertions))]
+use uuid::Uuid;
+
+/// Held in memory only. The token is released to the trusted WebView after
+/// the sidecar that received it over stdin reports it has started, so an
+/// unrelated process on port 8000 never receives a token-bearing request.
+#[derive(Clone)]
+struct LocalApiTokenState(Arc<Mutex<Option<String>>>);
+
+#[tauri::command]
+fn local_api_token(state: tauri::State<'_, LocalApiTokenState>) -> Option<String> {
+    state.0.lock().unwrap().clone()
+}
 
 /// Holds the running triton-server sidecar's handle so it can be killed on
 /// app exit (see the RunEvent::Exit match below) - None until the sidecar
@@ -13,23 +25,6 @@ use tauri_plugin_shell::ShellExt;
 /// exit event never tries to kill it twice.
 #[cfg(not(debug_assertions))]
 struct SidecarState(Mutex<Option<CommandChild>>);
-
-/// True if something is already answering on 127.0.0.1:8000. A previous
-/// run's sidecar can outlive its parent if the app was force-quit/crashed
-/// (SIGKILL bypasses the RunEvent::Exit cleanup below - no way around that
-/// from inside the app), which would otherwise make every future launch
-/// fail to bind with no obvious cause. Skipping our own spawn in that case
-/// means the app just reuses whatever's already serving it instead of
-/// erroring - correct whether that's a leftover sidecar or a dev-mode
-/// `uv run uvicorn` someone forgot was running.
-#[cfg(not(debug_assertions))]
-fn port_8000_is_already_serving() -> bool {
-    use std::net::{SocketAddr, TcpStream};
-    use std::time::Duration;
-
-    let addr: SocketAddr = ([127, 0, 0, 1], 8000).into();
-    TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok()
-}
 
 /// Terminates the sidecar, working around a real gap found by testing:
 /// CommandChild::kill() always sends SIGKILL, which a PyInstaller onefile
@@ -58,12 +53,15 @@ fn terminate_sidecar(child: CommandChild) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let api_token_state = LocalApiTokenState(Arc::new(Mutex::new(None)));
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
-        .setup(|_app| {
+        .manage(api_token_state.clone())
+        .invoke_handler(tauri::generate_handler![local_api_token])
+        .setup(move |_app| {
             // Dev mode already runs the API separately (the root
             // package.json's "dev" script starts `uv run uvicorn
             // server:app --reload` alongside `tauri dev`) - spawning the
@@ -72,17 +70,9 @@ pub fn run() {
             // dev process babysitting the API) needs this.
             #[cfg(not(debug_assertions))]
             {
-                if port_8000_is_already_serving() {
-                    eprintln!(
-                        "[triton-server] something is already listening on 127.0.0.1:8000 \
-                         (a leftover sidecar, or a dev server) - reusing it instead of \
-                         spawning a new one"
-                    );
-                    return Ok(());
-                }
-
-                let (mut rx, child) = match _app.shell().sidecar("triton-server") {
-                    Ok(cmd) => match cmd.spawn() {
+                let token = Uuid::new_v4().to_string();
+                let (mut rx, mut child) = match _app.shell().sidecar("triton-server") {
+                    Ok(cmd) => match cmd.arg("--local-api-token-stdin").spawn() {
                         Ok(spawned) => spawned,
                         Err(e) => {
                             eprintln!("failed to spawn triton-server sidecar: {e}");
@@ -97,17 +87,30 @@ pub fn run() {
                     }
                 };
 
+                if let Err(e) = child.write(format!("{token}\n").as_bytes()) {
+                    eprintln!("failed to send the local API token to triton-server: {e}");
+                    terminate_sidecar(child);
+                    _app.manage(SidecarState(Mutex::new(None)));
+                    return Ok(());
+                }
+
                 _app.manage(SidecarState(Mutex::new(Some(child))));
 
                 // relay the sidecar's own stdout/stderr into this
                 // process's - a startup crash (e.g. a missing/invalid
                 // OpenRouter key on a fresh install, see api.py) is then
                 // visible in the app's own logs instead of silently lost.
+                let token_state = api_token_state.clone();
                 tauri::async_runtime::spawn(async move {
                     while let Some(event) = rx.recv().await {
                         match event {
                             CommandEvent::Stdout(line) => {
-                                print!("[triton-server] {}", String::from_utf8_lossy(&line));
+                                let text = String::from_utf8_lossy(&line);
+                                if text.trim() == "TRITON_SIDECAR_READY" {
+                                    *token_state.0.lock().unwrap() = Some(token.clone());
+                                } else {
+                                    print!("[triton-server] {text}");
+                                }
                             }
                             CommandEvent::Stderr(line) => {
                                 eprint!("[triton-server] {}", String::from_utf8_lossy(&line));

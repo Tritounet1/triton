@@ -51,3 +51,23 @@ def test_cors_rejects_an_untrusted_website():
 
     assert response.status_code == 400
     assert "access-control-allow-origin" not in response.headers
+
+
+def test_sidecar_token_rejects_requests_without_the_matching_header(monkeypatch):
+    monkeypatch.setattr(server, "LOCAL_API_TOKEN", "sidecar-secret")
+
+    client = _client()
+    denied = client.get("/health")
+    accepted = client.get("/health", headers={server.LOCAL_API_TOKEN_HEADER: "sidecar-secret"})
+    preflight = client.options(
+        "/health",
+        headers={
+            "Origin": "tauri://localhost",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": server.LOCAL_API_TOKEN_HEADER,
+        },
+    )
+
+    assert denied.status_code == 401
+    assert accepted.status_code == 200
+    assert preflight.status_code == 200

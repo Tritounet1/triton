@@ -1,5 +1,8 @@
+import argparse
 import json
 import logging
+import secrets
+import sys
 import threading
 import time
 import uuid
@@ -11,7 +14,7 @@ from pathlib import Path
 from typing import Literal, TypedDict, cast
 
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
     FileResponse,
@@ -140,6 +143,13 @@ class _QuietPollingEndpoints(logging.Filter):
 
 logging.getLogger("uvicorn.access").addFilter(_QuietPollingEndpoints())
 
+# A packaged Tauri app gives its bundled sidecar a fresh token over stdin at
+# launch. It protects the loopback API from a different local process that
+# happens to bind port 8000 first. It stays optional for the CLI and Vite
+# development workflow, which deliberately start server.py separately.
+LOCAL_API_TOKEN: str | None = None
+LOCAL_API_TOKEN_HEADER = "X-Triton-Local-Token"
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -158,6 +168,11 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         )
     scheduler_thread = threading.Thread(target=_scheduled_tasks_poll_loop, daemon=True)
     scheduler_thread.start()
+    # Tauri waits for this message from the sidecar it spawned before it
+    # gives the startup token to its WebView. Do not include the token in
+    # the output: stdout may be copied to application logs.
+    if LOCAL_API_TOKEN is not None:
+        print("TRITON_SIDECAR_READY", flush=True)
     yield
     _scheduler_stop_event.set()
     mcp_client.manager.disconnect_all()
@@ -280,6 +295,23 @@ app = FastAPI(
     # disable it here so the two don't collide on the same path.
     docs_url=None,
 )
+
+
+@app.middleware("http")
+async def require_local_api_token(request: Request, call_next):
+    # Let CORS answer preflight requests; the real request still needs the
+    # token. Without this exception every browser request with our header
+    # would be rejected before it could be sent.
+    if LOCAL_API_TOKEN is not None and request.method != "OPTIONS":
+        supplied_token = request.headers.get(LOCAL_API_TOKEN_HEADER, "")
+        if not secrets.compare_digest(supplied_token, LOCAL_API_TOKEN):
+            return Response(
+                content='{"detail":"local API authentication failed"}',
+                media_type="application/json",
+                status_code=401,
+            )
+    return await call_next(request)
+
 
 # The API handles local files, conversations, and configured credentials, so
 # it must never grant an arbitrary website browser access to localhost.  Keep
@@ -2275,5 +2307,18 @@ def get_cost_summary() -> CostSummary:
 
 if __name__ == "__main__":
     import uvicorn
+
+    parser = argparse.ArgumentParser(description="Run Triton's local HTTP API")
+    parser.add_argument(
+        "--local-api-token-stdin",
+        action="store_true",
+        help="read the one-time local API token from stdin (used by the Tauri sidecar)",
+    )
+    args = parser.parse_args()
+    if args.local_api_token_stdin:
+        token = sys.stdin.readline().strip()
+        if not token:
+            parser.error("--local-api-token-stdin requires a non-empty token on stdin")
+        LOCAL_API_TOKEN = token
 
     uvicorn.run(app, host="127.0.0.1", port=8000)
