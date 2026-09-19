@@ -20,7 +20,7 @@ A conversation can be linked to a project (`storage/sessions.py`'s `project_path
 
 This list is explicitly maintained in `SANDBOXED_PATH_ARGS` (`tools/_shared.py`) - a new tool with a path argument has to be added there by hand to be covered.
 
-**Known limitation**: MCP tools (schemas unknown ahead of time) aren't covered. `run_shell` is only covered on its *working directory* (`directory`), not on the command's actual content - a command that deliberately does `cd .. && rm -rf` still escapes the sandbox. Real isolation would need an actual sandbox (container, chroot), not just a forced `cwd`.
+**Known limitation**: MCP tools (schemas unknown ahead of time) aren't covered. On macOS, `run_shell` and background tasks also run under a Seatbelt profile that confines filesystem writes to the project; Linux and Windows currently retain only the path/working-directory checks. Network access is not sandboxed.
 
 ## The write-tool safety net (snapshots)
 
@@ -29,13 +29,13 @@ A model can write, modify, or delete files with no human review step in between 
 **Mechanism, depending on whether the folder is a git repo:**
 
 - **Git folder**: a commit is built by hand (`git add -A` into a throwaway scratch index, `git write-tree`, `git commit-tree`), never touching the repo's real index or working tree. The resulting commit is "orphaned" (not attached to any branch), kept alive by a dedicated ref (`refs/triton/snapshots/<session_id>`) so git's garbage collector never sweeps it. It's invisible in a normal `git log` (needs `git log --all`, or targeting the ref directly).
-- **Non-git folder**: a full copy of the folder is made under `snapshot_backups/<session_id>/`.
+- **Non-git folder**: Triton stores a manifest and the content needed to restore changed files in its internal snapshot storage; ignored build/dependency directories are excluded.
 
-One snapshot per conversation (the first one is enough to undo everything from the start - no intermediate restore points yet).
+One restore point is created per write turn. Each point is finalized after the turn, so the history can restore either its state before or after that turn.
 
 **Restore** (`POST /sessions/{id}/snapshot/restore`, the "Restore" button in the file panel, or the `/undo` command):
 - Git: `git checkout <snapshot> -- .` (restores/overwrites files present in the snapshot) then `git clean -fd` (removes files created since, respecting `.gitignore`) then `git reset` (unstages, so the resulting state matches exactly what it was before).
-- Non-git: the current folder is emptied (except `.git` if one somehow exists) and replaced with the backup copy.
+- Non-git: only the files tracked by the selected internal snapshot are restored; the project is not blindly emptied.
 
 Always behind an explicit UI confirmation - never triggered automatically.
 
@@ -43,4 +43,4 @@ Always behind an explicit UI confirmation - never triggered automatically.
 
 Before the fix, `run_shell`/`run_tests` received no `cwd` at all: the command ran in the *server's* own folder (the harness itself), not the project's - a real bug, not just a security concern (a command like `ls` listed the wrong folder). Fixed by adding a `directory` argument to both tools and routing it through the same `enforce_project_sandbox` as everything else.
 
-What this covers: normal usage, where the model follows the system prompt's instructions. What it doesn't cover: a deliberately malicious command that escapes the folder (`cd .. && rm -rf`, an absolute path...) - nothing stops that today besides the user confirmation before execution.
+On macOS, Seatbelt also blocks writes outside the project even when a command contains `cd ..`; the same protection is reused by background tasks. On Linux and Windows, do not treat the working-directory check as a complete shell sandbox.

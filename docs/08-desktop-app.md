@@ -19,7 +19,7 @@ Clicking a `.md`/`.html`/`.pdf` file in the tree opens it in a dedicated panel (
 - **Markdown**: rendered through the same `Markdown` component used for chat messages.
 - For HTML and Markdown, a **Preview / Code** toggle switches between the rendered view and the raw content.
 
-Any other file type (anything not in this list) still opens with the system's default application, same as before this viewer existed.
+Other file types are listed but are not opened automatically by the system: the Tauri permission to open arbitrary local paths is intentionally absent.
 
 ## Attachments
 

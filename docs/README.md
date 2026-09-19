@@ -43,6 +43,6 @@ Everything is stored locally at the repo root (never versioned, see `.gitignore`
 | `memory_global.md` | Global memory (shared by everything, currently empty - see [Memory](04-memory.md)) |
 | `settings.json` | Default model, monthly budget, OpenRouter API key, per-role model overrides |
 | `logs/events.jsonl` | Raw log of every model call / tool call |
-| `snapshots.json`, `snapshot_backups/` | Write-tool safety net (see [Projects and security](03-projects-and-security.md)) |
+| `snapshots.json`, snapshot content storage | Write-tool safety net (see [Projects and security](03-projects-and-security.md)) |
 | `background_tasks_state/` | State of background tasks started by the model |
 | `mcp_servers.json` | Configuration of connected MCP servers |
