@@ -18,7 +18,6 @@ import {
   type ChatComposerToken,
   type ChatComposerTrigger,
 } from "@astryxdesign/core/Chat";
-import { DropdownMenu } from "@astryxdesign/core/DropdownMenu";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { IconButton } from "@astryxdesign/core/IconButton";
 import { Markdown } from "@astryxdesign/core/Markdown";
@@ -81,21 +80,17 @@ import {
   CheckIcon,
   ChevronRightIcon,
   CopyIcon,
-  DownloadIcon,
   FileIcon,
   FolderIcon,
   GearIcon,
   ImageIcon,
   MoonIcon,
-  MoreIcon,
   PencilIcon,
-  PinIcon,
   PlusIcon,
   RefreshIcon,
   SearchIcon,
   SidebarIcon,
   SunIcon,
-  TrashIcon,
   XIcon,
 } from "./icons";
 import { modelAvatar } from "./modelFamilies";
@@ -105,6 +100,7 @@ import { ProjectFilePanel } from "./ProjectFilePanel";
 import { RichCard } from "./RichCard";
 import { richCardFromToolCall } from "./richCardData";
 import { SearchPage } from "./SearchPage";
+import { ProjectActionsMenu, SessionActionsMenu } from "./SidebarMenus";
 import { SettingsModal } from "./SettingsModal";
 import {
   describeSnapshotDiff,
@@ -326,138 +322,6 @@ interface Project {
   id: string;
   name: string;
   folder_path: string;
-}
-
-// navigue vers l'URL d'export plutot que d'ouvrir une nouvelle
-// fenetre/onglet : la reponse porte deja un en-tete Content-Disposition:
-// attachment (voir server.py), donc n'importe quel mecanisme de navigation
-// declenche un telechargement au lieu de remplacer la page - pas besoin de
-// l'attribut "download" (peu fiable dans une webview Tauri).
-function exportSession(session: Session, format: "markdown" | "json") {
-  const url = `${API_BASE}/sessions/${session.id}/export?export_format=${format}`;
-  const a = document.createElement("a");
-  a.href = url;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-}
-
-/** Bouton "..." unique par conversation (remplace les 4 IconButton
- * distincts d'avant : renommer/exporter/epingler/supprimer), utilise aux
- * deux endroits identiques (sessions d'un projet, section
- * "Conversations") - extrait pour ne pas dupliquer ce bloc deux fois. Le
- * wrapper stoppe la propagation du clic : sans ca, ouvrir le menu depuis
- * la ligne d'une SideNavItem la selectionnerait aussi. */
-function SessionActionsMenu({
-  session,
-  onRename,
-  onTogglePin,
-  onDelete,
-  className,
-}: {
-  session: Session;
-  onRename: () => void;
-  onTogglePin: () => void;
-  onDelete: () => void;
-  className?: string;
-}) {
-  return (
-    <div
-      className={className}
-      onClick={(e) => {
-        e.stopPropagation();
-      }}
-    >
-      <DropdownMenu
-        button={{
-          icon: <MoreIcon />,
-          isIconOnly: true,
-          variant: "ghost",
-          size: "sm",
-          label: "Actions",
-        }}
-        hasChevron={false}
-        items={[
-          { label: "Renommer", icon: <PencilIcon />, onClick: onRename },
-          {
-            label: "Exporter en Markdown",
-            icon: <DownloadIcon />,
-            onClick: () => {
-              exportSession(session, "markdown");
-            },
-          },
-          {
-            label: "Exporter en JSON",
-            icon: <DownloadIcon />,
-            onClick: () => {
-              exportSession(session, "json");
-            },
-          },
-          {
-            label: session.pinned ? "Désépingler" : "Épingler",
-            icon: <PinIcon filled={session.pinned} />,
-            onClick: onTogglePin,
-          },
-          { type: "divider" },
-          {
-            label: "Supprimer",
-            icon: <TrashIcon />,
-            variant: "destructive",
-            onClick: onDelete,
-          },
-        ]}
-      />
-    </div>
-  );
-}
-
-/** Meme principe que SessionActionsMenu, pour la ligne d'un projet
- * (nouvelle conversation / renommer / supprimer). */
-function ProjectActionsMenu({
-  onNewConversation,
-  onRename,
-  onDelete,
-  className,
-}: {
-  onNewConversation: () => void;
-  onRename: () => void;
-  onDelete: () => void;
-  className?: string;
-}) {
-  return (
-    <div
-      className={className}
-      onClick={(e) => {
-        e.stopPropagation();
-      }}
-    >
-      <DropdownMenu
-        button={{
-          icon: <MoreIcon />,
-          isIconOnly: true,
-          variant: "ghost",
-          size: "sm",
-          label: "Actions du projet",
-        }}
-        hasChevron={false}
-        items={[
-          {
-            label: "Nouvelle conversation",
-            icon: <PlusIcon />,
-            onClick: onNewConversation,
-          },
-          { label: "Renommer", icon: <PencilIcon />, onClick: onRename },
-          { type: "divider" },
-          {
-            label: "Supprimer",
-            icon: <TrashIcon />,
-            variant: "destructive",
-            onClick: onDelete,
-          },
-        ]}
-      />
-    </div>
-  );
 }
 
 /** Avant/apres pour un edit_file : construit a partir des arguments de
