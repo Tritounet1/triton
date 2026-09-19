@@ -19,7 +19,6 @@ import {
   type ChatComposerTrigger,
 } from "@astryxdesign/core/Chat";
 import { DropdownMenu } from "@astryxdesign/core/DropdownMenu";
-import { Dialog } from "@astryxdesign/core/Dialog";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { IconButton } from "@astryxdesign/core/IconButton";
 import { Markdown } from "@astryxdesign/core/Markdown";
@@ -76,6 +75,8 @@ import {
 import { type OpenFile } from "./fileViewer";
 import { FileViewerPanel } from "./FileViewerPanel";
 import { formatArgs } from "./format";
+import { ImagePreviewDialog } from "./ImagePreviewDialog";
+import { moveInFlightModel, setInFlightModel } from "./inFlightModels";
 import {
   CheckIcon,
   ChevronRightIcon,
@@ -2019,16 +2020,7 @@ function App() {
   }
 
   function markInFlightModel(key: string, model: string | null) {
-    setInFlightModels((previous) => {
-      if (model) {
-        return previous[key] === model ? previous : { ...previous, [key]: model };
-      }
-      if (!(key in previous)) return previous;
-      const remaining = Object.fromEntries(
-        Object.entries(previous).filter(([candidate]) => candidate !== key),
-      );
-      return remaining;
-    });
+    setInFlightModels((previous) => setInFlightModel(previous, key, model));
   }
 
   /** Deplace une entree de sendingSessionIds d'une cle vers une autre, en
@@ -2045,25 +2037,7 @@ function App() {
       next.add(newKey);
       return next;
     });
-    setInFlightModels((previous) => {
-      if (!(oldKey in previous) || oldKey === newKey) return previous;
-      const model = previous[oldKey];
-      const remaining = Object.fromEntries(
-        Object.entries(previous).filter(([candidate]) => candidate !== oldKey),
-      );
-      return model ? { ...remaining, [newKey]: model } : remaining;
-    });
-  }
-
-  function downloadGeneratedImage(src: string) {
-    const download = document.createElement("a");
-    const mediaType = /^data:image\/([^;,]+)/i.exec(src)?.[1] ?? "png";
-    const extension = mediaType === "jpeg" ? "jpg" : mediaType.split("+")[0];
-    download.href = src;
-    download.download = `triton-image.${extension}`;
-    document.body.appendChild(download);
-    download.click();
-    download.remove();
+    setInFlightModels((previous) => moveInFlightModel(previous, oldKey, newKey));
   }
 
   function requestImageChange(src: string) {
@@ -3903,61 +3877,13 @@ function App() {
         </div>
       </div>
 
-      <Dialog
-        isOpen={previewImage !== null}
+      <ImagePreviewDialog
+        image={previewImage}
         onOpenChange={(isOpen) => {
           if (!isOpen) setPreviewImage(null);
         }}
-        purpose="info"
-        width={980}
-        maxHeight="90dvh"
-        padding={0}
-        aria-label="Aperçu de l’image générée"
-      >
-        {previewImage && (
-          <div className="flex max-h-[90dvh] flex-col">
-            <div className="flex items-center justify-between border-b border-border px-4 py-3">
-              <Text size="sm" weight="semibold">
-                Image générée
-              </Text>
-              <IconButton
-                label="Fermer"
-                icon={<XIcon />}
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setPreviewImage(null);
-                }}
-              />
-            </div>
-            <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-surface-raised p-4">
-              <img
-                src={previewImage}
-                alt="Image générée en grand format"
-                className="max-h-[68dvh] max-w-full object-contain"
-              />
-            </div>
-            <div className="flex flex-wrap justify-end gap-2 border-t border-border px-4 py-3">
-              <Button
-                label="Télécharger"
-                icon={<DownloadIcon />}
-                variant="secondary"
-                onClick={() => {
-                  downloadGeneratedImage(previewImage);
-                }}
-              />
-              <Button
-                label="Demander une modification"
-                icon={<ImageIcon />}
-                variant="primary"
-                onClick={() => {
-                  requestImageChange(previewImage);
-                }}
-              />
-            </div>
-          </div>
-        )}
-      </Dialog>
+        onRequestChange={requestImageChange}
+      />
 
       <AlertDialog
         isOpen={deletingSession !== null}
