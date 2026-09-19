@@ -1,21 +1,104 @@
-"""fetch_url: real content extraction (trafilatura, falling back to a
-blunt tag-strip when it finds nothing extractable), pagination over long
-pages, and a warning when a page looks JS-rendered (large raw HTML, almost
-no extracted text). No real network access - requests.get is faked."""
+"""fetch_url: extraction, pagination, unsafe-destination blocking and redirects.
+
+No real network access: requests and DNS are faked."""
 
 from types import SimpleNamespace
+
+import pytest
 
 from triton.tools import web
 
 
-def _html_response(html: str, content_type: str = "text/html; charset=utf-8"):
+@pytest.fixture(autouse=True)
+def _public_dns(monkeypatch):
+    def public_address(*_args, **_kwargs):
+        return [(web.socket.AF_INET, web.socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+
+    monkeypatch.setattr(
+        web.socket,
+        "getaddrinfo",
+        public_address,
+    )
+
+
+def _html_response(
+    html: str,
+    content_type: str = "text/html; charset=utf-8",
+    *,
+    status_code: int = 200,
+    headers: dict[str, str] | None = None,
+):
     return SimpleNamespace(
-        text=html, headers={"content-type": content_type}, raise_for_status=lambda: None
+        text=html,
+        status_code=status_code,
+        headers={"content-type": content_type, **(headers or {})},
+        raise_for_status=lambda: None,
     )
 
 
 def test_rejects_a_non_http_url():
-    assert web.fetch_url("ftp://example.com") == "error: url must start with http:// or https://"
+    assert "url must start with http:// or https://" in web.fetch_url("ftp://example.com")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1:8000/private",
+        "http://[::1]/private",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://10.0.0.1/private",
+    ],
+)
+def test_rejects_non_public_literal_addresses(monkeypatch, url):
+    monkeypatch.setattr(
+        web.requests, "get", lambda *_args, **_kwargs: pytest.fail("must not fetch")
+    )
+
+    assert web.fetch_url(url).startswith("error: blocked unsafe URL")
+
+
+def test_rejects_hostname_resolving_to_loopback(monkeypatch):
+    def loopback_address(*_args, **_kwargs):
+        return [(web.socket.AF_INET, web.socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0))]
+
+    monkeypatch.setattr(
+        web.socket,
+        "getaddrinfo",
+        loopback_address,
+    )
+    monkeypatch.setattr(
+        web.requests, "get", lambda *_args, **_kwargs: pytest.fail("must not fetch")
+    )
+
+    assert web.fetch_url("http://localhost:8000/private").startswith("error: blocked unsafe URL")
+
+
+def test_rejects_a_redirect_to_a_private_address(monkeypatch):
+    calls: list[str] = []
+
+    def fake_get(url, **_kwargs):
+        calls.append(url)
+        return _html_response("", status_code=302, headers={"location": "http://127.0.0.1/private"})
+
+    monkeypatch.setattr(web.requests, "get", fake_get)
+
+    assert web.fetch_url("https://example.com/start").startswith("error: blocked unsafe URL")
+    assert calls == ["https://example.com/start"]
+
+
+def test_follows_a_public_redirect_with_redirects_disabled_on_requests(monkeypatch):
+    calls: list[tuple[str, bool]] = []
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs["allow_redirects"]))
+        if url.endswith("/start"):
+            return _html_response("", status_code=302, headers={"location": "/article"})
+        return _html_response("the article")
+
+    monkeypatch.setattr(web.requests, "get", fake_get)
+
+    assert web.fetch_url("https://example.com/start") == "the article"
+    assert calls == [("https://example.com/start", False), ("https://example.com/article", False)]
 
 
 def test_extracts_the_article_body_and_drops_boilerplate(monkeypatch):

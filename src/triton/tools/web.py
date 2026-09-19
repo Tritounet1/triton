@@ -8,9 +8,11 @@ but brittle - see its own bot-detection handling below) whenever Tavily
 is unavailable, most commonly because a free-tier key ran out of
 credits."""
 
+import ipaddress
 import os
 import re
-from urllib.parse import parse_qs, unquote, urlparse
+import socket
+from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 import requests
 import trafilatura
@@ -32,6 +34,79 @@ FETCH_CHUNK_SIZE = 5000
 # not worth warning about a page that small either way
 JS_RENDERED_MIN_RAW_SIZE = 3000
 JS_RENDERED_MAX_EXTRACTED_SIZE = 200
+MAX_FETCH_REDIRECTS = 5
+
+
+def _unsafe_url_error(url: str) -> str | None:
+    """Returns an error when *url* could target a non-public network host.
+
+    ``fetch_url`` is available to the model, so it must not become a proxy
+    to local services (including cloud metadata endpoints). Resolve every
+    hostname and reject the whole destination when any address is non-global:
+    requests may otherwise choose that address itself. This is run again for
+    every redirect in :func:`_fetch_public_url`.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return "error: url must start with http:// or https:// and include a hostname"
+
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError:
+        return "error: url has an invalid port"
+
+    try:
+        # Avoid DNS for literal addresses; it also prevents a test or a
+        # resolver configuration from disguising 127.0.0.1 as public.
+        addresses = {ipaddress.ip_address(parsed.hostname)}
+    except ValueError:
+        try:
+            addresses = {
+                ipaddress.ip_address(str(sockaddr[0]).split("%", 1)[0])
+                for _, _, _, _, sockaddr in socket.getaddrinfo(
+                    parsed.hostname, port, type=socket.SOCK_STREAM
+                )
+            }
+        except (OSError, ValueError):
+            return "error: could not resolve the URL hostname"
+
+    if not addresses:
+        return "error: could not resolve the URL hostname"
+    if any(not address.is_global for address in addresses):
+        return "error: blocked unsafe URL because its host resolves to a non-public address"
+    return None
+
+
+def _fetch_public_url(url: str) -> requests.Response | str:
+    """Fetch a public URL while validating each redirect destination."""
+    current_url = url
+    for _ in range(MAX_FETCH_REDIRECTS + 1):
+        safety_error = _unsafe_url_error(current_url)
+        if safety_error:
+            return safety_error
+        try:
+            response = requests.get(
+                current_url,
+                timeout=15,
+                headers={"User-Agent": "Triton/1.0"},
+                allow_redirects=False,
+            )
+        except requests.RequestException as e:
+            return f"error: could not fetch {current_url} ({e})"
+
+        if response.status_code not in {301, 302, 303, 307, 308}:
+            try:
+                response.raise_for_status()
+            except requests.RequestException as e:
+                return f"error: could not fetch {current_url} ({e})"
+            return response
+
+        location = response.headers.get("location")
+        if not location:
+            return "error: redirect response did not include a Location header"
+        current_url = urljoin(current_url, location)
+
+    return f"error: too many redirects (maximum {MAX_FETCH_REDIRECTS})"
 
 
 def _extract_readable_text(html: str) -> str:
@@ -70,15 +145,10 @@ def _js_rendered_warning(extracted_len: int, raw_html_len: int) -> str:
 
 
 def fetch_url(url: str, offset: int = 0) -> str:
-    if not url.startswith(("http://", "https://")):
-        return "error: url must start with http:// or https://"
     offset = max(0, offset)
-
-    try:
-        response = requests.get(url, timeout=15, headers={"User-Agent": "Triton/1.0"})
-        response.raise_for_status()
-    except requests.RequestException as e:
-        return f"error: could not fetch {url} ({e})"
+    response = _fetch_public_url(url)
+    if isinstance(response, str):
+        return response
 
     raw = response.text
     warning = ""
