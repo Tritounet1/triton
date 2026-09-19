@@ -47,6 +47,7 @@ import {
 import "./App.css";
 import { BackgroundTasksPanel } from "./BackgroundTasksPanel";
 import { type BackgroundTask } from "./BackgroundTasksSection";
+import { ConversationSidebarSection } from "./ConversationSidebarSection";
 import { DesktopTitlebar } from "./DesktopTitlebar";
 import {
   assistantGroupModel,
@@ -2532,9 +2533,7 @@ function App() {
   // (la recherche par titre/contenu est sa propre page - voir SearchPage.tsx)
   // - epinglees d'abord, tri stable donc l'ordre naturel (le plus recent en
   // tete, deja garanti par loadSessions) est preserve au sein de chaque groupe.
-  const topLevelSessions = sessions
-    .filter((s) => s.project_id === null)
-    .sort((a, b) => Number(b.pinned) - Number(a.pinned));
+  const topLevelSessions = sessions.filter((s) => s.project_id === null);
 
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
   // affiche un message assistant "vide" avec un loader tant qu'aucun texte
@@ -2749,70 +2748,26 @@ function App() {
 
       <SubagentsPanel />
 
-      <SideNavSection title="Conversations">
-        {topLevelSessions.length === 0 && (
-          <Text size="2xs" color="secondary" className="block px-2 py-1">
-            Aucune conversation.
-          </Text>
-        )}
-        {topLevelSessions.map((s) =>
-          editingSessionId === s.id ? (
-            <div key={s.id} className="px-2 py-1">
-              <TextInput
-                value={editingValue}
-                onChange={setEditingValue}
-                isLabelHidden
-                label="Titre de la conversation"
-                size="sm"
-                hasAutoFocus
-                onEnter={() => {
-                  void commitRename(s.id);
-                }}
-                onBlur={() => {
-                  void commitRename(s.id);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") setEditingSessionId(null);
-                }}
-              />
-            </div>
-          ) : (
-            <div key={s.id} className="group">
-              <SideNavItem
-                label={s.title ?? formatSessionLabel(s.id)}
-                isSelected={s.id === sessionId}
-                onClick={() => {
-                  switchSession(s.id);
-                }}
-                endContent={
-                  <div className="flex items-center gap-1">
-                    {s.id !== sessionId && sendingSessionIds.has(s.id) && (
-                      <Spinner
-                        size="sm"
-                        shade="subtle"
-                        aria-label="Réponse en cours"
-                      />
-                    )}
-                    <SessionActionsMenu
-                      className="pointer-events-none opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
-                      session={s}
-                      onRename={() => {
-                        startRename(s);
-                      }}
-                      onTogglePin={() => {
-                        void togglePin(s);
-                      }}
-                      onDelete={() => {
-                        setDeletingSession(s);
-                      }}
-                    />
-                  </div>
-                }
-              />
-            </div>
-          ),
-        )}
-      </SideNavSection>
+      <ConversationSidebarSection
+        sessions={topLevelSessions}
+        activeSessionId={sessionId}
+        sendingSessionIds={sendingSessionIds}
+        editingSessionId={editingSessionId}
+        editingValue={editingValue}
+        onSwitchSession={switchSession}
+        onStartRename={startRename}
+        onTogglePin={(session) => {
+          void togglePin(session);
+        }}
+        onDelete={setDeletingSession}
+        onEditingValueChange={setEditingValue}
+        onCommitRename={(id) => {
+          void commitRename(id);
+        }}
+        onCancelRename={() => {
+          setEditingSessionId(null);
+        }}
+      />
     </SideNav>
   );
 
