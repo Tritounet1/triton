@@ -2203,6 +2203,14 @@ def _build_tree(directory: Path, budget: list[int]) -> list[dict[str, object]]:
             break
         if is_skipped(child):
             continue
+        # Never follow links while walking the project tree. `Path.is_dir()`
+        # follows them, so a link to an external directory used to reveal
+        # its names (and recurse through it) despite the project boundary.
+        # Hiding every symlink is intentional: an internal directory link
+        # can form a cycle too, and the file endpoint already validates the
+        # resolved target before serving a requested file.
+        if child.is_symlink():
+            continue
         budget[0] -= 1
         if child.is_dir():
             entries.append(

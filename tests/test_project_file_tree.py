@@ -67,3 +67,17 @@ def test_next_and_pnpm_store_caches_dont_starve_the_budget(tmp_path, client, mon
     assert ".pnpm-store" not in top_level
     assert "package.json" in top_level
     assert "src" in top_level
+
+
+def test_tree_hides_symlink_to_a_directory_outside_the_project(tmp_path, client):
+    project = _project(tmp_path)
+    root = tmp_path / "myproject"
+    outside = tmp_path / "private"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("secret")
+    (root / "outside-link").symlink_to(outside, target_is_directory=True)
+
+    response = client.get(f"/projects/{project.id}/tree")
+
+    assert response.status_code == 200
+    assert "outside-link" not in _names(response.json()["tree"])
