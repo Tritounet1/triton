@@ -69,6 +69,7 @@ class WebAuthConfig:
     username: str
     password: str
     session_secret: str
+    secure_cookies: bool = True
 
 
 def load_web_auth_config() -> WebAuthConfig | None:
@@ -82,4 +83,12 @@ def load_web_auth_config() -> WebAuthConfig | None:
             "TRITON_WEB_USERNAME, TRITON_WEB_PASSWORD, and "
             "TRITON_WEB_SESSION_SECRET must all be configured"
         )
-    return WebAuthConfig(username=username, password=password, session_secret=session_secret)
+    secure_cookies = getenv("TRITON_WEB_SECURE_COOKIES", "true").lower()
+    if secure_cookies not in {"true", "false"}:
+        raise ValueError("TRITON_WEB_SECURE_COOKIES must be true or false")
+    return WebAuthConfig(
+        username=username,
+        password=password,
+        session_secret=session_secret,
+        secure_cookies=secure_cookies == "true",
+    )
