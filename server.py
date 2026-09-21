@@ -48,6 +48,7 @@ from triton.llm.chat_loop import (
     turn_start_indices,
 )
 from triton.llm.model_roles import ROLE_MODELS
+from triton.paths import ROOT_DIR
 from triton.storage import scheduled_tasks
 from triton.storage.logs import LOGS_FILE, current_month_cost, events_for_month, log_event
 from triton.storage.memory import append_global_memory, load_global_memory, set_global_memory
@@ -2296,6 +2297,8 @@ def get_project_file(project_id: str, path: str) -> FileResponse:
 
     root = Path(project.folder_path).resolve()
     target = Path(path).resolve()
+    if target.is_relative_to(ROOT_DIR):
+        raise HTTPException(403, "path resolves inside the harness's own installation directory")
     if not target.is_relative_to(root):
         raise HTTPException(403, "path resolves outside the project folder")
     if not target.is_file():

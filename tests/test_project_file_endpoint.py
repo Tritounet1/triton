@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import server
+from triton.paths import ROOT_DIR
 from triton.storage import projects
 
 
@@ -72,3 +73,10 @@ def test_404_for_a_missing_file(tmp_path, client):
 def test_404_for_an_unknown_project(client):
     r = client.get("/projects/does-not-exist/file", params={"path": "/tmp/x"})
     assert r.status_code == 404
+
+
+def test_rejects_a_path_inside_root_dir_even_when_project_is_scoped_there(client):
+    project = projects.create_project("harness-project", str(ROOT_DIR))
+
+    r = client.get(f"/projects/{project.id}/file", params={"path": str(ROOT_DIR / "settings.json")})
+    assert r.status_code == 403
