@@ -720,7 +720,6 @@ function App() {
     inputRef.current = input;
     displayedSessionIdRef.current = sessionId;
     sendMessageRef.current = (text: string) => {
-      // eslint-disable-next-line react-hooks/immutability
       void sendMessage(text);
     };
   });
@@ -1261,7 +1260,6 @@ function App() {
   }
 
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
-  // eslint-disable-next-line react-hooks/refs
   const commands = createChatCommands({
     sessionId,
     activeProjectId,
@@ -1370,7 +1368,6 @@ function App() {
     const requestModel = isEdit ? null : oneShotChatModel;
     const inFlightModel = requestModel ?? effectiveModel;
     if (!isEdit) setOneShotChatModel(null);
-    // eslint-disable-next-line react-hooks/purity
     const startTime = performance.now();
     const attachments = isEdit
       ? (attachmentsOverride ?? [])
@@ -1488,6 +1485,11 @@ function App() {
         },
         controller.signal,
       );
+
+      if (!res.ok) {
+        const detail = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status}${detail ? ` - ${detail}` : ""}`);
+      }
 
       for await (const { event, data } of parseSSE(res)) {
         noteSseEvent();
@@ -1639,12 +1641,15 @@ function App() {
         }
       } else {
         console.error("erreur pendant l'échange avec l'API Triton :", err);
+        const isNetworkFailure = err instanceof TypeError;
         if (isDisplayed()) {
           setMessages((prev) => [
             ...prev,
             {
               kind: "error",
-              text: "impossible de contacter l'API Triton (127.0.0.1:8000).",
+              text: isNetworkFailure
+                ? "impossible de contacter l'API Triton (127.0.0.1:8000)."
+                : `l'API Triton a répondu avec une erreur : ${err instanceof Error ? err.message : String(err)}`,
               time: Date.now(),
             },
           ]);
@@ -1819,7 +1824,6 @@ function App() {
           ? "Joindre un PDF ou un fichier texte"
           : "Joindre un fichier texte";
 
-  // eslint-disable-next-line react-hooks/refs
   const sidebarHeader = SidebarHeader({
     usesMacTitlebarOverlay,
     sidebarCollapsed,
