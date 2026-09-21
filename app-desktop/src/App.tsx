@@ -117,6 +117,7 @@ import {
 import { SnapshotHistoryView } from "./SnapshotHistoryView";
 import { SubagentsPanel } from "./SubagentsPanel";
 import { TaskView } from "./TaskView";
+import { WebAccountsModal } from "./WebAccountsModal";
 
 // au dela de ce delai sans le moindre evenement SSE, on considere qu'on
 // est dans un "silence" (ex. un outil qui tourne cote serveur) plutot que
@@ -710,6 +711,7 @@ function App() {
     "chat" | "task" | "search" | "snapshot_history"
   >("chat");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [webAccountsOpen, setWebAccountsOpen] = useState(false);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
 
@@ -2541,15 +2543,19 @@ function App() {
           </AppShell>
           {!sidebarCollapsed && (
             <div className="fixed bottom-3 left-0 z-30 flex w-[260px] justify-end gap-0.5 px-2">
-              {!isWebDeployment && <IconButton
-                label="Paramètres"
+              <IconButton
+                label={isWebDeployment ? "Compte web" : "Paramètres"}
                 icon={<GearIcon />}
                 variant="ghost"
                 size="sm"
                 onClick={() => {
-                  setSettingsOpen(true);
+                  if (isWebDeployment) {
+                    setWebAccountsOpen(true);
+                  } else {
+                    setSettingsOpen(true);
+                  }
                 }}
-              />}
+              />
               <IconButton
                 label={
                   themeMode === "dark"
@@ -2618,6 +2624,16 @@ function App() {
         }}
         onModelChanged={refreshApiModel}
         onImageModelChanged={refreshImageModel}
+      />}
+
+      {isWebDeployment && <WebAccountsModal
+        isOpen={webAccountsOpen}
+        onClose={() => {
+          setWebAccountsOpen(false);
+        }}
+        onSignedOut={() => {
+          window.location.reload();
+        }}
       />}
 
       {!isWebDeployment && <NewProjectModal
