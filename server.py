@@ -116,7 +116,9 @@ from triton.storage.web_accounts import (
     WebAccount,
     assign_session_owner,
     authenticate_web_account,
+    create_web_account,
     initialize_web_accounts,
+    list_web_accounts,
     owned_session_ids,
     session_is_owned_by,
 )
@@ -201,6 +203,11 @@ def _require_web_session_owner(request: Request, session_id: str) -> None:
     account_id = _web_account_id(request)
     if account_id is None or not session_is_owned_by(session_id, account_id):
         raise HTTPException(404, "session not found")
+
+
+def _require_web_administrator(request: Request) -> None:
+    if DEPLOYMENT_PROFILE is DeploymentProfile.WEB and request.session.get("web_role") != "admin":
+        raise HTTPException(403, "administrator access required")
 
 
 @asynccontextmanager
@@ -377,6 +384,7 @@ OPENAPI_TAGS = [
         "dedicated route.",
     },
     {"name": "Settings", "description": "Model, budget, API key, per-role model overrides."},
+    {"name": "Accounts", "description": "Web deployment account administration."},
     {
         "name": "Backup",
         "description": "Full export of everything the harness manages under ROOT_DIR, as a "
@@ -625,6 +633,7 @@ class ProjectRename(BaseModel):
 
 @dataclass
 class PendingConfirmation:
+    session_id: str
     event: threading.Event = field(default_factory=threading.Event)
     approved: bool = False
     remember: bool = False
@@ -937,7 +946,7 @@ def run_chat_stream(
                             result = invoke_tool(tool, name, args, session_id)
                         else:
                             confirmation_id = str(uuid.uuid4())
-                            pending = PendingConfirmation()
+                            pending = PendingConfirmation(session_id=session_id)
                             PENDING_CONFIRMATIONS[confirmation_id] = pending
 
                             yield emit(
@@ -1137,6 +1146,18 @@ class WebLoginRequest(BaseModel):
     password: str
 
 
+class WebAccountCreateRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.-]+$")
+    password: str = Field(min_length=12, max_length=1024)
+    role: Literal["admin", "member"] = "member"
+
+
+class WebAccountResponse(BaseModel):
+    id: str
+    username: str
+    role: Literal["admin", "member"]
+
+
 @app.get("/auth/session", tags=["Health"])
 def web_session(request: Request) -> dict[str, bool]:
     return {"authenticated": bool(request.session.get("web_authenticated"))}
@@ -1161,6 +1182,22 @@ def web_login(body: WebLoginRequest, request: Request) -> dict[str, bool]:
 def web_logout(request: Request) -> dict[str, bool]:
     request.session.clear()
     return {"ok": True}
+
+
+@app.get("/accounts", tags=["Accounts"])
+def get_web_accounts(request: Request) -> list[WebAccountResponse]:
+    _require_web_administrator(request)
+    return [WebAccountResponse(**account.__dict__) for account in list_web_accounts()]
+
+
+@app.post("/accounts", tags=["Accounts"])
+def post_web_account(body: WebAccountCreateRequest, request: Request) -> WebAccountResponse:
+    _require_web_administrator(request)
+    try:
+        account = create_web_account(body.username, body.password, body.role)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return WebAccountResponse(**account.__dict__)
 
 
 class ModelUpdate(BaseModel):
@@ -1633,7 +1670,7 @@ def chat(body: ChatRequest, request: Request) -> StreamingResponse:
 
 
 @app.post("/images/generate", tags=["Images"])
-def generate_conversation_image(body: ImageGenerateRequest) -> dict[str, object]:
+def generate_conversation_image(body: ImageGenerateRequest, request: Request) -> dict[str, object]:
     """Generates an image and persists it as an assistant message.
 
     The data URL and the producing model live in the regular session JSON,
@@ -1652,7 +1689,14 @@ def generate_conversation_image(body: ImageGenerateRequest) -> dict[str, object]
     if budget is not None and current_month_cost() > budget:
         raise HTTPException(403, "Budget mensuel dépassé - génération bloquée.")
 
+    if body.session_id:
+        _require_web_session_owner(request, body.session_id)
     session_path, messages, is_new = resolve_session(body.session_id, body.project_id)
+    if is_new and DEPLOYMENT_PROFILE is DeploymentProfile.WEB:
+        account_id = _web_account_id(request)
+        if account_id is None:
+            raise HTTPException(401, "web authentication required")
+        assign_session_owner(session_path.stem, account_id)
     messages.append(
         cast(
             ChatCompletionMessageParam,
@@ -1711,10 +1755,11 @@ def generate_conversation_image(body: ImageGenerateRequest) -> dict[str, object]
 
 
 @app.post("/chat/confirm", tags=["Chat"])
-def confirm(body: ConfirmRequest) -> dict[str, bool]:
+def confirm(body: ConfirmRequest, request: Request) -> dict[str, bool]:
     pending = PENDING_CONFIRMATIONS.get(body.confirmation_id)
     if pending is None:
         raise HTTPException(404, "unknown or already-processed confirmation")
+    _require_web_session_owner(request, pending.session_id)
 
     pending.approved = body.approved
     pending.remember = body.remember
@@ -1723,11 +1768,12 @@ def confirm(body: ConfirmRequest) -> dict[str, bool]:
 
 
 @app.post("/chat/cancel", tags=["Chat"])
-def cancel_chat(body: CancelRequest) -> dict[str, bool]:
+def cancel_chat(body: CancelRequest, request: Request) -> dict[str, bool]:
     """Marks a session as cancelled: run_chat_stream checks this between
     agentic-loop iterations and stops before starting another one. Doesn't
     interrupt a model call already in flight (see the client-side abort,
     which closes the connection those tokens are streamed to)."""
+    _require_web_session_owner(request, body.session_id)
     CANCELLED_SESSIONS.add(body.session_id)
     return {"ok": True}
 
@@ -1952,7 +1998,7 @@ def put_session_memory(session_id: str, body: MemoryContent) -> MemoryContent:
 
 
 @app.get("/sessions/search", tags=["Sessions"])
-def search_sessions(q: str) -> list[str]:
+def search_sessions(q: str, request: Request) -> list[str]:
     """Returns ids of sessions whose title or message content contains q
     (case-insensitive). Reads each session file directly on the server
     rather than round-tripping every full history to the client just to
@@ -1964,8 +2010,13 @@ def search_sessions(q: str) -> list[str]:
         return []
 
     matches: list[str] = []
+    account_id = _web_account_id(request)
     for path in SESSIONS_DIR.glob("*.json"):
         session_id = path.stem
+        if DEPLOYMENT_PROFILE is DeploymentProfile.WEB and (
+            account_id is None or not session_is_owned_by(session_id, account_id)
+        ):
+            continue
         try:
             messages = load_session(path)
         except (OSError, ValueError):

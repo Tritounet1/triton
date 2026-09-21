@@ -192,3 +192,51 @@ def test_web_profile_hides_sessions_owned_by_another_account(monkeypatch, tmp_pa
     assert login.status_code == 200
     assert listed.json() == []
     assert denied.status_code == 404
+
+
+def test_administrator_can_manage_web_accounts(monkeypatch):
+    monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(server, "WEB_AUTH_CONFIG", _web_auth_config())
+
+    with TestClient(server.app) as client:
+        login = client.post("/auth/login", json={"username": "admin", "password": "password"})
+        created = client.post(
+            "/accounts",
+            json={"username": "member", "password": "a-long-enough-password"},
+        )
+        accounts = client.get("/accounts")
+        duplicate = client.post(
+            "/accounts",
+            json={"username": "member", "password": "a-long-enough-password"},
+        )
+        client.post("/auth/logout")
+        member_login = client.post(
+            "/auth/login", json={"username": "member", "password": "a-long-enough-password"}
+        )
+        denied = client.get("/accounts")
+
+    assert login.status_code == 200
+    assert created.status_code == 200
+    assert created.json()["role"] == "member"
+    assert [account["username"] for account in accounts.json()] == ["admin", "member"]
+    assert duplicate.status_code == 409
+    assert member_login.status_code == 200
+    assert denied.status_code == 403
+
+
+def test_web_profile_searches_only_owned_sessions(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(server, "WEB_AUTH_CONFIG", _web_auth_config())
+    monkeypatch.setattr(server, "SESSIONS_DIR", tmp_path)
+    (tmp_path / "owned.json").write_text('[{"role": "user", "content": "unique phrase"}]')
+    (tmp_path / "other.json").write_text('[{"role": "user", "content": "unique phrase"}]')
+    owner = web_accounts.initialize_web_accounts("admin", "password")
+    web_accounts.assign_session_owner("owned", owner.id)
+    web_accounts.assign_session_owner("other", "another-account")
+
+    with TestClient(server.app) as client:
+        login = client.post("/auth/login", json={"username": "admin", "password": "password"})
+        found = client.get("/sessions/search", params={"q": "unique phrase"})
+
+    assert login.status_code == 200
+    assert found.json() == ["owned"]

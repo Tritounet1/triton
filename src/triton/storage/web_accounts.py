@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from triton.paths import ROOT_DIR
 
 WEB_DATABASE = ROOT_DIR / "web.sqlite3"
+WEB_ROLES = frozenset({"admin", "member"})
 
 
 @dataclass(frozen=True)
@@ -84,6 +85,31 @@ def authenticate_web_account(username: str, password: str) -> WebAccount | None:
     if row is None or not _password_matches(password, row["password_hash"]):
         return None
     return WebAccount(id=row["id"], username=row["username"], role=row["role"])
+
+
+def create_web_account(username: str, password: str, role: str) -> WebAccount:
+    if role not in WEB_ROLES:
+        raise ValueError("invalid role")
+    account = WebAccount(id=secrets.token_hex(16), username=username, role=role)
+    try:
+        with _connection() as connection:
+            connection.execute(
+                "INSERT INTO web_accounts (id, username, password_hash, role) VALUES (?, ?, ?, ?)",
+                (account.id, account.username, _password_hash(password), account.role),
+            )
+    except sqlite3.IntegrityError as exc:
+        raise ValueError("username already exists") from exc
+    return account
+
+
+def list_web_accounts() -> list[WebAccount]:
+    if not WEB_DATABASE.exists():
+        return []
+    with _connection() as connection:
+        rows = connection.execute(
+            "SELECT id, username, role FROM web_accounts ORDER BY username COLLATE NOCASE"
+        ).fetchall()
+    return [WebAccount(id=row["id"], username=row["username"], role=row["role"]) for row in rows]
 
 
 def assign_session_owner(session_id: str, account_id: str) -> None:

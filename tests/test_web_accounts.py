@@ -17,3 +17,12 @@ def test_session_ownership_is_scoped_to_one_account():
     assert web_accounts.session_is_owned_by("session-1", owner.id)
     assert not web_accounts.session_is_owned_by("session-1", "another-account")
     assert web_accounts.owned_session_ids(owner.id) == {"session-1"}
+
+
+def test_administrator_can_create_and_list_member_accounts():
+    owner = web_accounts.initialize_web_accounts("admin", "password")
+
+    member = web_accounts.create_web_account("member", "a-long-enough-password", "member")
+
+    assert web_accounts.authenticate_web_account("member", "a-long-enough-password") == member
+    assert web_accounts.list_web_accounts() == [owner, member]
