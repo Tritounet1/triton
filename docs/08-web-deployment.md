@@ -20,28 +20,37 @@ TRITON_DATA_DIR=/var/lib/triton
 TRITON_WEB_USERNAME=admin
 TRITON_WEB_PASSWORD=replace-with-a-long-password
 TRITON_WEB_SESSION_SECRET=replace-with-a-random-48-byte-secret
+TRITON_WEB_SECURE_COOKIES=true
 OPEN_ROUTER_API_KEY=replace-with-the-server-key
 ```
 
 Générez le secret de session avec `openssl rand -base64 48`. Ne réutilisez jamais les clés du poste desktop. `TRITON_DATA_DIR` doit être un volume persistant, accessible uniquement au compte qui lance Triton.
 
-Lancez ensuite l’API derrière le proxy, sans l’exposer directement :
+Lancez ensuite l’API :
 
 ```sh
 set -a; . /etc/triton/web.env; set +a
-uv run uvicorn server:app --host 127.0.0.1 --port 8000
+uv run uvicorn server:app --host 0.0.0.0 --port 8000
 ```
 
 Le build React est servi par cette API. Une absence de `app-desktop/dist/index.html` renvoie une erreur explicite au lieu de démarrer un site incomplet.
 
-## HTTPS avec Caddy
+## Docker Compose
 
-Utilisez un nom de domaine qui pointe vers le VPS, puis ajoutez :
+Le dépôt fournit `Dockerfile` et `docker-compose.yml`. Ils construisent le client React dans l’image, lancent FastAPI avec un utilisateur non privilégié et conservent les données dans le volume Docker `triton-data`. Le conteneur expose son port 8000 pour que Dokploy puisse le relier à son domaine et à son HTTPS.
 
-```caddyfile
-triton.example.com {
-    reverse_proxy 127.0.0.1:8000
-}
+Pour tester localement, sans installer Python ni Node :
+
+```sh
+cp .env.example .env
 ```
 
-Caddy obtient et renouvelle le certificat TLS. Le cookie de session est marqué `Secure` dans le profil web : HTTPS est donc requis. Gardez Uvicorn sur `127.0.0.1`, activez le pare-feu du VPS et ne rendez publics que les ports 80 et 443.
+Remplacez `TRITON_WEB_PASSWORD`, `TRITON_WEB_SESSION_SECRET` et `OPEN_ROUTER_API_KEY`, puis mettez `TRITON_WEB_SECURE_COOKIES=false` pour le test HTTP local. Lancez ensuite :
+
+```sh
+docker compose up --build -d
+```
+
+Ouvrez `http://127.0.0.1:8000`. Le port est limité à la machine hôte.
+
+Pour Dokploy, déployez ce dépôt avec Docker Compose, configurez le domaine et HTTPS dans Dokploy, puis renseignez les mêmes variables d’environnement dans son interface. Gardez `TRITON_WEB_SECURE_COOKIES=true`, qui est la valeur par défaut, pour que la session ne soit transmise qu’en HTTPS.

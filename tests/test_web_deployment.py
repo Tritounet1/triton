@@ -50,6 +50,21 @@ def test_web_profile_serves_the_client_before_login(monkeypatch, tmp_path):
     assert "text/html" in response.headers["content-type"]
 
 
+def test_web_profile_serves_frontend_images_after_login(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(server, "WEB_AUTH_CONFIG", _web_auth_config())
+    (tmp_path / "anthropic-logo.png").write_bytes(b"logo")
+    monkeypatch.setattr(server, "WEB_FRONTEND_DIR", tmp_path)
+
+    with TestClient(server.app) as client:
+        login = client.post("/auth/login", json={"username": "admin", "password": "password"})
+        response = client.get("/anthropic-logo.png")
+
+    assert login.status_code == 200
+    assert response.status_code == 200
+    assert response.content == b"logo"
+
+
 def test_web_profile_rejects_project_scoped_chat(monkeypatch):
     monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
     monkeypatch.setattr(server, "WEB_AUTH_CONFIG", _web_auth_config())

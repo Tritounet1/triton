@@ -1,0 +1,19 @@
+services:
+  triton:
+    build:
+      context: .
+    env_file:
+      - .env
+    environment:
+      TRITON_DATA_DIR: /data
+      TRITON_DEPLOYMENT_PROFILE: web
+    expose:
+      - "8000"
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - triton-data:/data
+    restart: unless-stopped
+
+volumes:
+  triton-data:

@@ -424,7 +424,11 @@ def _require_profile_project_access(project_id: str | None) -> None:
 app.add_middleware(
     SessionMiddleware,
     secret_key=WEB_AUTH_CONFIG.session_secret if WEB_AUTH_CONFIG else secrets.token_urlsafe(32),
-    https_only=DEPLOYMENT_PROFILE is DeploymentProfile.WEB,
+    https_only=(
+        WEB_AUTH_CONFIG.secure_cookies
+        if WEB_AUTH_CONFIG
+        else DEPLOYMENT_PROFILE is DeploymentProfile.WEB
+    ),
     same_site="lax",
     max_age=60 * 60 * 12,
 )
@@ -2661,6 +2665,15 @@ def get_cost_summary() -> CostSummary:
             for day, b in sorted(by_day.items())
         ],
     )
+
+
+@app.get("/{asset_path:path}", include_in_schema=False)
+def web_static_file(asset_path: str) -> FileResponse:
+    if DEPLOYMENT_PROFILE is DeploymentProfile.WEB:
+        target = WEB_FRONTEND_DIR / asset_path
+        if target.is_relative_to(WEB_FRONTEND_DIR) and target.is_file():
+            return FileResponse(target)
+    raise HTTPException(404, "not found")
 
 
 if __name__ == "__main__":

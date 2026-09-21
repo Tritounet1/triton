@@ -3,6 +3,7 @@ import pytest
 from triton.deployment import (
     DeploymentProfile,
     load_deployment_profile,
+    load_web_auth_config,
     path_is_allowed,
     project_is_allowed,
     tool_is_allowed,
@@ -34,3 +35,27 @@ def test_web_profile_denies_host_and_operator_routes():
 def test_invalid_profile_has_an_actionable_error():
     with pytest.raises(ValueError, match="invalid Triton deployment profile 'vps'"):
         load_deployment_profile("vps")
+
+
+def test_web_auth_uses_secure_cookies_by_default(monkeypatch):
+    monkeypatch.delenv("TRITON_WEB_SECURE_COOKIES", raising=False)
+    monkeypatch.setenv("TRITON_WEB_USERNAME", "admin")
+    monkeypatch.setenv("TRITON_WEB_PASSWORD", "password")
+    monkeypatch.setenv("TRITON_WEB_SESSION_SECRET", "secret")
+
+    config = load_web_auth_config()
+
+    assert config is not None
+    assert config.secure_cookies
+
+
+def test_web_auth_allows_insecure_cookies_only_when_explicit(monkeypatch):
+    monkeypatch.setenv("TRITON_WEB_USERNAME", "admin")
+    monkeypatch.setenv("TRITON_WEB_PASSWORD", "password")
+    monkeypatch.setenv("TRITON_WEB_SESSION_SECRET", "secret")
+    monkeypatch.setenv("TRITON_WEB_SECURE_COOKIES", "false")
+
+    config = load_web_auth_config()
+
+    assert config is not None
+    assert not config.secure_cookies
