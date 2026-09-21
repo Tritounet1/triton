@@ -5,10 +5,16 @@ import { type RichCardData } from "./richCardData";
 
 export function RichCard({ card }: { card: RichCardData }) {
   return (
-    <button
-      type="button"
-      onClick={() => {
-        void openUrl(card.url);
+    <a
+      href={card.url}
+      target="_blank"
+      rel="noreferrer"
+      aria-label={`Ouvrir ${card.title} dans le navigateur`}
+      onClick={(event) => {
+        if ("__TAURI_INTERNALS__" in window) {
+          event.preventDefault();
+          void openUrl(card.url);
+        }
       }}
       className="flex w-full items-start gap-3 rounded-xl border border-border bg-surface px-4 py-3 text-left transition-colors hover:border-accent"
     >
@@ -32,6 +38,6 @@ export function RichCard({ card }: { card: RichCardData }) {
           {card.url}
         </Text>
       </div>
-    </button>
+    </a>
   );
 }
