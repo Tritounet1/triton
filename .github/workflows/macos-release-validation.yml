@@ -26,6 +26,8 @@ jobs:
           pnpm --dir app-desktop install --frozen-lockfile
       - name: Verify macOS Keychain command is available
         run: security help >/dev/null
+      - name: Verify real Keychain adapter
+        run: uv run pytest -q tests/test_keychain_integration.py
       - name: Build bundled Python sidecar
         run: ./packaging/build_server.sh
       - name: Build packaged desktop application
