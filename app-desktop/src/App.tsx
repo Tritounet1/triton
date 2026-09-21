@@ -40,7 +40,7 @@ import {
   type ReactNode,
 } from "react";
 import "./App.css";
-import { API_BASE } from "./api";
+import { API_BASE, isWebDeployment } from "./api";
 import { BackgroundTasksPanel } from "./BackgroundTasksPanel";
 import { type BackgroundTask } from "./BackgroundTasksSection";
 import {
@@ -914,7 +914,7 @@ function App() {
           list.find((s) => s.id === stored)?.project_id ?? null,
         );
     });
-    loadProjects();
+    if (!isWebDeployment) loadProjects();
   }, []);
 
   // relance automatiquement le modele une fois qu'un sous-agent dispatche
@@ -1315,7 +1315,7 @@ function App() {
       return;
     }
 
-    if (!isEdit) {
+    if (!isEdit && !isWebDeployment) {
       if (text.toLowerCase().startsWith(MULTI_AGENT_PREFIX)) {
         await dispatchMultiAgent(text);
         return;
@@ -1618,7 +1618,7 @@ function App() {
       header={sidebarHeader.header}
       topContent={sidebarHeader.topContent}
     >
-      <ProjectSidebarSection
+      {!isWebDeployment && <ProjectSidebarSection
         projects={projects}
         sessions={sessions}
         activeProjectId={activeProjectId}
@@ -1656,9 +1656,9 @@ function App() {
         onCancelRenameSession={() => {
           setEditingSessionId(null);
         }}
-      />
+      />}
 
-      <SubagentsPanel />
+      {!isWebDeployment && <SubagentsPanel />}
 
       <ConversationSidebarSection
         sessions={topLevelSessions}
@@ -1937,7 +1937,7 @@ function App() {
                               fileInputRef.current?.click();
                             }}
                           />
-                          <IconButton
+                          {!isWebDeployment && <IconButton
                             label={imageMode ? "Revenir au chat" : "Générer une image"}
                             icon={<ImageIcon />}
                             variant={imageMode ? "primary" : "ghost"}
@@ -1949,7 +1949,7 @@ function App() {
                             onClick={() => {
                               setImageMode((active) => !active);
                             }}
-                          />
+                          />}
                         </>
                       }
                       sendActions={
@@ -2502,7 +2502,7 @@ function App() {
                       })()}
                   </ChatMessageList>
                 </ChatLayout>
-                {activeProject && openFile ? (
+                {!isWebDeployment && (activeProject && openFile ? (
                   <FileViewerPanel
                     key={`${openFile.projectId}:${openFile.path}`}
                     file={openFile}
@@ -2533,13 +2533,13 @@ function App() {
                     onStop={stopTask}
                     onDelete={deleteTask}
                   />
-                )}
+                ))}
               </div>
             )}
           </AppShell>
           {!sidebarCollapsed && (
             <div className="fixed bottom-3 left-0 z-30 flex w-[260px] justify-end gap-0.5 px-2">
-              <IconButton
+              {!isWebDeployment && <IconButton
                 label="Paramètres"
                 icon={<GearIcon />}
                 variant="ghost"
@@ -2547,7 +2547,7 @@ function App() {
                 onClick={() => {
                   setSettingsOpen(true);
                 }}
-              />
+              />}
               <IconButton
                 label={
                   themeMode === "dark"
@@ -2584,7 +2584,7 @@ function App() {
         onAction={confirmDeleteSession}
       />
 
-      <AlertDialog
+      {!isWebDeployment && <AlertDialog
         isOpen={deletingProject !== null}
         onOpenChange={(isOpen) => {
           if (!isOpen) setDeletingProject(null);
@@ -2593,9 +2593,9 @@ function App() {
         description={`« ${deletingProject?.name ?? ""} » sera supprimé. Ses conversations ne seront pas effacées, mais ne seront plus rattachées au dossier.`}
         actionLabel="Supprimer"
         onAction={confirmDeleteProject}
-      />
+      />}
 
-      <AlertDialog
+      {!isWebDeployment && <AlertDialog
         isOpen={undoTarget !== null}
         onOpenChange={(isOpen) => {
           if (!isOpen) setUndoTarget(null);
@@ -2607,24 +2607,24 @@ function App() {
         onAction={() => {
           void confirmUndo();
         }}
-      />
+      />}
 
-      <SettingsModal
+      {!isWebDeployment && <SettingsModal
         isOpen={settingsOpen}
         onClose={() => {
           setSettingsOpen(false);
         }}
         onModelChanged={refreshApiModel}
         onImageModelChanged={refreshImageModel}
-      />
+      />}
 
-      <NewProjectModal
+      {!isWebDeployment && <NewProjectModal
         isOpen={showProjectForm}
         onClose={() => {
           setShowProjectForm(false);
         }}
         onCreated={setProjects}
-      />
+      />}
     </Theme>
   );
 }
