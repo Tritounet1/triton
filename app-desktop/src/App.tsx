@@ -21,13 +21,9 @@ import {
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { IconButton } from "@astryxdesign/core/IconButton";
 import { Markdown } from "@astryxdesign/core/Markdown";
-import {
-  SideNav,
-  SideNavItem,
-} from "@astryxdesign/core/SideNav";
+import { SideNav } from "@astryxdesign/core/SideNav";
 import { Spinner } from "@astryxdesign/core/Spinner";
 import { Text } from "@astryxdesign/core/Text";
-import { TextInput } from "@astryxdesign/core/TextInput";
 import { Theme } from "@astryxdesign/core/theme";
 import { Timestamp } from "@astryxdesign/core/Timestamp";
 import {
@@ -46,6 +42,16 @@ import {
 import "./App.css";
 import { BackgroundTasksPanel } from "./BackgroundTasksPanel";
 import { type BackgroundTask } from "./BackgroundTasksSection";
+import {
+  COMPACT_COMMAND,
+  COST_COMMAND,
+  createChatCommands,
+  MODEL_COMMAND_PREFIX,
+  MULTI_AGENT_PREFIX,
+  REMEMBER_PREFIX,
+  UNDO_COMMAND,
+  YOLO_COMMAND,
+} from "./chatCommands";
 import { ConversationSidebarSection } from "./ConversationSidebarSection";
 import { startChatStream } from "./chatTransport";
 import { DesktopTitlebar } from "./DesktopTitlebar";
@@ -67,7 +73,6 @@ import {
   webSearchSource,
   type ChatMsg,
   type EditFileEdit,
-  type MultiAgentSubtaskToolCall,
   type RawSessionMessage,
   type ToolCallLike,
   type ToolMsg,
@@ -81,13 +86,11 @@ import { type OpenFile } from "./fileViewer";
 import { FileViewerPanel } from "./FileViewerPanel";
 import { formatArgs } from "./format";
 import { ImagePreviewDialog } from "./ImagePreviewDialog";
-import { moveInFlightModel, setInFlightModel } from "./inFlightModels";
 import {
   CheckIcon,
   ChevronRightIcon,
   CopyIcon,
   FileIcon,
-  FolderIcon,
   GearIcon,
   ImageIcon,
   MoonIcon,
@@ -105,13 +108,10 @@ import { ProjectSidebarSection } from "./ProjectSidebarSection";
 import { RichCard } from "./RichCard";
 import { richCardFromToolCall } from "./richCardData";
 import { SearchPage } from "./SearchPage";
-import { ProjectActionsMenu, SessionActionsMenu } from "./SidebarMenus";
 import { SettingsModal } from "./SettingsModal";
 import { SidebarHeader } from "./SidebarHeader";
 import {
   describeSnapshotDiff,
-  fetchSnapshotDiff,
-  fetchSnapshotPoints,
   type SnapshotDiff,
   type SnapshotPoint,
 } from "./snapshotDiff";
@@ -152,20 +152,6 @@ const TEXT_ATTACHMENT_EXTENSIONS = [
   ".yaml",
   ".yml",
 ];
-// declenche le mode multi-agent (orchestrator.py) directement depuis le
-// chat normal, plutot qu'un mode/page a part : "/multi-agents <tache>"
-// dans le composer habituel.
-const MULTI_AGENT_PREFIX = "/multi-agents ";
-const MULTI_AGENT_POLL_INTERVAL_MS = 1500;
-const MODEL_COMMAND_PREFIX = "/model ";
-const COST_COMMAND = "/cost";
-const UNDO_COMMAND = "/undo";
-const REMEMBER_PREFIX = "/remember ";
-const REMEMBER_SESSION_PREFIX = "session ";
-const REMEMBER_GLOBAL_PREFIX = "global ";
-const COMPACT_COMMAND = "/compact";
-const YOLO_COMMAND = "/yolo";
-
 // menu declenche par "/" dans le composer (style Notion/Discord), via le
 // mecanisme de trigger deja fourni par ChatComposerInput.
 const SLASH_COMMANDS: SearchableItem<{ description: string }>[] = [
@@ -270,27 +256,6 @@ const composerTriggers: ChatComposerTrigger[] = [
     },
   },
 ];
-
-interface MultiAgentSubtask {
-  id: string;
-  role: string;
-  description: string;
-  model: string;
-  status: "pending" | "running" | "done" | "error";
-  result: string | null;
-  // alimente en direct pendant l'execution (voir orchestrator.py) : permet
-  // d'afficher ce qu'une sous-tache a deja fait avant qu'elle ne conclue.
-  tool_calls: MultiAgentSubtaskToolCall[];
-}
-
-interface MultiAgentRun {
-  id: string;
-  task: string;
-  status: "planning" | "running" | "done" | "error";
-  subtasks: MultiAgentSubtask[];
-  final_result: string | null;
-  error: string | null;
-}
 
 interface PendingConfirmation {
   id: string;
@@ -755,6 +720,7 @@ function App() {
     inputRef.current = input;
     displayedSessionIdRef.current = sessionId;
     sendMessageRef.current = (text: string) => {
+      // eslint-disable-next-line react-hooks/immutability
       void sendMessage(text);
     };
   });
@@ -1130,7 +1096,7 @@ function App() {
     setYoloEnabled(false);
     setAwaitingSseEvent(false);
     setPendingConfirmation(null);
-  }, []);
+  }, [setView, setOpenFile]);
 
   function startProjectSession(projectId: string) {
     setView("chat");
@@ -1294,765 +1260,57 @@ function App() {
     await sendMessage(msg.text, turnIndex, attachments);
   }
 
-  // sonde un run multi-agent jusqu'a ce qu'il termine, en mettant a jour
-  // (pas en empilant) une entree "tool" par sous-tache au fil de l'eau :
-  // meme rendu que de vrais appels d'outils (ChatToolCalls), juste avec un
-  // statut connu directement plutot qu'inferre du texte (voir ChatMsg).
-  // `targetSessionId` : la conversation ce run appartient a, pour filtrer
-  // les mises a jour de `messages` par rapport a celle affichee - meme
-  // principe que isDisplayed() dans sendMessage, necessaire ici aussi
-  // depuis que changer de conversation pendant un envoi est permis (un
-  // run multi-agent lance dans une conversation qu'on a quittee ne doit
-  // pas ecrire dans celle qu'on regarde desormais).
-  function pollMultiAgentRun(
-    runId: string,
-    targetSessionId: string | null,
-  ): Promise<void> {
-    function isDisplayed(): boolean {
-      return displayedSessionIdRef.current === targetSessionId;
-    }
-    return new Promise((resolve) => {
-      const interval = setInterval(() => {
-        fetch(`${API_BASE}/orchestrator/${runId}`)
-          .then((r) => (r.ok ? r.json() : null))
-          .then((run: MultiAgentRun | null) => {
-            if (!run) return;
-
-            if (run.subtasks.length > 0 && isDisplayed()) {
-              setMessages((prev) => {
-                const next = [...prev];
-                for (const s of run.subtasks) {
-                  const entry: ChatMsg = {
-                    kind: "tool",
-                    id: s.id,
-                    tool: s.role,
-                    args: { model: s.model },
-                    result: s.result ?? "",
-                    time: Date.now(),
-                    status: s.status === "done" ? "complete" : s.status,
-                    subtaskDescription: s.description,
-                    subtaskToolCalls: s.tool_calls,
-                  };
-                  const idx = next.findIndex(
-                    (m) => m.kind === "tool" && m.id === s.id,
-                  );
-                  if (idx >= 0) next[idx] = entry;
-                  else next.push(entry);
-                }
-                return next;
-              });
-            }
-
-            if (run.status === "done" || run.status === "error") {
-              clearInterval(interval);
-              if (isDisplayed()) {
-                const finalText =
-                  run.status === "done"
-                    ? (run.final_result ??
-                      "(le planificateur n'a rien synthétisé)")
-                    : (run.error ?? "le run multi-agent a échoué");
-                setMessages((prev) => [
-                  ...prev,
-                  { kind: "assistant", text: finalText, time: Date.now() },
-                ]);
-              }
-              resolve();
-            }
-          })
-          .catch(() => {
-            // API hors ligne : nouvelle tentative au prochain intervalle
-          });
-      }, MULTI_AGENT_POLL_INTERVAL_MS);
-    });
-  }
-
-  async function dispatchMultiAgent(rawCommand: string) {
-    const task = rawCommand.slice(MULTI_AGENT_PREFIX.length).trim();
-    if (!task) return;
-
-    const startSessionId = sessionId;
-    const sessionKey = startSessionId ?? "";
-    let currentSessionId = startSessionId;
-    function isDisplayed(): boolean {
-      return displayedSessionIdRef.current === currentSessionId;
-    }
-
-    setInput("");
-    if (isDisplayed()) {
-      setMessages((prev) => [
-        ...prev,
-        { kind: "user", text: rawCommand, time: Date.now() },
-      ]);
-    }
-    markSending(sessionKey, true);
-
-    try {
-      const res = await fetch(`${API_BASE}/orchestrator`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          task,
-          session_id: startSessionId,
-          project_id: activeProjectId,
-        }),
-      });
-      if (!res.ok) throw new Error(String(res.status));
-      const data = (await res.json()) as { run_id: string; session_id: string };
-
-      if (data.session_id !== startSessionId) {
-        moveSendingKey(sessionKey, data.session_id);
-        currentSessionId = data.session_id;
-        if (displayedSessionIdRef.current === startSessionId) {
-          setSessionId(data.session_id);
-          localStorage.setItem("triton_session_id", data.session_id);
-          displayedSessionIdRef.current = data.session_id;
-        }
-      }
-      void loadSessions();
-
-      await pollMultiAgentRun(data.run_id, currentSessionId);
-    } catch {
-      if (isDisplayed()) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            kind: "error",
-            text: "impossible de contacter l'API Triton (127.0.0.1:8000).",
-            time: Date.now(),
-          },
-        ]);
-      }
-    } finally {
-      markSending(currentSessionId ?? sessionKey, false);
-      void loadSessions();
-    }
-  }
-
-  /** /cost : resume rapide du cout/tokens de la conversation en cours,
-   * purement local - pas de round-trip par le modele, juste un GET sur
-   * l'endpoint que timed_stream_chat alimente a chaque tour (voir
-   * chat_loop.py). */
-  async function handleCostCommand() {
-    setInput("");
-    setMessages((prev) => [
-      ...prev,
-      { kind: "user", text: COST_COMMAND, time: Date.now() },
-    ]);
-
-    if (!sessionId) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          kind: "error",
-          text: "Aucune conversation active pour l'instant - envoie d'abord un message.",
-          time: Date.now(),
-        },
-      ]);
-      return;
-    }
-
-    try {
-      const res = await fetch(`${API_BASE}/sessions/${sessionId}/cost`);
-      if (!res.ok) throw new Error(String(res.status));
-      const data = (await res.json()) as {
-        calls: number;
-        prompt_tokens: number;
-        completion_tokens: number;
-        total_tokens: number;
-        cost_usd: number;
-      };
-      const fmt = (n: number) => n.toLocaleString("fr-FR");
-      setMessages((prev) => [
-        ...prev,
-        {
-          kind: "info",
-          text:
-            `${data.calls} appel(s) modèle · ${fmt(data.total_tokens)} tokens ` +
-            `(${fmt(data.prompt_tokens)} entrée / ${fmt(data.completion_tokens)} sortie) · ` +
-            `~$${data.cost_usd.toFixed(4)}`,
-          time: Date.now(),
-        },
-      ]);
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        {
-          kind: "error",
-          text: "impossible de récupérer le coût de cette conversation.",
-          time: Date.now(),
-        },
-      ]);
-    }
-  }
-
-  /** /model <requete> : cherche dans le catalogue OpenRouter deja charge
-   * (modelsCatalog) un modele dont l'id ou le nom contient la requete, et
-   * en fait la surcharge de CETTE conversation (PUT /sessions/{id}/model) -
-   * pas besoin de taper l'id exact ("gpt-5" suffit a trouver
-   * "openai/gpt-5"). */
-  async function handleModelCommand(rawCommand: string) {
-    const query = rawCommand.slice(MODEL_COMMAND_PREFIX.length).trim();
-    setInput("");
-    setMessages((prev) => [
-      ...prev,
-      { kind: "user", text: rawCommand, time: Date.now() },
-    ]);
-
-    if (!sessionId) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          kind: "error",
-          text: "Aucune conversation active pour l'instant - envoie d'abord un message.",
-          time: Date.now(),
-        },
-      ]);
-      return;
-    }
-    if (!query) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          kind: "error",
-          text: "Précise un modèle, ex. /model gpt-5",
-          time: Date.now(),
-        },
-      ]);
-      return;
-    }
-
-    const q = query.toLowerCase();
-    const matches = modelsCatalog.filter(
-      (m) => m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q),
-    );
-    if (matches.length === 0) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          kind: "error",
-          text: `Aucun modèle ne correspond à « ${query} ».`,
-          time: Date.now(),
-        },
-      ]);
-      return;
-    }
-
-    const chosen = matches[0];
-    if (!chosen) return;
-    await fetch(`${API_BASE}/sessions/${sessionId}/model`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: chosen.id }),
-    });
-    setSessionModelOverride(chosen.id);
-    const note =
-      matches.length > 1
-        ? ` (${matches.length} correspondances, la plus proche a été prise)`
-        : "";
-    setMessages((prev) => [
-      ...prev,
-      {
-        kind: "info",
-        text: `Modèle de cette conversation changé pour ${chosen.name}${note}.`,
-        time: Date.now(),
-      },
-    ]);
-  }
-
-  /** /undo : declenche la restauration du filet de securite (voir
-   * SnapshotSection.tsx pour le meme mecanisme via le panneau fichiers) -
-   * verifie d'abord qu'un instantane existe pour ne pas ouvrir une
-   * confirmation pour rien, puis demande confirmation avant de restaurer
-   * (action irreversible, meme depuis une commande). */
-  async function handleUndoCommand() {
-    setInput("");
-    setMessages((prev) => [
-      ...prev,
-      { kind: "user", text: UNDO_COMMAND, time: Date.now() },
-    ]);
-
-    if (!sessionId) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          kind: "error",
-          text: "Aucune conversation active pour l'instant.",
-          time: Date.now(),
-        },
-      ]);
-      return;
-    }
-
-    let points: SnapshotPoint[];
-    try {
-      points = await fetchSnapshotPoints(sessionId);
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        {
-          kind: "error",
-          text: "Impossible de charger les points de restauration.",
-          time: Date.now(),
-        },
-      ]);
-      return;
-    }
-    if (points.length === 0) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          kind: "info",
-          text: "Aucun filet de sécurité pour cette conversation : aucune écriture n'a encore eu lieu.",
-          time: Date.now(),
-        },
-      ]);
-      return;
-    }
-    const target = points[points.length - 1];
-    // guaranteed defined by points.length === 0 already returning above -
-    // narrows for TS's noUncheckedIndexedAccess without a non-null
-    // assertion (forbidden by this project's eslint config)
-    if (!target) return;
-    setUndoDiff(null);
-    setUndoTarget(target);
-    void fetchSnapshotDiff(sessionId, target.turn_index, "rollback")
-      .then(setUndoDiff)
-      .catch(() => {
-        setUndoDiff(null);
-      });
-  }
-
-  async function confirmUndo() {
-    if (!sessionId || !undoTarget) return;
-    setUndoing(true);
-    try {
-      const res = await fetch(
-        `${API_BASE}/sessions/${sessionId}/snapshot/restore`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ turn_index: undoTarget.turn_index, state: "before" }),
-        },
-      );
-      setMessages((prev) => [
-        ...prev,
-        res.ok
-          ? {
-              kind: "info",
-              text: "Filet de sécurité restauré : le dossier du projet est revenu à l'état d'avant le dernier message.",
-              time: Date.now(),
-            }
-          : {
-              kind: "error",
-              text: "La restauration a échoué.",
-              time: Date.now(),
-            },
-      ]);
-      setFileRefreshTick((t) => t + 1);
-    } finally {
-      setUndoing(false);
-      setUndoTarget(null);
-    }
-  }
-
-  /** /remember session <note> ou /remember global <note> : appelle
-   * directement le tool remember (ou l'equivalent memoire globale) sans
-   * detour par le modele - un raccourci pour noter quelque chose vite. La
-   * portee "session" suit exactement la meme logique que le tool
-   * (POST /sessions/{id}/remember la reutilise cote serveur) : memoire du
-   * projet si la conversation en a un, sinon celle de la conversation
-   * seule - jamais les deux. */
-  async function handleRememberCommand(rawCommand: string) {
-    setInput("");
-    setMessages((prev) => [
-      ...prev,
-      { kind: "user", text: rawCommand, time: Date.now() },
-    ]);
-
-    const rest = rawCommand.slice(REMEMBER_PREFIX.length);
-    const restLower = rest.toLowerCase();
-    const isGlobal = restLower.startsWith(REMEMBER_GLOBAL_PREFIX);
-    const isSession = restLower.startsWith(REMEMBER_SESSION_PREFIX);
-    const note = isGlobal
-      ? rest.slice(REMEMBER_GLOBAL_PREFIX.length).trim()
-      : isSession
-        ? rest.slice(REMEMBER_SESSION_PREFIX.length).trim()
-        : "";
-
-    if (!isGlobal && !isSession) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          kind: "error",
-          text: "Précise la portée : /remember session <note> ou /remember global <note>",
-          time: Date.now(),
-        },
-      ]);
-      return;
-    }
-    if (!note) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          kind: "error",
-          text: "Précise une note à retenir.",
-          time: Date.now(),
-        },
-      ]);
-      return;
-    }
-
-    if (isGlobal) {
-      try {
-        const res = await fetch(`${API_BASE}/memory/global`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ note }),
-        });
-        if (!res.ok) throw new Error(String(res.status));
-        setMessages((prev) => [
-          ...prev,
-          {
-            kind: "info",
-            text: `Retenu dans la mémoire globale : ${note}`,
-            time: Date.now(),
-          },
-        ]);
-      } catch {
-        setMessages((prev) => [
-          ...prev,
-          {
-            kind: "error",
-            text: "impossible d'enregistrer cette note.",
-            time: Date.now(),
-          },
-        ]);
-      }
-      return;
-    }
-
-    if (!sessionId) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          kind: "error",
-          text: "Aucune conversation active pour l'instant - envoie d'abord un message.",
-          time: Date.now(),
-        },
-      ]);
-      return;
-    }
-    try {
-      const res = await fetch(`${API_BASE}/sessions/${sessionId}/remember`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ note }),
-      });
-      if (!res.ok) throw new Error(String(res.status));
-      const scopeLabel = activeProject
-        ? `le projet « ${activeProject.name} »`
-        : "cette conversation";
-      setMessages((prev) => [
-        ...prev,
-        {
-          kind: "info",
-          text: `Retenu pour ${scopeLabel} : ${note}`,
-          time: Date.now(),
-        },
-      ]);
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        {
-          kind: "error",
-          text: "impossible d'enregistrer cette note.",
-          time: Date.now(),
-        },
-      ]);
-    }
-  }
-
-  /** /compact : force le resume des echanges les plus anciens des
-   * maintenant (POST /sessions/{id}/compact, reutilise
-   * compress_history_if_needed avec force=True cote serveur), plutot que
-   * d'attendre le declenchement automatique quand le contexte depasse
-   * MAX_CONTEXT_CHARS (voir chat_loop.py). */
-  async function handleCompactCommand() {
-    setInput("");
-    setMessages((prev) => [
-      ...prev,
-      { kind: "user", text: COMPACT_COMMAND, time: Date.now() },
-    ]);
-
-    if (!sessionId) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          kind: "error",
-          text: "Aucune conversation active pour l'instant.",
-          time: Date.now(),
-        },
-      ]);
-      return;
-    }
-
-    try {
-      const res = await fetch(`${API_BASE}/sessions/${sessionId}/compact`, {
-        method: "POST",
-      });
-      if (!res.ok) throw new Error(String(res.status));
-      const data = (await res.json()) as { result: string };
-      setMessages((prev) => [
-        ...prev,
-        { kind: "info", text: data.result, time: Date.now() },
-      ]);
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        {
-          kind: "error",
-          text: "impossible de résumer cette conversation.",
-          time: Date.now(),
-        },
-      ]);
-    }
-  }
-
-  /** /yolo : bascule le mode YOLO pour cette conversation (POST
-   * /sessions/{id}/yolo, un simple toggle cote serveur - re-executer la
-   * commande desactive) - tant qu'actif, run_chat_stream saute la demande
-   * de confirmation pour tout outil non read-only (voir le bandeau
-   * persistant affiche pres du composer plus bas, pas juste ce message
-   * ponctuel). */
-  async function handleYoloCommand() {
-    setInput("");
-    setMessages((prev) => [
-      ...prev,
-      { kind: "user", text: YOLO_COMMAND, time: Date.now() },
-    ]);
-
-    if (!sessionId) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          kind: "error",
-          text: "Aucune conversation active pour l'instant.",
-          time: Date.now(),
-        },
-      ]);
-      return;
-    }
-
-    try {
-      const res = await fetch(`${API_BASE}/sessions/${sessionId}/yolo`, {
-        method: "POST",
-      });
-      if (!res.ok) throw new Error(String(res.status));
-      const data = (await res.json()) as { enabled: boolean };
-      setYoloEnabled(data.enabled);
-      setMessages((prev) => [
-        ...prev,
-        {
-          kind: "info",
-          text: data.enabled
-            ? "Mode YOLO activé pour cette conversation : les demandes d'autorisation sont sautées pour toute action (écriture, commande...). Retape /yolo pour désactiver."
-            : "Mode YOLO désactivé - les demandes d'autorisation sont de retour.",
-          time: Date.now(),
-        },
-      ]);
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        {
-          kind: "error",
-          text: "impossible de changer le mode YOLO.",
-          time: Date.now(),
-        },
-      ]);
-    }
-  }
-
-  /** `editTurnIndex` set (from "modifier" on a past user message, or
-   * "regenerer" on the last response - see the RenderGroup rendering below)
-   * means this isn't fresh composer input: rawText is either the edited
-   * text or the original turn's unchanged text, `attachments` (if any)
-   * are that turn's own, and slash-commands/the composer's pending state
-   * are skipped entirely - the composer might have an unrelated draft
-   * sitting in it. */
-  function markSending(key: string, isSending: boolean) {
-    setSendingSessionIds((prev) => {
-      if (isSending === prev.has(key)) return prev;
-      const next = new Set(prev);
-      if (isSending) next.add(key);
-      else next.delete(key);
-      return next;
-    });
-  }
-
-  function markInFlightModel(key: string, model: string | null) {
-    setInFlightModels((previous) => setInFlightModel(previous, key, model));
-  }
-
-  /** Deplace une entree de sendingSessionIds d'une cle vers une autre, en
-   * une seule mise a jour d'etat (pas un delete + un add separes) - une
-   * toute nouvelle conversation passe de la cle "" a son vrai id des que
-   * le serveur l'annonce (evenement "session"), et faire ca en deux temps
-   * risquerait un rendu intermediaire ou aucune des deux cles n'est
-   * presente (le composer clignoterait "pas en cours d'envoi"). */
-  function moveSendingKey(oldKey: string, newKey: string) {
-    setSendingSessionIds((prev) => {
-      if (!prev.has(oldKey)) return prev;
-      const next = new Set(prev);
-      next.delete(oldKey);
-      next.add(newKey);
-      return next;
-    });
-    setInFlightModels((previous) => moveInFlightModel(previous, oldKey, newKey));
-  }
-
-  function requestImageChange(src: string) {
-    setPendingAttachments((previous) =>
-      previous.some((attachment) => attachment.dataUrl === src)
-        ? previous
-        : [
-            ...previous,
-            { name: "image-de-reference.png", dataUrl: src },
-          ],
-    );
-    setImageMode(true);
-    setPreviewImage(null);
-  }
-
-  async function generateImage(rawPrompt: string) {
-    const prompt = rawPrompt.trim();
-    if (!prompt || sending) {
-      if (sending) setInput(rawPrompt);
-      return;
-    }
-    if (pendingTextAttachments.length || pendingAttachments.some((attachment) => isPdfDataUrl(attachment.dataUrl))) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          kind: "error",
-          text: "La génération d’images accepte des images de référence, pas des PDF ou des fichiers texte.",
-          time: Date.now(),
-        },
-      ]);
-      setInput(rawPrompt);
-      return;
-    }
-
-    // The temporary choice is consumed now. It is sent to this request but
-    // never written into settings.json, and the next image starts from the
-    // default selected in Settings again.
-    const requestModel = oneShotImageModel;
-    const inFlightModel = requestModel ?? imageModel;
-    const references = pendingAttachments;
-    setOneShotImageModel(null);
-    setInput("");
-    setPendingAttachments([]);
-
-    const startSessionId = sessionId;
-    let currentSessionId = startSessionId;
-    let currentSessionKey = startSessionId ?? "";
-    const isDisplayed = () => displayedSessionIdRef.current === currentSessionId;
-
-    if (isDisplayed()) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          kind: "user",
-          text: prompt,
-          images: references.map((attachment) => attachment.dataUrl),
-          time: Date.now(),
-        },
-      ]);
-    }
-    markSending(currentSessionKey, true);
-    markInFlightModel(currentSessionKey, inFlightModel);
-    const controller = new AbortController();
-    abortControllersRef.current.set(currentSessionKey, controller);
-
-    try {
-      const response = await fetch(`${API_BASE}/images/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          session_id: startSessionId,
-          prompt,
-          project_id: activeProjectId,
-          model: requestModel,
-          attachments: references.map((attachment) => ({
-            name: attachment.name,
-            data_url: attachment.dataUrl,
-          })),
-        }),
-        signal: controller.signal,
-      });
-      const payload = (await response.json()) as {
-        session_id?: string;
-        title?: string | null;
-        model?: string;
-        images?: string[];
-        detail?: string;
-      };
-      if (!response.ok) throw new Error(payload.detail ?? `Erreur ${response.status}`);
-
-      const newId = payload.session_id;
-      if (!newId) throw new Error("L’API n’a pas retourné de conversation.");
-      const wasNew = currentSessionId === null;
-      currentSessionId = newId;
-      if (wasNew) {
-        moveSendingKey(currentSessionKey, newId);
-        const controllerForThis = abortControllersRef.current.get(currentSessionKey);
-        abortControllersRef.current.delete(currentSessionKey);
-        currentSessionKey = newId;
-        if (controllerForThis) abortControllersRef.current.set(newId, controllerForThis);
-        if (displayedSessionIdRef.current === startSessionId) {
-          setSessionId(newId);
-          localStorage.setItem("triton_session_id", newId);
-          displayedSessionIdRef.current = newId;
-        }
-      }
-
-      const title = payload.title;
-      if (title) {
-        setSessions((prev) =>
-          prev.some((item) => item.id === newId)
-            ? prev.map((item) => (item.id === newId ? { ...item, title } : item))
-            : [{ id: newId, title, project_id: activeProjectId, pinned: false }, ...prev],
-        );
-      }
-      if (isDisplayed()) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            kind: "assistant",
-            text: "",
-            images: payload.images ?? [],
-            model: payload.model,
-            time: Date.now(),
-          },
-        ]);
-      }
-    } catch (error) {
-      if (!(error instanceof DOMException && error.name === "AbortError") && isDisplayed()) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            kind: "error",
-            text: error instanceof Error ? error.message : "Impossible de générer l’image.",
-            time: Date.now(),
-          },
-        ]);
-      }
-    } finally {
-      abortControllersRef.current.delete(currentSessionKey);
-      markSending(currentSessionKey, false);
-      markInFlightModel(currentSessionKey, null);
-      void loadSessions();
-    }
-  }
+  const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
+  // eslint-disable-next-line react-hooks/refs
+  const commands = createChatCommands({
+    sessionId,
+    activeProjectId,
+    activeProject,
+    modelsCatalog,
+    undoTarget,
+    sending,
+    pendingAttachments,
+    pendingTextAttachments,
+    oneShotImageModel,
+    imageModel,
+    getDisplayedSessionId: () => displayedSessionIdRef.current,
+    setDisplayedSessionId: (id: string) => {
+      displayedSessionIdRef.current = id;
+    },
+    getAbortControllers: () => abortControllersRef.current,
+    setInput,
+    setMessages,
+    setSessions,
+    setSessionId,
+    setSessionModelOverride,
+    setUndoDiff,
+    setUndoTarget,
+    setUndoing,
+    setFileRefreshTick,
+    setYoloEnabled,
+    setSendingSessionIds,
+    setInFlightModels,
+    setOneShotImageModel,
+    setPendingAttachments,
+    setImageMode,
+    setPreviewImage,
+    loadSessions,
+  });
+  const {
+    markSending,
+    markInFlightModel,
+    moveSendingKey,
+    dispatchMultiAgent,
+    handleCostCommand,
+    handleModelCommand,
+    handleUndoCommand,
+    confirmUndo,
+    handleRememberCommand,
+    handleCompactCommand,
+    handleYoloCommand,
+    requestImageChange,
+    generateImage,
+  } = commands;
 
   async function sendMessage(
     rawText: string,
@@ -2112,6 +1370,7 @@ function App() {
     const requestModel = isEdit ? null : oneShotChatModel;
     const inFlightModel = requestModel ?? effectiveModel;
     if (!isEdit) setOneShotChatModel(null);
+    // eslint-disable-next-line react-hooks/purity
     const startTime = performance.now();
     const attachments = isEdit
       ? (attachmentsOverride ?? [])
@@ -2511,7 +1770,6 @@ function App() {
   // tete, deja garanti par loadSessions) est preserve au sein de chaque groupe.
   const topLevelSessions = sessions.filter((s) => s.project_id === null);
 
-  const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
   // affiche un message assistant "vide" avec un loader tant qu'aucun texte
   // n'est en train d'arriver pour ce tour. Volontairement PAS exclu quand
   // le dernier message est "tool" (contrairement a une version precedente
@@ -2561,6 +1819,7 @@ function App() {
           ? "Joindre un PDF ou un fichier texte"
           : "Joindre un fichier texte";
 
+  // eslint-disable-next-line react-hooks/refs
   const sidebarHeader = SidebarHeader({
     usesMacTitlebarOverlay,
     sidebarCollapsed,
@@ -2577,141 +1836,44 @@ function App() {
       topContent={sidebarHeader.topContent}
     >
       <ProjectSidebarSection
+        projects={projects}
+        sessions={sessions}
+        activeProjectId={activeProjectId}
+        activeSessionId={sessionId}
+        sendingSessionIds={sendingSessionIds}
+        collapsedProjectIds={collapsedProjectIds}
+        editingProjectId={editingProjectId}
+        editingProjectValue={editingProjectValue}
+        editingSessionId={editingSessionId}
+        editingValue={editingValue}
         onNewProject={() => {
           setShowProjectForm(true);
         }}
-      >
-        {projects.length === 0 && (
-          <Text size="2xs" color="secondary" className="block px-2 py-1">
-            Aucun projet.
-          </Text>
-        )}
-        {projects.map((p) => {
-          const isCollapsed = collapsedProjectIds.has(p.id);
-          return (
-            <div key={p.id}>
-              {editingProjectId === p.id ? (
-                <div className="px-2 py-1">
-                  <TextInput
-                    value={editingProjectValue}
-                    onChange={setEditingProjectValue}
-                    isLabelHidden
-                    label="Nom du projet"
-                    size="sm"
-                    hasAutoFocus
-                    onEnter={() => {
-                      void commitRenameProject(p.id);
-                    }}
-                    onBlur={() => {
-                      void commitRenameProject(p.id);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Escape") setEditingProjectId(null);
-                    }}
-                  />
-                </div>
-              ) : (
-                <div className="group">
-                  <SideNavItem
-                    label={p.name}
-                    icon={<FolderIcon className="h-4 w-4" />}
-                    isSelected={p.id === activeProjectId && sessionId === null}
-                    onClick={() => {
-                      toggleProjectCollapsed(p.id);
-                    }}
-                    endContent={
-                      <div className="flex items-center gap-0.5">
-                        <ProjectActionsMenu
-                          className="pointer-events-none opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
-                          onNewConversation={() => {
-                            startProjectSession(p.id);
-                          }}
-                          onRename={() => {
-                            startRenameProject(p);
-                          }}
-                          onDelete={() => {
-                            setDeletingProject(p);
-                          }}
-                        />
-                        <ChevronRightIcon
-                          className={`h-4 w-4 shrink-0 text-secondary transition-transform ${isCollapsed ? "" : "rotate-90"}`}
-                        />
-                      </div>
-                    }
-                  />
-                </div>
-              )}
-              {!isCollapsed &&
-                sessions
-                  .filter((s) => s.project_id === p.id)
-                  .sort((a, b) => Number(b.pinned) - Number(a.pinned))
-                  .map((s) =>
-                    editingSessionId === s.id ? (
-                      <div key={s.id} className="py-1 pl-4">
-                        <TextInput
-                          value={editingValue}
-                          onChange={setEditingValue}
-                          isLabelHidden
-                          label="Titre de la conversation"
-                          size="sm"
-                          hasAutoFocus
-                          onEnter={() => {
-                            void commitRename(s.id);
-                          }}
-                          onBlur={() => {
-                            void commitRename(s.id);
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === "Escape") setEditingSessionId(null);
-                          }}
-                        />
-                      </div>
-                    ) : (
-                      <div key={s.id} className="group">
-                        <SideNavItem
-                          label={s.title ?? formatSessionLabel(s.id)}
-                          isSelected={s.id === sessionId}
-                          onClick={() => {
-                            switchSession(s.id);
-                          }}
-                          className="pl-4"
-                          endContent={
-                            <div className="flex items-center gap-1">
-                              {/* reponse en cours en arriere-plan (voir
-                                      sendMessage) - jamais pour celle
-                                      affichee, la vue principale montre
-                                      deja son propre etat "en cours". */}
-                              {s.id !== sessionId &&
-                                sendingSessionIds.has(s.id) && (
-                                  <Spinner
-                                    size="sm"
-                                    shade="subtle"
-                                    aria-label="Réponse en cours"
-                                  />
-                                )}
-                              <SessionActionsMenu
-                                className="pointer-events-none opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
-                                session={s}
-                                onRename={() => {
-                                  startRename(s);
-                                }}
-                                onTogglePin={() => {
-                                  void togglePin(s);
-                                }}
-                                onDelete={() => {
-                                  setDeletingSession(s);
-                                }}
-                              />
-                            </div>
-                          }
-                        />
-                      </div>
-                    ),
-                  )}
-            </div>
-          );
-        })}
-      </ProjectSidebarSection>
+        onToggleCollapse={toggleProjectCollapsed}
+        onNewProjectConversation={startProjectSession}
+        onStartRenameProject={startRenameProject}
+        onDeleteProject={setDeletingProject}
+        onEditingProjectValueChange={setEditingProjectValue}
+        onCommitRenameProject={(id) => {
+          void commitRenameProject(id);
+        }}
+        onCancelRenameProject={() => {
+          setEditingProjectId(null);
+        }}
+        onSwitchSession={switchSession}
+        onStartRenameSession={startRename}
+        onTogglePinSession={(session) => {
+          void togglePin(session);
+        }}
+        onDeleteSession={setDeletingSession}
+        onEditingValueChange={setEditingValue}
+        onCommitRenameSession={(id) => {
+          void commitRename(id);
+        }}
+        onCancelRenameSession={() => {
+          setEditingSessionId(null);
+        }}
+      />
 
       <SubagentsPanel />
 
