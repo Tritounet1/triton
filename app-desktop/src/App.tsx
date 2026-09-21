@@ -53,9 +53,10 @@ import {
   YOLO_COMMAND,
 } from "./chatCommands";
 import { ConversationSidebarSection } from "./ConversationSidebarSection";
-import { consumeChatStream } from "./chatStreamController";
-import { objectField, optionalStringField, stringField } from "./chatStreamPayloads";
-import { startChatStream } from "./chatTransport";
+import {
+  runChatConversationStream,
+  type PendingConfirmation,
+} from "./chatConversationStream";
 import { DesktopTitlebar } from "./DesktopTitlebar";
 import {
   assistantGroupModel,
@@ -79,11 +80,6 @@ import {
   type ToolCallLike,
   type ToolMsg,
 } from "./chatMessages";
-import {
-  interruptedAssistantText,
-  isAbortError,
-  upsertAssistantMessage,
-} from "./chatStreamState";
 import { type OpenFile } from "./fileViewer";
 import { FileViewerPanel } from "./FileViewerPanel";
 import { formatArgs } from "./format";
@@ -122,10 +118,6 @@ import { SubagentsPanel } from "./SubagentsPanel";
 import { TaskView } from "./TaskView";
 
 const API_BASE = "http://127.0.0.1:8000";
-// en dessous de ce seuil, une reponse est consideree "rapide" : pas de
-// notif meme si l'app est en arriere-plan, pour ne pas notifier a chaque
-// petit echange.
-const LONG_RESPONSE_MS = 15000;
 // au dela de ce delai sans le moindre evenement SSE, on considere qu'on
 // est dans un "silence" (ex. un outil qui tourne cote serveur) plutot que
 // dans un flux de tokens actif - voir awaitingSseEvent. Assez court pour
@@ -257,16 +249,6 @@ const composerTriggers: ChatComposerTrigger[] = [
     },
   },
 ];
-
-interface PendingConfirmation {
-  id: string;
-  tool: string;
-  args: Record<string, unknown>;
-  // conversation this confirmation belongs to - lets respondToConfirmation/
-  // cancelMessage clean up the right entry in pendingConfirmationsRef, and
-  // lets switching sessions show/hide the right one (see sendMessage).
-  sessionId: string;
-}
 
 interface PendingAttachment {
   name: string;
@@ -720,9 +702,6 @@ function App() {
     sendingRef.current = sending;
     inputRef.current = input;
     displayedSessionIdRef.current = sessionId;
-    sendMessageRef.current = (text: string) => {
-      void sendMessage(text);
-    };
   });
   const [themeMode, setThemeMode] = useState<"light" | "dark">(() =>
     localStorage.getItem("triton_theme") === "light" ? "light" : "dark",
@@ -1261,6 +1240,7 @@ function App() {
   }
 
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
+  // eslint-disable-next-line react-hooks/refs
   const commands = createChatCommands({
     sessionId,
     activeProjectId,
@@ -1369,7 +1349,6 @@ function App() {
     const requestModel = isEdit ? null : oneShotChatModel;
     const inFlightModel = requestModel ?? effectiveModel;
     if (!isEdit) setOneShotChatModel(null);
-    const startTime = performance.now();
     const attachments = isEdit
       ? (attachmentsOverride ?? [])
       : pendingAttachments;
@@ -1399,21 +1378,8 @@ function App() {
       setPendingTextAttachments([]);
     }
 
-    // la conversation ciblee par CET envoi, figee des maintenant : l'etat
-    // React sessionId peut changer sous nos pieds si l'utilisateur navigue
-    // ailleurs pendant tout le for-await plus bas (voir isDisplayed) -
-    // c'est ce qui permet de changer de conversation en plein streaming
-    // sans que les deux se melangent (chaque evenement SSE recu porte
-    // aussi son propre session_id, verifie plus bas au fil de l'eau).
     const startSessionId = sessionId;
-    let currentSessionId = startSessionId;
-    let currentSessionKey = startSessionId ?? "";
-
-    function isDisplayed(): boolean {
-      return displayedSessionIdRef.current === currentSessionId;
-    }
-
-    if (isDisplayed()) {
+    if (displayedSessionIdRef.current === startSessionId) {
       setMessages((prev) => {
         const base = isEdit ? truncateBeforeTurn(prev, editTurnIndex) : prev;
         return [
@@ -1428,255 +1394,66 @@ function App() {
         ];
       });
     }
-    markSending(currentSessionKey, true);
-    markInFlightModel(currentSessionKey, inFlightModel);
 
-    let assistantText = "";
-    let flushScheduled = false;
-
-    // les tokens peuvent arriver bien plus vite que le rythme d'affichage
-    // utile : on regroupe les mises a jour par frame plutot que d'en
-    // declencher une a chaque morceau de texte recu. L'updater ne doit
-    // dependre que de `prev` (pas d'un index externe mute a l'interieur),
-    // sinon React (StrictMode rejoue les updaters pour verifier qu'ils sont
-    // purs) plante au second passage avec un index deja decale.
-    function scheduleFlush() {
-      if (flushScheduled) return;
-      flushScheduled = true;
-      requestAnimationFrame(() => {
-        flushScheduled = false;
-        if (!isDisplayed()) return;
-        const textSoFar = assistantText;
-        setMessages((prev) => {
-          return upsertAssistantMessage(prev, textSoFar);
-        });
-      });
-    }
-
-    // remet a zero le minuteur de "silence SSE" a chaque evenement recu -
-    // voir awaitingSseEvent. Ne fait rien si cette conversation n'est plus
-    // celle affichee : sinon un envoi en arriere-plan pourrait faire
-    // disparaitre a tort le loader d'une AUTRE conversation affichee entre
-    // temps (un seul minuteur, pas une Map par session - voir sseIdleTimerRef).
-    function noteSseEvent() {
-      if (!isDisplayed()) return;
-      if (sseIdleTimerRef.current !== null)
-        clearTimeout(sseIdleTimerRef.current);
-      setAwaitingSseEvent(false);
-      sseIdleTimerRef.current = setTimeout(() => {
-        setAwaitingSseEvent(true);
-      }, SSE_IDLE_MS);
-    }
-
-    const controller = new AbortController();
-    abortControllersRef.current.set(currentSessionKey, controller);
-
-    try {
-      const res = await startChatStream(
-        {
-          session_id: startSessionId,
-          message: outgoingText,
-          project_id: activeProjectId,
-          attachments: attachments.map((a) => ({
-            name: a.name,
-            data_url: a.dataUrl,
-          })),
-          edit_turn_index: editTurnIndex ?? null,
-          model: requestModel,
-        },
-        controller.signal,
-      );
-
-      if (!res.ok) {
-        const detail = await res.text().catch(() => "");
-        throw new Error(`HTTP ${res.status}${detail ? ` - ${detail}` : ""}`);
-      }
-
-      await consumeChatStream(res, ({ event, data }) => {
-        switch (event) {
-          case "session": {
-            const id = stringField(data, "session_id");
-            if (!id) break;
-            const wasNew = currentSessionId === null;
-            currentSessionId = id;
-            if (wasNew) {
-              // cette conversation vient d'obtenir son vrai id du serveur -
-              // deplace son suivi (envoi/annulation) de la cle "" vers celui-ci
-              moveSendingKey(currentSessionKey, id);
-              const controllerForThis =
-                abortControllersRef.current.get(currentSessionKey);
-              abortControllersRef.current.delete(currentSessionKey);
-              currentSessionKey = id;
-              if (controllerForThis)
-                abortControllersRef.current.set(id, controllerForThis);
-              // ne navigue vers cette toute nouvelle conversation que si
-              // l'utilisateur regarde encore ce qu'il etait en train de
-              // composer - sinon on le laisserait la ou il est alle entre-temps
-              if (displayedSessionIdRef.current === startSessionId) {
-                setSessionId(id);
-                localStorage.setItem("triton_session_id", id);
-                displayedSessionIdRef.current = id;
-              }
-            }
-            break;
-          }
-          case "title": {
-            // toujours applique, jamais filtre par isDisplayed() : ca ne
-            // touche que la liste des conversations dans la sidebar,
-            // jamais `messages` - exactement le "mettre a jour la liste
-            // des conversations en arriere-plan" attendu pour une
-            // conversation qui n'est plus affichee.
-            const title = stringField(data, "title");
-            if (!currentSessionId) break;
-            const id = currentSessionId;
-            setSessions((prev) =>
-              prev.some((s) => s.id === id)
-                ? prev.map((s) => (s.id === id ? { ...s, title } : s))
-                : [
-                    { id, title, project_id: activeProjectId, pinned: false },
-                    ...prev,
-                  ],
-            );
-            break;
-          }
-          case "token": {
-            assistantText += stringField(data, "text");
-            scheduleFlush();
-            break;
-          }
-          case "tool_call": {
-            if (isDisplayed()) {
-              setMessages((prev) => [
-                ...prev,
-                {
-                  kind: "tool",
-                  tool: stringField(data, "tool"),
-                  args: objectField(data, "args"),
-                  result: stringField(data, "result"),
-                  time: Date.now(),
-                  model: optionalStringField(data, "model"),
-                },
-              ]);
-              // un outil a pu modifier le systeme de fichiers (write_file,
-              // edit_file, run_shell...) : rafraichit le panneau de fichiers
-              // du projet actif, si affiche. Sans filtrer par nom d'outil
-              // (couvre aussi les outils MCP) : une requete GET en trop est
-              // negligeable - seulement si c'est la conversation affichee,
-              // sinon aucun rapport avec le panneau actuellement visible.
-              setFileRefreshTick((t) => t + 1);
-            }
-            assistantText = "";
-            if (stringField(data, "tool") === "dispatch_subagent") {
-              const match = /\(id=([a-f0-9]+)\)/.exec(
-                stringField(data, "result"),
-              );
-              if (match?.[1]) pendingSubagentIdsRef.current.add(match[1]);
-            }
-            break;
-          }
-          case "done": {
-            // rattache le modele qui a repondu au dernier message assistant
-            // (pour l'avatar), et reconcilie son texte avec la version
-            // finale envoyee par le serveur au cas ou il manquerait un
-            // morceau (ex. le dernier flush programme n'a pas encore tourne).
-            if (isDisplayed()) {
-              const model = stringField(data, "model");
-              const content = stringField(data, "content");
-              setMessages((prev) => {
-                const last = prev[prev.length - 1];
-                return upsertAssistantMessage(prev, content || (last?.kind === "assistant" ? last.text : ""), model);
-              });
-            }
-            break;
-          }
-          case "confirmation_required": {
-            const pending: PendingConfirmation = {
-              id: stringField(data, "confirmation_id"),
-              tool: stringField(data, "tool"),
-              args: objectField(data, "args"),
-              sessionId: currentSessionKey,
-            };
-            // toujours retenue (voir pendingConfirmationsRef), meme pour
-            // une conversation qui n'est plus affichee - sinon un outil
-            // en attente de confirmation en arriere-plan resterait bloque
-            // jusqu'au timeout serveur (300s) sans que rien ne le signale
-            // quand on y revient (voir switchSession).
-            pendingConfirmationsRef.current.set(currentSessionKey, pending);
-            if (isDisplayed()) setPendingConfirmation(pending);
-            break;
-          }
-          case "info": {
-            if (isDisplayed()) {
-              setMessages((prev) => [
-                ...prev,
-                {
-                  kind: "info",
-                  text: stringField(data, "message"),
-                  time: Date.now(),
-                },
-              ]);
-            }
-            break;
-          }
-          case "error": {
-            if (isDisplayed()) {
-              setMessages((prev) => [
-                ...prev,
-                {
-                  kind: "error",
-                  text: stringField(data, "message"),
-                  time: Date.now(),
-                },
-              ]);
-            }
-            break;
-          }
-          default:
-            break;
+    await runChatConversationStream({
+      request: {
+        session_id: startSessionId,
+        message: outgoingText,
+        project_id: activeProjectId,
+        attachments: attachments.map((attachment) => ({
+          name: attachment.name,
+          data_url: attachment.dataUrl,
+        })),
+        edit_turn_index: editTurnIndex ?? null,
+        model: requestModel,
+      },
+      inFlightModel,
+      initialSessionId: startSessionId,
+      isDisplayed: (targetSessionId) =>
+        displayedSessionIdRef.current === targetSessionId,
+      updateMessages: setMessages,
+      updateSessions: setSessions,
+      setSessionCreated: (id) => {
+        setSessionId(id);
+        localStorage.setItem("triton_session_id", id);
+        displayedSessionIdRef.current = id;
+      },
+      markSending,
+      markInFlightModel,
+      moveSendingKey,
+      setFileRefreshTick,
+      addPendingSubagent: (id) => pendingSubagentIdsRef.current.add(id),
+      setPendingConfirmation,
+      pendingConfirmations: pendingConfirmationsRef.current,
+      abortControllers: abortControllersRef.current,
+      onStreamEvent: () => {
+        if (sseIdleTimerRef.current !== null) clearTimeout(sseIdleTimerRef.current);
+        setAwaitingSseEvent(false);
+        sseIdleTimerRef.current = setTimeout(() => {
+          setAwaitingSseEvent(true);
+        }, SSE_IDLE_MS);
+      },
+      onStreamFinished: () => {
+        if (sseIdleTimerRef.current !== null) {
+          clearTimeout(sseIdleTimerRef.current);
+          sseIdleTimerRef.current = null;
         }
-      }, noteSseEvent);
-    } catch (err) {
-      if (isAbortError(err)) {
-        if (isDisplayed()) {
-          setMessages((prev) => upsertAssistantMessage(prev, interruptedAssistantText(assistantText)));
-        }
-      } else {
-        console.error("erreur pendant l'échange avec l'API Triton :", err);
-        const isNetworkFailure = err instanceof TypeError;
-        if (isDisplayed()) {
-          setMessages((prev) => [
-            ...prev,
-            {
-              kind: "error",
-              text: isNetworkFailure
-                ? "impossible de contacter l'API Triton (127.0.0.1:8000)."
-                : `l'API Triton a répondu avec une erreur : ${err instanceof Error ? err.message : String(err)}`,
-              time: Date.now(),
-            },
-          ]);
-        }
-      }
-    } finally {
-      abortControllersRef.current.delete(currentSessionKey);
-      pendingConfirmationsRef.current.delete(currentSessionKey);
-      markSending(currentSessionKey, false);
-      markInFlightModel(currentSessionKey, null);
-      if (isDisplayed()) setPendingConfirmation(null);
-      if (sseIdleTimerRef.current !== null) {
-        clearTimeout(sseIdleTimerRef.current);
-        sseIdleTimerRef.current = null;
-      }
-      if (isDisplayed()) setAwaitingSseEvent(false);
-      void loadSessions();
-
-      if (performance.now() - startTime > LONG_RESPONSE_MS) {
-        notifyIfBackground(
-          "Triton a terminé",
-          assistantText ? assistantText.slice(0, 200) : "La réponse est prête.",
-        );
-      }
-    }
+        setAwaitingSseEvent(false);
+      },
+      refreshSessions: () => {
+        void loadSessions();
+      },
+      notifyCompletion: (text) => {
+        notifyIfBackground("Triton a terminé", text);
+      },
+    });
   }
+
+  useEffect(() => {
+    sendMessageRef.current = (text: string) => {
+      void sendMessage(text);
+    };
+  });
 
   // memoisee (useCallback) : referencee par cancelMessage ci-dessous, elle
   // meme dans les dependances de l'effet echap.
@@ -1825,6 +1602,7 @@ function App() {
           ? "Joindre un PDF ou un fichier texte"
           : "Joindre un fichier texte";
 
+  // eslint-disable-next-line react-hooks/refs
   const sidebarHeader = SidebarHeader({
     usesMacTitlebarOverlay,
     sidebarCollapsed,
