@@ -54,7 +54,7 @@ import {
 } from "./chatCommands";
 import { ConversationSidebarSection } from "./ConversationSidebarSection";
 import { consumeChatStream } from "./chatStreamController";
-import { optionalStringField, stringField } from "./chatStreamPayloads";
+import { objectField, optionalStringField, stringField } from "./chatStreamPayloads";
 import { startChatStream } from "./chatTransport";
 import { DesktopTitlebar } from "./DesktopTitlebar";
 import {
@@ -1495,7 +1495,8 @@ function App() {
       await consumeChatStream(res, ({ event, data }) => {
         switch (event) {
           case "session": {
-            const id = data.session_id as string;
+            const id = stringField(data, "session_id");
+            if (!id) break;
             const wasNew = currentSessionId === null;
             currentSessionId = id;
             if (wasNew) {
@@ -1525,7 +1526,7 @@ function App() {
             // jamais `messages` - exactement le "mettre a jour la liste
             // des conversations en arriere-plan" attendu pour une
             // conversation qui n'est plus affichee.
-            const title = data.title as string;
+            const title = stringField(data, "title");
             if (!currentSessionId) break;
             const id = currentSessionId;
             setSessions((prev) =>
@@ -1549,9 +1550,9 @@ function App() {
                 ...prev,
                 {
                   kind: "tool",
-                  tool: data.tool as string,
-                  args: data.args as Record<string, unknown>,
-                  result: data.result as string,
+                  tool: stringField(data, "tool"),
+                  args: objectField(data, "args"),
+                  result: stringField(data, "result"),
                   time: Date.now(),
                   model: optionalStringField(data, "model"),
                 },
@@ -1565,9 +1566,9 @@ function App() {
               setFileRefreshTick((t) => t + 1);
             }
             assistantText = "";
-            if (data.tool === "dispatch_subagent") {
+            if (stringField(data, "tool") === "dispatch_subagent") {
               const match = /\(id=([a-f0-9]+)\)/.exec(
-                (data.result as string) || "",
+                stringField(data, "result"),
               );
               if (match?.[1]) pendingSubagentIdsRef.current.add(match[1]);
             }
@@ -1590,9 +1591,9 @@ function App() {
           }
           case "confirmation_required": {
             const pending: PendingConfirmation = {
-              id: data.confirmation_id as string,
-              tool: data.tool as string,
-              args: data.args as Record<string, unknown>,
+              id: stringField(data, "confirmation_id"),
+              tool: stringField(data, "tool"),
+              args: objectField(data, "args"),
               sessionId: currentSessionKey,
             };
             // toujours retenue (voir pendingConfirmationsRef), meme pour
