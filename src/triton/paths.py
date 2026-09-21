@@ -1,10 +1,14 @@
 import sys
+from os import getenv
 from pathlib import Path
 
 from platformdirs import user_data_dir
 
 
 def _compute_root_dir() -> Path:
+    configured_data_dir = getenv("TRITON_DATA_DIR")
+    if configured_data_dir:
+        return Path(configured_data_dir).expanduser()
     # PyInstaller sets sys.frozen; server.py then runs from a temp
     # extraction dir (or next to a onedir build) that has nothing to do
     # with "the repo" and isn't guaranteed writable/stable across runs -
