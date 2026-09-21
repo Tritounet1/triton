@@ -24,13 +24,20 @@ from fastapi.responses import (
     StreamingResponse,
 )
 from openai import APIError
-from openai.types.chat import ChatCompletionMessageParam
+from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolParam
 from pydantic import BaseModel, Field
 from scalar_fastapi import get_scalar_api_reference
 
 from triton import background_tasks, mcp_client
 from triton.agents import orchestrator, subagents
 from triton.backup import build_backup_zip
+from triton.deployment import (
+    DeploymentProfile,
+    load_deployment_profile,
+    path_is_allowed,
+    project_is_allowed,
+    tool_is_allowed,
+)
 from triton.llm.api import (
     ChatResult,
     call_chat,
@@ -104,7 +111,6 @@ from triton.storage.settings import (
 from triton.storage.snapshots import get_snapshot, list_snapshots
 from triton.tools import (
     SNAPSHOT_MAX_AGE_DAYS,
-    TOOLS,
     TOOLS_REGISTRY,
     WRITE_TOOL_NAMES,
     InvalidSnapshotPathError,
@@ -155,6 +161,7 @@ logging.getLogger("uvicorn.access").addFilter(_QuietPollingEndpoints())
 # development workflow, which deliberately start server.py separately.
 LOCAL_API_TOKEN: str | None = None
 LOCAL_API_TOKEN_HEADER = "X-Triton-Local-Token"
+DEPLOYMENT_PROFILE = load_deployment_profile()
 
 
 def _session_file_path(session_id: str) -> Path:
@@ -167,29 +174,31 @@ def _session_file_path(session_id: str) -> Path:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    mcp_client.manager.connect_all_enabled()
-    resumed = orchestrator.resume_incomplete_runs()
-    if resumed:
-        logging.getLogger("uvicorn").info(
-            "resumed %d orchestrator run(s) interrupted by the last restart: %s",
-            len(resumed),
-            ", ".join(resumed),
-        )
-    purged = purge_expired_snapshots()
-    if purged:
-        logging.getLogger("uvicorn").info(
-            "purged %d snapshot(s) older than %d days", purged, SNAPSHOT_MAX_AGE_DAYS
-        )
-    scheduler_thread = threading.Thread(target=_scheduled_tasks_poll_loop, daemon=True)
-    scheduler_thread.start()
+    if DEPLOYMENT_PROFILE is DeploymentProfile.DESKTOP:
+        mcp_client.manager.connect_all_enabled()
+        resumed = orchestrator.resume_incomplete_runs()
+        if resumed:
+            logging.getLogger("uvicorn").info(
+                "resumed %d orchestrator run(s) interrupted by the last restart: %s",
+                len(resumed),
+                ", ".join(resumed),
+            )
+        purged = purge_expired_snapshots()
+        if purged:
+            logging.getLogger("uvicorn").info(
+                "purged %d snapshot(s) older than %d days", purged, SNAPSHOT_MAX_AGE_DAYS
+            )
+        scheduler_thread = threading.Thread(target=_scheduled_tasks_poll_loop, daemon=True)
+        scheduler_thread.start()
     # Tauri waits for this message from the sidecar it spawned before it
     # gives the startup token to its WebView. Do not include the token in
     # the output: stdout may be copied to application logs.
     if LOCAL_API_TOKEN is not None:
         print("TRITON_SIDECAR_READY", flush=True)
     yield
-    _scheduler_stop_event.set()
-    mcp_client.manager.disconnect_all()
+    if DEPLOYMENT_PROFILE is DeploymentProfile.DESKTOP:
+        _scheduler_stop_event.set()
+        mcp_client.manager.disconnect_all()
 
 
 # checked only while the backend happens to be running (no OS-level cron) -
@@ -357,6 +366,12 @@ app = FastAPI(
 
 @app.middleware("http")
 async def require_local_api_token(request: Request, call_next):
+    if not path_is_allowed(DEPLOYMENT_PROFILE, request.url.path):
+        return Response(
+            content='{"detail":"this endpoint is unavailable in the web deployment profile"}',
+            media_type="application/json",
+            status_code=403,
+        )
     # Let CORS answer preflight requests; the real request still needs the
     # token. Without this exception every browser request with our header
     # would be rejected before it could be sent.
@@ -369,6 +384,19 @@ async def require_local_api_token(request: Request, call_next):
                 status_code=401,
             )
     return await call_next(request)
+
+
+def _active_tool_schemas() -> list[ChatCompletionToolParam]:
+    return [
+        tool.schema
+        for name, tool in TOOLS_REGISTRY.items()
+        if tool_is_allowed(DEPLOYMENT_PROFILE, name)
+    ]
+
+
+def _require_profile_project_access(project_id: str | None) -> None:
+    if not project_is_allowed(DEPLOYMENT_PROFILE, project_id):
+        raise HTTPException(403, "projects are unavailable in the web deployment profile")
 
 
 # The API handles local files, conversations, and configured credentials, so
@@ -655,7 +683,7 @@ def run_chat_stream(
         try:
             for event in timed_stream_chat(
                 messages,
-                tools=TOOLS,
+                tools=_active_tool_schemas(),
                 model=session_model,
                 session_id=session_id,
                 project_id=project_id,
@@ -759,7 +787,9 @@ def run_chat_stream(
                                 },
                             )
 
-                        if sandbox_error is not None:
+                        if not tool_is_allowed(DEPLOYMENT_PROFILE, name):
+                            result = f"error: {name} is unavailable in the web deployment profile"
+                        elif sandbox_error is not None:
                             result = sandbox_error
                         elif tool is None:
                             result = f"unknown tool: {name}"
@@ -1402,6 +1432,7 @@ def truncate_before_turn(
 
 @app.post("/chat", tags=["Chat"])
 def chat(body: ChatRequest) -> StreamingResponse:
+    _require_profile_project_access(body.project_id)
     validate_attachments(body.attachments)
     session_path, messages, is_new = resolve_session(body.session_id, body.project_id)
     if body.edit_turn_index is not None:
@@ -1432,6 +1463,7 @@ def generate_conversation_image(body: ImageGenerateRequest) -> dict[str, object]
     The data URL and the producing model live in the regular session JSON,
     so a reload keeps both the image and its correct model avatar.
     """
+    _require_profile_project_access(body.project_id)
     prompt = body.prompt.strip()
     if not prompt:
         raise HTTPException(400, "image prompt must not be empty")
@@ -2565,13 +2597,20 @@ def get_cost_summary() -> CostSummary:
 if __name__ == "__main__":
     import uvicorn
 
-    parser = argparse.ArgumentParser(description="Run Triton's local HTTP API")
+    parser = argparse.ArgumentParser(description="Run Triton's HTTP API")
+    parser.add_argument(
+        "--deployment-profile",
+        choices=[profile.value for profile in DeploymentProfile],
+        help="override TRITON_DEPLOYMENT_PROFILE for this process",
+    )
     parser.add_argument(
         "--local-api-token-stdin",
         action="store_true",
         help="read the one-time local API token from stdin (used by the Tauri sidecar)",
     )
     args = parser.parse_args()
+    if args.deployment_profile:
+        DEPLOYMENT_PROFILE = load_deployment_profile(args.deployment_profile)
     if args.local_api_token_stdin:
         token = sys.stdin.readline().strip()
         if not token:

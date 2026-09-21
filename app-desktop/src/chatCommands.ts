@@ -11,8 +11,8 @@ import {
   type SnapshotPoint,
 } from "./snapshotDiff";
 import { moveInFlightModel, setInFlightModel } from "./inFlightModels";
+import { API_BASE } from "./api";
 
-const API_BASE = "http://127.0.0.1:8000";
 
 export const MULTI_AGENT_PREFIX = "/multi-agents ";
 const MULTI_AGENT_POLL_INTERVAL_MS = 1500;
