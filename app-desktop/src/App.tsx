@@ -2254,6 +2254,7 @@ function App() {
                                           }}
                                           className="inline-flex items-center gap-1 text-secondary hover:text-primary"
                                           title="Modifier"
+                                          aria-label="Modifier"
                                         >
                                           <PencilIcon className="h-3.5 w-3.5" />
                                         </button>
@@ -2514,6 +2515,7 @@ function App() {
                                       }}
                                       className="inline-flex items-center gap-1 text-secondary hover:text-primary"
                                       title="Copier"
+                                      aria-label="Copier"
                                     >
                                       {copiedIndex === gi ? (
                                         <CheckIcon className="h-3.5 w-3.5" />
@@ -2541,6 +2543,7 @@ function App() {
                                         }}
                                         className="inline-flex items-center gap-1 text-secondary hover:text-primary"
                                         title="Regenerer"
+                                        aria-label="Regenerer"
                                       >
                                         <RefreshIcon className="h-3.5 w-3.5" />
                                       </button>
