@@ -1,14 +1,16 @@
 import { parseSSE, type SSEEvent } from "./sse";
+import { dispatchChatStreamEvent, type ChatStreamEventHandlers } from "./chatStreamEvents";
 
 export async function consumeChatStream(
   response: Response,
-  onEvent: (event: SSEEvent) => void | Promise<void>,
+  onEvent: ((event: SSEEvent) => void | Promise<void>) | ChatStreamEventHandlers,
 ): Promise<void> {
   if (!response.ok) {
     const detail = await response.text();
     throw new Error(detail || `La requête de chat a échoué (${response.status}).`);
   }
   for await (const event of parseSSE(response)) {
-    await onEvent(event);
+    if (typeof onEvent === "function") await onEvent(event);
+    else dispatchChatStreamEvent(event, onEvent);
   }
 }
