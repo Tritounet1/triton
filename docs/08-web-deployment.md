@@ -54,3 +54,34 @@ docker compose up --build -d
 Ouvrez `http://127.0.0.1:8000`. Le port est limité à la machine hôte.
 
 Pour Dokploy, déployez ce dépôt avec Docker Compose, configurez le domaine et HTTPS dans Dokploy, puis renseignez les mêmes variables d’environnement dans son interface. Gardez `TRITON_WEB_SECURE_COOKIES=true`, qui est la valeur par défaut, pour que la session ne soit transmise qu’en HTTPS.
+
+## Limites et observabilité
+
+Le profil web limite par défaut chaque client à 120 requêtes par minute et refuse les requêtes de plus de 12 Mio. Ajustez `TRITON_WEB_RATE_LIMIT_REQUESTS`, `TRITON_WEB_RATE_LIMIT_WINDOW_SECONDS` et `TRITON_WEB_MAX_REQUEST_BYTES` dans Dokploy si nécessaire. Les requêtes web sont écrites au format JSON dans les logs Docker, avec la méthode, la route, le statut et la durée, sans contenu de conversation.
+
+```sh
+docker compose logs -f triton
+docker compose exec triton python -m triton.logs_summary
+```
+
+Le second affichage résume les appels, tokens, outils et coûts enregistrés dans le volume persistant.
+
+## Sauvegarde du volume
+
+Créez une archive depuis la machine qui héberge Docker :
+
+```sh
+mkdir -p backups
+docker compose exec -T triton tar -C /data -czf - . > backups/triton-data.tar.gz
+```
+
+Pour restaurer, arrêtez le service, videz le volume puis réinjectez l’archive :
+
+```sh
+docker compose down
+docker compose run --rm --no-deps triton sh -c 'rm -rf /data/*'
+cat backups/triton-data.tar.gz | docker compose run --rm -T --no-deps triton tar -C /data -xzf -
+docker compose up -d
+```
+
+Conservez les archives dans un stockage chiffré et distinct du VPS.

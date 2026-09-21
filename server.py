@@ -135,6 +135,7 @@ from triton.tools import (
     validate_snapshot_relative_path,
 )
 from triton.tools.memory import remember
+from triton.web_runtime import SlidingWindowRateLimiter, load_web_runtime_config
 
 
 class _QuietPollingEndpoints(logging.Filter):
@@ -166,6 +167,8 @@ LOCAL_API_TOKEN: str | None = None
 LOCAL_API_TOKEN_HEADER = "X-Triton-Local-Token"
 DEPLOYMENT_PROFILE = load_deployment_profile()
 WEB_AUTH_CONFIG = load_web_auth_config()
+WEB_RUNTIME_CONFIG = load_web_runtime_config()
+WEB_RATE_LIMITER = SlidingWindowRateLimiter(WEB_RUNTIME_CONFIG)
 WEB_AUTH_PUBLIC_PATHS = {"/", "/auth/login", "/auth/session", "/health"}
 WEB_FRONTEND_DIR = Path(__file__).resolve().parent / "app-desktop" / "dist"
 
@@ -372,40 +375,89 @@ app = FastAPI(
 
 @app.middleware("http")
 async def require_local_api_token(request: Request, call_next):
-    if not path_is_allowed(DEPLOYMENT_PROFILE, request.url.path):
-        return Response(
-            content='{"detail":"this endpoint is unavailable in the web deployment profile"}',
-            media_type="application/json",
-            status_code=403,
-        )
-    # Let CORS answer preflight requests; the real request still needs the
-    # token. Without this exception every browser request with our header
-    # would be rejected before it could be sent.
-    if LOCAL_API_TOKEN is not None and request.method != "OPTIONS":
-        supplied_token = request.headers.get(LOCAL_API_TOKEN_HEADER, "")
-        if not secrets.compare_digest(supplied_token, LOCAL_API_TOKEN):
-            return Response(
-                content='{"detail":"local API authentication failed"}',
+    started_at = time.perf_counter()
+    response: Response | None = None
+    try:
+        if DEPLOYMENT_PROFILE is DeploymentProfile.WEB:
+            content_length = request.headers.get("content-length")
+            try:
+                request_bytes = int(content_length) if content_length is not None else 0
+            except ValueError:
+                response = Response(
+                    content='{"detail":"invalid content-length header"}',
+                    media_type="application/json",
+                    status_code=400,
+                )
+                return response
+            if request_bytes > WEB_RUNTIME_CONFIG.max_request_bytes:
+                response = Response(
+                    content='{"detail":"request body exceeds the configured limit"}',
+                    media_type="application/json",
+                    status_code=413,
+                )
+                return response
+            client_key = request.client.host if request.client else "unknown"
+            retry_after = WEB_RATE_LIMITER.retry_after_seconds(client_key)
+            if retry_after:
+                response = Response(
+                    content='{"detail":"rate limit exceeded"}',
+                    headers={"Retry-After": str(retry_after)},
+                    media_type="application/json",
+                    status_code=429,
+                )
+                return response
+        if not path_is_allowed(DEPLOYMENT_PROFILE, request.url.path):
+            response = Response(
+                content='{"detail":"this endpoint is unavailable in the web deployment profile"}',
                 media_type="application/json",
-                status_code=401,
+                status_code=403,
             )
-    if DEPLOYMENT_PROFILE is DeploymentProfile.WEB:
-        if WEB_AUTH_CONFIG is None:
-            return Response(
-                content='{"detail":"web authentication is not configured"}',
-                media_type="application/json",
-                status_code=503,
+            return response
+        # Let CORS answer preflight requests; the real request still needs the
+        # token. Without this exception every browser request with our header
+        # would be rejected before it could be sent.
+        if LOCAL_API_TOKEN is not None and request.method != "OPTIONS":
+            supplied_token = request.headers.get(LOCAL_API_TOKEN_HEADER, "")
+            if not secrets.compare_digest(supplied_token, LOCAL_API_TOKEN):
+                response = Response(
+                    content='{"detail":"local API authentication failed"}',
+                    media_type="application/json",
+                    status_code=401,
+                )
+                return response
+        if DEPLOYMENT_PROFILE is DeploymentProfile.WEB:
+            if WEB_AUTH_CONFIG is None:
+                response = Response(
+                    content='{"detail":"web authentication is not configured"}',
+                    media_type="application/json",
+                    status_code=503,
+                )
+                return response
+            is_public = request.url.path in WEB_AUTH_PUBLIC_PATHS or request.url.path.startswith(
+                "/assets/"
             )
-        is_public = request.url.path in WEB_AUTH_PUBLIC_PATHS or request.url.path.startswith(
-            "/assets/"
-        )
-        if not is_public and not request.session.get("web_authenticated"):
-            return Response(
-                content='{"detail":"web authentication required"}',
-                media_type="application/json",
-                status_code=401,
+            if not is_public and not request.session.get("web_authenticated"):
+                response = Response(
+                    content='{"detail":"web authentication required"}',
+                    media_type="application/json",
+                    status_code=401,
+                )
+                return response
+        response = await call_next(request)
+        return response
+    finally:
+        if DEPLOYMENT_PROFILE is DeploymentProfile.WEB:
+            logging.getLogger("uvicorn.error").info(
+                json.dumps(
+                    {
+                        "type": "web_request",
+                        "method": request.method,
+                        "path": request.url.path,
+                        "status_code": response.status_code if response else 500,
+                        "duration_ms": round((time.perf_counter() - started_at) * 1000),
+                    }
+                )
             )
-    return await call_next(request)
 
 
 def _active_tool_schemas() -> list[ChatCompletionToolParam]:

@@ -30,6 +30,11 @@ def main():
     total_prompt_tokens = sum(e.get("prompt_tokens", 0) for e in model_calls)
     total_completion_tokens = sum(e.get("completion_tokens", 0) for e in model_calls)
     total_tokens = total_prompt_tokens + total_completion_tokens
+    recorded_cost = sum(
+        float(event["cost_usd"])
+        for event in events
+        if isinstance(event.get("cost_usd"), int | float)
+    )
     tool_names = Counter(e.get("tool", "?") for e in tool_calls)
 
     table = Table(title="Triton logs summary")
@@ -40,6 +45,7 @@ def main():
     table.add_row("tokens (prompt)", str(total_prompt_tokens))
     table.add_row("tokens (completion)", str(total_completion_tokens))
     table.add_row("tokens (total)", str(total_tokens))
+    table.add_row("cost recorded", f"${recorded_cost:.6f}")
     table.add_row("tool calls", str(len(tool_calls)))
     table.add_row(
         "most used tool",
