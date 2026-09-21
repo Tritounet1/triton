@@ -5,13 +5,10 @@ new machine or as a safety net before a risky manual change - the
 write-tool safety net (tools/snapshot.py) only covers project folders,
 nothing about the harness's own state.
 
-Includes API keys as-is: settings.json (OpenRouter/Tavily), any secret
-an MCP server's own config carries in mcp_servers.json, .env if one
-exists. Deliberately not redacted here - the desktop app warns about
-this before the download starts (see BackupSettings.tsx) rather than
-silently stripping keys out of what's supposed to be a *complete*
-backup; the resulting file must be kept as securely as the keys
-themselves."""
+Includes the app state stored under ROOT_DIR. OpenRouter/Tavily keys and
+MCP secrets live in the macOS Keychain and are therefore deliberately not
+exported. A legacy `.env` file can still contain credentials and is included
+as-is; keep the resulting archive as securely as that file."""
 
 import io
 import zipfile
