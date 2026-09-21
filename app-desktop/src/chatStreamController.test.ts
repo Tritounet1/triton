@@ -19,4 +19,10 @@ describe("consumeChatStream", () => {
     await consumeChatStream(new Response('event: token\ndata: {"text":"ok"}\n\n'), { token });
     expect(token).toHaveBeenCalledWith({ text: "ok" });
   });
+
+  it("notifies activity for every received event", async () => {
+    const activity = vi.fn();
+    await consumeChatStream(new Response('event: token\ndata: {"text":"a"}\n\nevent: done\ndata: {}\n\n'), {}, activity);
+    expect(activity).toHaveBeenCalledTimes(2);
+  });
 });

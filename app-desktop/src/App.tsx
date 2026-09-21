@@ -1492,7 +1492,6 @@ function App() {
       }
 
       await consumeChatStream(res, ({ event, data }) => {
-        noteSseEvent();
         switch (event) {
           case "session": {
             const id = data.session_id as string;
@@ -1633,7 +1632,7 @@ function App() {
           default:
             break;
         }
-      });
+      }, noteSseEvent);
     } catch (err) {
       if (isAbortError(err)) {
         if (isDisplayed()) {
