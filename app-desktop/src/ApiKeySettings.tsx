@@ -38,14 +38,14 @@ function ApiKeyField({ title, description, endpoint, placeholder, isRequired = f
       });
   }, [endpoint]);
 
-  async function save() {
+  async function save(value = apiKey) {
     setSaving(true);
     setSaved(false);
     try {
       const res = await fetch(`${API_BASE}${endpoint}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ api_key: apiKey }),
+        body: JSON.stringify({ api_key: value }),
       });
       if (res.ok) {
         const data = (await res.json()) as { configured: boolean };
@@ -102,6 +102,18 @@ function ApiKeyField({ title, description, endpoint, placeholder, isRequired = f
             void save();
           }}
         />
+        {configured && (
+          <Button
+            label="Effacer"
+            variant="secondary"
+            size="sm"
+            className="shrink-0"
+            isLoading={saving}
+            onClick={() => {
+              void save("");
+            }}
+          />
+        )}
       </div>
       {saved && (
         <Text size="2xs" className="mt-2 block text-success">
@@ -130,8 +142,8 @@ export function ApiKeySettings() {
           <KeyIcon className="h-4 w-4" />
         </div>
         <Text size="2xs" color="secondary">
-          Colle une nouvelle clé pour la remplacer. Le changement prend effet immédiatement,
-          sans redémarrer l'application.
+          Colle une nouvelle clé pour la remplacer, ou efface une clé optionnelle. Le changement
+          prend effet immédiatement, sans redémarrer l'application.
         </Text>
       </div>
 
