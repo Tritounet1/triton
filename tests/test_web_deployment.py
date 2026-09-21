@@ -1,7 +1,11 @@
+import json
+import logging
+
 from fastapi.testclient import TestClient
 
 import server
 from triton.deployment import DeploymentProfile, WebAuthConfig
+from triton.web_runtime import SlidingWindowRateLimiter, WebRuntimeConfig
 
 
 def _web_auth_config() -> WebAuthConfig:
@@ -99,3 +103,73 @@ def test_web_profile_requires_a_configured_authenticated_session(monkeypatch):
     assert accepted_login.status_code == 200
     assert session.json() == {"authenticated": True}
     assert accepted.status_code == 200
+
+
+def test_web_profile_limits_request_rate(monkeypatch):
+    monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(server, "WEB_AUTH_CONFIG", _web_auth_config())
+    monkeypatch.setattr(
+        server,
+        "WEB_RATE_LIMITER",
+        SlidingWindowRateLimiter(
+            WebRuntimeConfig(
+                max_request_bytes=1024, rate_limit_requests=1, rate_limit_window_seconds=60
+            )
+        ),
+    )
+
+    with TestClient(server.app) as client:
+        accepted = client.get("/health")
+        limited = client.get("/health")
+
+    assert accepted.status_code == 200
+    assert limited.status_code == 429
+    assert limited.headers["retry-after"] == "59"
+
+
+def test_web_profile_rejects_an_oversized_request(monkeypatch):
+    monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(server, "WEB_AUTH_CONFIG", _web_auth_config())
+    monkeypatch.setattr(
+        server,
+        "WEB_RUNTIME_CONFIG",
+        WebRuntimeConfig(
+            max_request_bytes=1, rate_limit_requests=120, rate_limit_window_seconds=60
+        ),
+    )
+
+    with TestClient(server.app) as client:
+        response = client.post("/auth/login", content=b"{}")
+
+    assert response.status_code == 413
+
+
+def test_web_profile_logs_request_metadata(monkeypatch, caplog):
+    monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(server, "WEB_AUTH_CONFIG", _web_auth_config())
+    monkeypatch.setattr(
+        server,
+        "WEB_RATE_LIMITER",
+        SlidingWindowRateLimiter(
+            WebRuntimeConfig(
+                max_request_bytes=1024, rate_limit_requests=120, rate_limit_window_seconds=60
+            )
+        ),
+    )
+    caplog.set_level(logging.INFO, logger="uvicorn.error")
+
+    with TestClient(server.app) as client:
+        response = client.get("/health")
+
+    events = [
+        json.loads(record.message)
+        for record in caplog.records
+        if record.name == "uvicorn.error" and record.message.startswith("{")
+    ]
+    assert response.status_code == 200
+    event = events[-1]
+    assert event["type"] == "web_request"
+    assert event["method"] == "GET"
+    assert event["path"] == "/health"
+    assert event["status_code"] == 200
+    assert isinstance(event["duration_ms"], int)

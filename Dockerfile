@@ -12,7 +12,8 @@ RUN pnpm build
 
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS runtime
 
-ENV PYTHONPATH=/app/src \
+ENV PATH="/app/.venv/bin:${PATH}" \
+    PYTHONPATH=/app/src \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     TRITON_DATA_DIR=/data \
@@ -21,10 +22,9 @@ ENV PYTHONPATH=/app/src \
 WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
-
 COPY server.py ./
 COPY src/ ./src/
+RUN uv sync --frozen --no-dev
 COPY --from=frontend /build/app-desktop/dist ./app-desktop/dist/
 
 RUN useradd --create-home --uid 10001 triton \

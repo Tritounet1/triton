@@ -960,7 +960,7 @@ function App() {
   // ProjectFilePanel), quel que soit le view courant, pour rester "vite
   // accessibles" pendant que le modele travaille dans la conversation.
   useEffect(() => {
-    if (!sessionId) return;
+    if (isWebDeployment || !sessionId) return;
     let cancelled = false;
     function load() {
       fetch(`${API_BASE}/background_tasks?session_id=${sessionId}`)
