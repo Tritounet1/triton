@@ -53,6 +53,7 @@ import {
   YOLO_COMMAND,
 } from "./chatCommands";
 import { ConversationSidebarSection } from "./ConversationSidebarSection";
+import { consumeChatStream } from "./chatStreamController";
 import { startChatStream } from "./chatTransport";
 import { DesktopTitlebar } from "./DesktopTitlebar";
 import {
@@ -116,7 +117,6 @@ import {
   type SnapshotPoint,
 } from "./snapshotDiff";
 import { SnapshotHistoryView } from "./SnapshotHistoryView";
-import { parseSSE } from "./sse";
 import { SubagentsPanel } from "./SubagentsPanel";
 import { TaskView } from "./TaskView";
 
@@ -1491,7 +1491,7 @@ function App() {
         throw new Error(`HTTP ${res.status}${detail ? ` - ${detail}` : ""}`);
       }
 
-      for await (const { event, data } of parseSSE(res)) {
+      await consumeChatStream(res, ({ event, data }) => {
         noteSseEvent();
         switch (event) {
           case "session": {
@@ -1633,7 +1633,7 @@ function App() {
           default:
             break;
         }
-      }
+      });
     } catch (err) {
       if (isAbortError(err)) {
         if (isDisplayed()) {
