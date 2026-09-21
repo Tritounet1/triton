@@ -54,6 +54,7 @@ import {
 } from "./chatCommands";
 import { ConversationSidebarSection } from "./ConversationSidebarSection";
 import { consumeChatStream } from "./chatStreamController";
+import { optionalStringField, stringField } from "./chatStreamPayloads";
 import { startChatStream } from "./chatTransport";
 import { DesktopTitlebar } from "./DesktopTitlebar";
 import {
@@ -1538,7 +1539,7 @@ function App() {
             break;
           }
           case "token": {
-            assistantText += data.text as string;
+            assistantText += stringField(data, "text");
             scheduleFlush();
             break;
           }
@@ -1552,7 +1553,7 @@ function App() {
                   args: data.args as Record<string, unknown>,
                   result: data.result as string,
                   time: Date.now(),
-                  model: typeof data.model === "string" ? data.model : undefined,
+                  model: optionalStringField(data, "model"),
                 },
               ]);
               // un outil a pu modifier le systeme de fichiers (write_file,
@@ -1578,8 +1579,8 @@ function App() {
             // finale envoyee par le serveur au cas ou il manquerait un
             // morceau (ex. le dernier flush programme n'a pas encore tourne).
             if (isDisplayed()) {
-              const model = data.model as string;
-              const content = data.content as string;
+              const model = stringField(data, "model");
+              const content = stringField(data, "content");
               setMessages((prev) => {
                 const last = prev[prev.length - 1];
                 return upsertAssistantMessage(prev, content || (last?.kind === "assistant" ? last.text : ""), model);
@@ -1609,7 +1610,7 @@ function App() {
                 ...prev,
                 {
                   kind: "info",
-                  text: data.message as string,
+                  text: stringField(data, "message"),
                   time: Date.now(),
                 },
               ]);
@@ -1622,7 +1623,7 @@ function App() {
                 ...prev,
                 {
                   kind: "error",
-                  text: data.message as string,
+                  text: stringField(data, "message"),
                   time: Date.now(),
                 },
               ]);
