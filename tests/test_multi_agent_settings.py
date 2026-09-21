@@ -28,7 +28,7 @@ def client():
 def test_max_subtasks_defaults_to_six(client):
     r = client.get("/settings/max_subtasks")
     assert r.status_code == 200
-    assert r.json() == {"value": 6, "default": 6}
+    assert r.json() == {"value": 6, "default": 6, "max": 20}
 
 
 def test_max_subtasks_put_then_get(client):
@@ -49,6 +49,23 @@ def test_max_subtasks_null_clears_the_override(client):
 def test_max_subtasks_rejects_a_value_below_one(client):
     r = client.put("/settings/max_subtasks", json={"value": 0})
     assert r.status_code == 400
+
+
+def test_max_subtasks_rejects_a_value_above_the_ceiling(client):
+    r = client.put("/settings/max_subtasks", json={"value": 21})
+    assert r.status_code == 400
+
+    r = client.put("/settings/max_subtasks", json={"value": 20})
+    assert r.status_code == 200
+    assert r.json()["value"] == 20
+
+
+def test_max_subtasks_ignores_a_value_above_the_ceiling_written_directly_to_settings_json(client):
+    client.put("/settings/max_subtasks", json={"value": 5})
+    settings.save_max_subtasks(500)
+
+    r = client.get("/settings/max_subtasks")
+    assert r.json()["value"] == 6
 
 
 # --- multi_agent_roles ---

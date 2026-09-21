@@ -87,6 +87,7 @@ from triton.storage.sessions import (
 from triton.storage.sessions import session_path as storage_session_path
 from triton.storage.settings import (
     DEFAULT_MAX_SUBTASKS,
+    MAX_MAX_SUBTASKS,
     load_image_model,
     load_max_subtasks,
     load_monthly_budget,
@@ -1143,15 +1144,15 @@ class MaxSubtasksUpdate(BaseModel):
 
 @app.get("/settings/max_subtasks", tags=["Settings"])
 def get_max_subtasks() -> dict[str, int]:
-    return {"value": load_max_subtasks(), "default": DEFAULT_MAX_SUBTASKS}
+    return {"value": load_max_subtasks(), "default": DEFAULT_MAX_SUBTASKS, "max": MAX_MAX_SUBTASKS}
 
 
 @app.put("/settings/max_subtasks", tags=["Settings"])
 def set_max_subtasks(body: MaxSubtasksUpdate) -> dict[str, int]:
-    if body.value is not None and body.value < 1:
-        raise HTTPException(400, "value must be at least 1")
+    if body.value is not None and not (1 <= body.value <= MAX_MAX_SUBTASKS):
+        raise HTTPException(400, f"value must be between 1 and {MAX_MAX_SUBTASKS}")
     save_max_subtasks(body.value)
-    return {"value": load_max_subtasks(), "default": DEFAULT_MAX_SUBTASKS}
+    return {"value": load_max_subtasks(), "default": DEFAULT_MAX_SUBTASKS, "max": MAX_MAX_SUBTASKS}
 
 
 class MultiAgentRoleModel(BaseModel):

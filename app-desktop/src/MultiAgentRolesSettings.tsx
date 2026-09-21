@@ -43,6 +43,7 @@ export function MultiAgentRolesSettings() {
   const [roles, setRoles] = useState<RoleConfig[]>([]);
   const [maxSubtasks, setMaxSubtasksValue] = useState<number | null>(null);
   const [defaultMaxSubtasks, setDefaultMaxSubtasks] = useState(6);
+  const [maxMaxSubtasks, setMaxMaxSubtasks] = useState(20);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<RoleConfig>(EMPTY_DRAFT);
@@ -55,13 +56,16 @@ export function MultiAgentRolesSettings() {
         r.ok ? (r.json() as Promise<RoleConfig[]>) : [],
       ),
       fetch(`${API_BASE}/settings/max_subtasks`).then((r) =>
-        r.ok ? (r.json() as Promise<{ value: number; default: number }>) : { value: 6, default: 6 },
+        r.ok
+          ? (r.json() as Promise<{ value: number; default: number; max: number }>)
+          : { value: 6, default: 6, max: 20 },
       ),
     ])
       .then(([rolesData, maxData]) => {
         setRoles(rolesData);
         setMaxSubtasksValue(maxData.value);
         setDefaultMaxSubtasks(maxData.default);
+        setMaxMaxSubtasks(maxData.max);
       })
       .catch(() => {
         // API hors ligne : les listes restent vides
@@ -217,7 +221,7 @@ export function MultiAgentRolesSettings() {
                 Sous-tâches maximum par run
                 </Text>
                 <Text size="2xs" color="secondary" className="block">
-                  Valeur par défaut : {defaultMaxSubtasks}
+                  Valeur par défaut : {defaultMaxSubtasks} · maximum : {maxMaxSubtasks}
                 </Text>
               </div>
             </div>
@@ -225,7 +229,9 @@ export function MultiAgentRolesSettings() {
               value={String(maxSubtasks ?? defaultMaxSubtasks)}
               onChange={(v) => {
                 const n = Number.parseInt(v, 10);
-                void updateMaxSubtasks(Number.isFinite(n) && n > 0 ? n : null);
+                const clamped =
+                  Number.isFinite(n) && n > 0 ? Math.min(n, maxMaxSubtasks) : null;
+                void updateMaxSubtasks(clamped);
               }}
               isLabelHidden
               label="Sous-tâches maximum par run"

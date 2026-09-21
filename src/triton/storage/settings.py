@@ -134,11 +134,14 @@ def save_role_model_override(role: str, model: str | None) -> None:
 
 
 DEFAULT_MAX_SUBTASKS = 6
+MAX_MAX_SUBTASKS = 20
 
 
 def load_max_subtasks() -> int:
     value = _load().get("max_subtasks")
-    return value if isinstance(value, int) and value > 0 else DEFAULT_MAX_SUBTASKS
+    if isinstance(value, int) and 0 < value <= MAX_MAX_SUBTASKS:
+        return value
+    return DEFAULT_MAX_SUBTASKS
 
 
 def save_max_subtasks(value: int | None) -> None:
