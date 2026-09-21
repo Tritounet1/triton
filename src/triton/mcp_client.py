@@ -12,6 +12,7 @@ asyncio.run_coroutine_threadsafe() and waits for the result.
 """
 
 import asyncio
+import contextlib
 import json
 import threading
 from collections.abc import Callable
@@ -30,6 +31,7 @@ from triton.tools import TOOLS_REGISTRY, Tool, rebuild_tools_list
 CONFIG_PATH = ROOT_DIR / "mcp_servers.json"
 MCP_PREFIX = "mcp__"
 CALL_TIMEOUT = 60
+CONNECT_TIMEOUT = 20
 
 
 class ServerStatus(TypedDict):
@@ -246,7 +248,15 @@ class MCPManager:
         ready: asyncio.Future[ServerConnection] = self._loop.create_future()
         stop = asyncio.Event()
         task = asyncio.create_task(self._server_task(config, ready, stop))
-        conn = await ready
+        try:
+            conn = await asyncio.wait_for(asyncio.shield(ready), timeout=CONNECT_TIMEOUT)
+        except TimeoutError:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            return ServerConnection(
+                config=config, error=f"connection timed out after {CONNECT_TIMEOUT}s"
+            )
         conn.task = task
         conn.stop_event = stop
         return conn

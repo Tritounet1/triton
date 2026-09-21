@@ -101,6 +101,28 @@ def test_a_crash_during_the_initial_handshake_resolves_ready_with_an_error(manag
     assert "test-mcp" not in manager.connections
 
 
+def test_a_hanging_handshake_times_out_instead_of_blocking_forever(manager, monkeypatch):
+    monkeypatch.setattr(mcp_client, "CONNECT_TIMEOUT", 0.05)
+    monkeypatch.setattr(mcp_client, "stdio_client", lambda params: _FakeReadWriteCM())
+
+    class _HangsOnEnter:
+        async def __aenter__(self):
+            await asyncio.Event().wait()
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(mcp_client, "ClientSession", lambda read, write: _HangsOnEnter())
+
+    config = MCPServerConfig(name="test-mcp", command="does-not-matter")
+
+    result = manager._run_coro(manager._start(config))
+
+    assert result.connected is False
+    assert "timed out" in (result.error or "")
+    assert "test-mcp" not in manager.connections
+
+
 def test_a_crash_after_connecting_updates_the_live_connection(manager, monkeypatch):
     monkeypatch.setattr(mcp_client, "stdio_client", lambda params: _FakeReadWriteCM())
 
