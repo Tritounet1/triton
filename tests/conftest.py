@@ -22,7 +22,7 @@ import pytest
 
 import server
 from triton import mcp_client
-from triton.storage import logs, settings
+from triton.storage import logs, settings, web_accounts
 
 
 @pytest.fixture(autouse=True)
@@ -54,3 +54,8 @@ def _isolate_keychain(monkeypatch):
     monkeypatch.setattr(settings, "set_secret", set_secret)
     monkeypatch.setattr(mcp_client, "get_secret", get_secret)
     monkeypatch.setattr(mcp_client, "set_secret", set_secret)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_web_accounts(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_accounts, "WEB_DATABASE", tmp_path / "web.sqlite3")

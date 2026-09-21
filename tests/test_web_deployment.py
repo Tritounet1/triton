@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 import server
 from triton.deployment import DeploymentProfile, WebAuthConfig
+from triton.storage import web_accounts
 from triton.web_runtime import SlidingWindowRateLimiter, WebRuntimeConfig
 
 
@@ -173,3 +174,21 @@ def test_web_profile_logs_request_metadata(monkeypatch, caplog):
     assert event["path"] == "/health"
     assert event["status_code"] == 200
     assert isinstance(event["duration_ms"], int)
+
+
+def test_web_profile_hides_sessions_owned_by_another_account(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(server, "WEB_AUTH_CONFIG", _web_auth_config())
+    monkeypatch.setattr(server, "SESSIONS_DIR", tmp_path)
+    (tmp_path / "another-session.json").write_text("[]")
+    web_accounts.initialize_web_accounts("admin", "password")
+    web_accounts.assign_session_owner("another-session", "other-account")
+
+    with TestClient(server.app) as client:
+        login = client.post("/auth/login", json={"username": "admin", "password": "password"})
+        listed = client.get("/sessions")
+        denied = client.get("/sessions/another-session")
+
+    assert login.status_code == 200
+    assert listed.json() == []
+    assert denied.status_code == 404

@@ -112,6 +112,14 @@ from triton.storage.settings import (
     save_tavily_api_key,
 )
 from triton.storage.snapshots import get_snapshot, list_snapshots
+from triton.storage.web_accounts import (
+    WebAccount,
+    assign_session_owner,
+    authenticate_web_account,
+    initialize_web_accounts,
+    owned_session_ids,
+    session_is_owned_by,
+)
 from triton.tools import (
     SNAPSHOT_MAX_AGE_DAYS,
     TOOLS_REGISTRY,
@@ -167,6 +175,7 @@ LOCAL_API_TOKEN: str | None = None
 LOCAL_API_TOKEN_HEADER = "X-Triton-Local-Token"
 DEPLOYMENT_PROFILE = load_deployment_profile()
 WEB_AUTH_CONFIG = load_web_auth_config()
+WEB_ADMIN_ACCOUNT: WebAccount | None = None
 WEB_RUNTIME_CONFIG = load_web_runtime_config()
 WEB_RATE_LIMITER = SlidingWindowRateLimiter(WEB_RUNTIME_CONFIG)
 WEB_AUTH_PUBLIC_PATHS = {"/", "/auth/login", "/auth/session", "/health"}
@@ -181,8 +190,29 @@ def _session_file_path(session_id: str) -> Path:
         raise HTTPException(400, "invalid session id") from exc
 
 
+def _web_account_id(request: Request) -> str | None:
+    account_id = request.session.get("web_account_id")
+    return account_id if isinstance(account_id, str) else None
+
+
+def _require_web_session_owner(request: Request, session_id: str) -> None:
+    if DEPLOYMENT_PROFILE is not DeploymentProfile.WEB:
+        return
+    account_id = _web_account_id(request)
+    if account_id is None or not session_is_owned_by(session_id, account_id):
+        raise HTTPException(404, "session not found")
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    global WEB_ADMIN_ACCOUNT
+    if DEPLOYMENT_PROFILE is DeploymentProfile.WEB and WEB_AUTH_CONFIG is not None:
+        WEB_ADMIN_ACCOUNT = initialize_web_accounts(
+            WEB_AUTH_CONFIG.username, WEB_AUTH_CONFIG.password
+        )
+        if SESSIONS_DIR.exists():
+            for session_file in SESSIONS_DIR.glob("*.json"):
+                assign_session_owner(session_file.stem, WEB_ADMIN_ACCOUNT.id)
     if DEPLOYMENT_PROFILE is DeploymentProfile.DESKTOP:
         mcp_client.manager.connect_all_enabled()
         resumed = orchestrator.resume_incomplete_runs()
@@ -443,6 +473,20 @@ async def require_local_api_token(request: Request, call_next):
                     status_code=401,
                 )
                 return response
+            session_path_parts = request.url.path.split("/")
+            if (
+                len(session_path_parts) > 2
+                and session_path_parts[1] == "sessions"
+                and session_path_parts[2] != "search"
+            ):
+                account_id = _web_account_id(request)
+                if account_id is None or not session_is_owned_by(session_path_parts[2], account_id):
+                    response = Response(
+                        content='{"detail":"session not found"}',
+                        media_type="application/json",
+                        status_code=404,
+                    )
+                    return response
         response = await call_next(request)
         return response
     finally:
@@ -1103,13 +1147,13 @@ def web_login(body: WebLoginRequest, request: Request) -> dict[str, bool]:
     config = WEB_AUTH_CONFIG
     if DEPLOYMENT_PROFILE is not DeploymentProfile.WEB or config is None:
         raise HTTPException(404, "web authentication is unavailable")
-    if not (
-        secrets.compare_digest(body.username, config.username)
-        and secrets.compare_digest(body.password, config.password)
-    ):
+    account = authenticate_web_account(body.username, body.password)
+    if account is None:
         raise HTTPException(401, "invalid credentials")
     request.session.clear()
     request.session["web_authenticated"] = True
+    request.session["web_account_id"] = account.id
+    request.session["web_role"] = account.role
     return {"ok": True}
 
 
@@ -1556,10 +1600,17 @@ def truncate_before_turn(
 
 
 @app.post("/chat", tags=["Chat"])
-def chat(body: ChatRequest) -> StreamingResponse:
+def chat(body: ChatRequest, request: Request) -> StreamingResponse:
     _require_profile_project_access(body.project_id)
     validate_attachments(body.attachments)
+    if body.session_id:
+        _require_web_session_owner(request, body.session_id)
     session_path, messages, is_new = resolve_session(body.session_id, body.project_id)
+    if is_new and DEPLOYMENT_PROFILE is DeploymentProfile.WEB:
+        account_id = _web_account_id(request)
+        if account_id is None:
+            raise HTTPException(401, "web authentication required")
+        assign_session_owner(session_path.stem, account_id)
     if body.edit_turn_index is not None:
         messages = truncate_before_turn(messages, body.edit_turn_index)
     messages.append(
@@ -1682,10 +1733,13 @@ def cancel_chat(body: CancelRequest) -> dict[str, bool]:
 
 
 @app.get("/sessions", tags=["Sessions"])
-def list_sessions() -> list[dict[str, str | bool | None]]:
+def list_sessions(request: Request) -> list[dict[str, str | bool | None]]:
     if not SESSIONS_DIR.exists():
         return []
     ids = sorted(p.stem for p in SESSIONS_DIR.glob("*.json"))
+    if DEPLOYMENT_PROFILE is DeploymentProfile.WEB:
+        account_id = _web_account_id(request)
+        ids = sorted(owned_session_ids(account_id)) if account_id else []
     return [
         {
             "id": session_id,
