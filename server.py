@@ -27,6 +27,8 @@ from openai import APIError
 from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolParam
 from pydantic import BaseModel, Field
 from scalar_fastapi import get_scalar_api_reference
+from starlette.middleware.sessions import SessionMiddleware
+from starlette.staticfiles import StaticFiles
 
 from triton import background_tasks, mcp_client
 from triton.agents import orchestrator, subagents
@@ -34,6 +36,7 @@ from triton.backup import build_backup_zip
 from triton.deployment import (
     DeploymentProfile,
     load_deployment_profile,
+    load_web_auth_config,
     path_is_allowed,
     project_is_allowed,
     tool_is_allowed,
@@ -162,6 +165,9 @@ logging.getLogger("uvicorn.access").addFilter(_QuietPollingEndpoints())
 LOCAL_API_TOKEN: str | None = None
 LOCAL_API_TOKEN_HEADER = "X-Triton-Local-Token"
 DEPLOYMENT_PROFILE = load_deployment_profile()
+WEB_AUTH_CONFIG = load_web_auth_config()
+WEB_AUTH_PUBLIC_PATHS = {"/", "/auth/login", "/auth/session", "/health"}
+WEB_FRONTEND_DIR = Path(__file__).resolve().parent / "app-desktop" / "dist"
 
 
 def _session_file_path(session_id: str) -> Path:
@@ -383,6 +389,22 @@ async def require_local_api_token(request: Request, call_next):
                 media_type="application/json",
                 status_code=401,
             )
+    if DEPLOYMENT_PROFILE is DeploymentProfile.WEB:
+        if WEB_AUTH_CONFIG is None:
+            return Response(
+                content='{"detail":"web authentication is not configured"}',
+                media_type="application/json",
+                status_code=503,
+            )
+        is_public = request.url.path in WEB_AUTH_PUBLIC_PATHS or request.url.path.startswith(
+            "/assets/"
+        )
+        if not is_public and not request.session.get("web_authenticated"):
+            return Response(
+                content='{"detail":"web authentication required"}',
+                media_type="application/json",
+                status_code=401,
+            )
     return await call_next(request)
 
 
@@ -397,6 +419,17 @@ def _active_tool_schemas() -> list[ChatCompletionToolParam]:
 def _require_profile_project_access(project_id: str | None) -> None:
     if not project_is_allowed(DEPLOYMENT_PROFILE, project_id):
         raise HTTPException(403, "projects are unavailable in the web deployment profile")
+
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=WEB_AUTH_CONFIG.session_secret if WEB_AUTH_CONFIG else secrets.token_urlsafe(32),
+    https_only=DEPLOYMENT_PROFILE is DeploymentProfile.WEB,
+    same_site="lax",
+    max_age=60 * 60 * 12,
+)
+
+app.mount("/assets", StaticFiles(directory=WEB_FRONTEND_DIR / "assets", check_dir=False))
 
 
 # The API handles local files, conversations, and configured credentials, so
@@ -966,7 +999,12 @@ def run_chat_stream(
 
 
 @app.get("/", include_in_schema=False)
-def root() -> RedirectResponse:
+def root() -> Response:
+    if DEPLOYMENT_PROFILE is DeploymentProfile.WEB:
+        index_path = WEB_FRONTEND_DIR / "index.html"
+        if not index_path.is_file():
+            raise HTTPException(503, "the web client has not been built")
+        return FileResponse(index_path)
     """Visiting the API's own base URL in a browser is far more likely to
     be someone looking for the docs than expecting a 404 - send them
     there instead."""
@@ -992,6 +1030,37 @@ def scalar_docs() -> HTMLResponse:
 @app.get("/health", tags=["Health"])
 def health() -> dict[str, bool | str]:
     return {"ok": True, "model": get_model()}
+
+
+class WebLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.get("/auth/session", tags=["Health"])
+def web_session(request: Request) -> dict[str, bool]:
+    return {"authenticated": bool(request.session.get("web_authenticated"))}
+
+
+@app.post("/auth/login", tags=["Health"])
+def web_login(body: WebLoginRequest, request: Request) -> dict[str, bool]:
+    config = WEB_AUTH_CONFIG
+    if DEPLOYMENT_PROFILE is not DeploymentProfile.WEB or config is None:
+        raise HTTPException(404, "web authentication is unavailable")
+    if not (
+        secrets.compare_digest(body.username, config.username)
+        and secrets.compare_digest(body.password, config.password)
+    ):
+        raise HTTPException(401, "invalid credentials")
+    request.session.clear()
+    request.session["web_authenticated"] = True
+    return {"ok": True}
+
+
+@app.post("/auth/logout", tags=["Health"])
+def web_logout(request: Request) -> dict[str, bool]:
+    request.session.clear()
+    return {"ok": True}
 
 
 class ModelUpdate(BaseModel):
@@ -2599,18 +2668,11 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Run Triton's HTTP API")
     parser.add_argument(
-        "--deployment-profile",
-        choices=[profile.value for profile in DeploymentProfile],
-        help="override TRITON_DEPLOYMENT_PROFILE for this process",
-    )
-    parser.add_argument(
         "--local-api-token-stdin",
         action="store_true",
         help="read the one-time local API token from stdin (used by the Tauri sidecar)",
     )
     args = parser.parse_args()
-    if args.deployment_profile:
-        DEPLOYMENT_PROFILE = load_deployment_profile(args.deployment_profile)
     if args.local_api_token_stdin:
         token = sys.stdin.readline().strip()
         if not token:

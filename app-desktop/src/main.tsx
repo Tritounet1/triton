@@ -1,9 +1,10 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
-import { API_BASE, isTauri } from "./api";
+import { API_BASE, isTauri, isWebDeployment } from "./api";
 import App from "./App";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { WebAuthGate } from "./WebAuthGate";
 
 const rootElement = document.getElementById("root");
 if (!rootElement) throw new Error("index.html doit contenir un element #root");
@@ -15,7 +16,13 @@ function renderApp() {
   ReactDOM.createRoot(appRoot).render(
     <React.StrictMode>
       <ErrorBoundary>
-        <App />
+        {isWebDeployment ? (
+          <WebAuthGate>
+            <App />
+          </WebAuthGate>
+        ) : (
+          <App />
+        )}
       </ErrorBoundary>
     </React.StrictMode>,
   );

@@ -867,7 +867,7 @@ function App() {
 
   useEffect(() => {
     refreshApiModel();
-    refreshImageModel();
+    if (!isWebDeployment) refreshImageModel();
 
     fetch(`${API_BASE}/openrouter/models`)
       .then((r) => (r.ok ? r.json() : []))
@@ -887,15 +887,17 @@ function App() {
         // API OpenRouter injoignable : le bouton "joindre" reste desactive
       });
 
-    fetch(`${API_BASE}/openrouter/image-models`)
-      .then((r) => (r.ok ? r.json() : []))
-      .then((data: { id: string; name: string; description: string }[]) => {
-        setImageModelsCatalog(data);
-      })
-      .catch(() => {
-        // Le mode image reste present, mais le selecteur conserve alors le
-        // modele par defaut configure plutot qu'une liste obsolète.
-      });
+    if (!isWebDeployment) {
+      fetch(`${API_BASE}/openrouter/image-models`)
+        .then((r) => (r.ok ? r.json() : []))
+        .then((data: { id: string; name: string; description: string }[]) => {
+          setImageModelsCatalog(data);
+        })
+        .catch(() => {
+          // Le mode image reste present, mais le selecteur conserve alors le
+          // modele par defaut configure plutot qu'une liste obsolète.
+        });
+    }
 
     // uniquement au demarrage, pour une session deja connue (localStorage) ;
     // ne doit pas se redeclencher quand sendMessage() fixe sessionId lui-meme,

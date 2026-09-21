@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from enum import StrEnum
 from os import getenv
 
@@ -61,3 +62,24 @@ def path_is_allowed(profile: DeploymentProfile, path: str) -> bool:
 
 def project_is_allowed(profile: DeploymentProfile, project_id: str | None) -> bool:
     return profile is DeploymentProfile.DESKTOP or project_id is None
+
+
+@dataclass(frozen=True)
+class WebAuthConfig:
+    username: str
+    password: str
+    session_secret: str
+
+
+def load_web_auth_config() -> WebAuthConfig | None:
+    username = getenv("TRITON_WEB_USERNAME")
+    password = getenv("TRITON_WEB_PASSWORD")
+    session_secret = getenv("TRITON_WEB_SESSION_SECRET")
+    if not any((username, password, session_secret)):
+        return None
+    if not username or not password or not session_secret:
+        raise ValueError(
+            "TRITON_WEB_USERNAME, TRITON_WEB_PASSWORD, and "
+            "TRITON_WEB_SESSION_SECRET must all be configured"
+        )
+    return WebAuthConfig(username=username, password=password, session_secret=session_secret)

@@ -5,6 +5,7 @@ description = "Add your description here"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.141.1",
+    "itsdangerous>=2.2.0",
     "mcp>=2.1.1",
     "openai>=3.5.0",
     "platformdirs>=4.5.0",
