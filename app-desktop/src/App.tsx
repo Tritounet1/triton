@@ -40,6 +40,7 @@ import {
   type ReactNode,
 } from "react";
 import "./App.css";
+import { API_BASE } from "./api";
 import { BackgroundTasksPanel } from "./BackgroundTasksPanel";
 import { type BackgroundTask } from "./BackgroundTasksSection";
 import {
@@ -117,7 +118,6 @@ import { SnapshotHistoryView } from "./SnapshotHistoryView";
 import { SubagentsPanel } from "./SubagentsPanel";
 import { TaskView } from "./TaskView";
 
-const API_BASE = "http://127.0.0.1:8000";
 // au dela de ce delai sans le moindre evenement SSE, on considere qu'on
 // est dans un "silence" (ex. un outil qui tourne cote serveur) plutot que
 // dans un flux de tokens actif - voir awaitingSseEvent. Assez court pour

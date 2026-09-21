@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
+import { API_BASE, isTauri } from "./api";
 import App from "./App";
 import { ErrorBoundary } from "./ErrorBoundary";
 
@@ -8,7 +9,6 @@ const rootElement = document.getElementById("root");
 if (!rootElement) throw new Error("index.html doit contenir un element #root");
 const appRoot: HTMLElement = rootElement;
 
-const API_BASE = "http://127.0.0.1:8000";
 const LOCAL_API_TOKEN_HEADER = "X-Triton-Local-Token";
 
 function renderApp() {
@@ -43,7 +43,7 @@ async function waitForLocalApiToken(): Promise<string> {
 }
 
 async function bootstrap() {
-  if (!import.meta.env.DEV) installLocalApiToken(await waitForLocalApiToken());
+  if (isTauri && !import.meta.env.DEV) installLocalApiToken(await waitForLocalApiToken());
   renderApp();
 }
 
