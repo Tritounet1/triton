@@ -17,10 +17,12 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 WORKSPACE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
+_SNAPSHOT_SESSION_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
 _SKIP_DIR_NAMES = {".git", "node_modules", ".venv"}
 WORKSPACES_DIR = Path(os.getenv("TRITON_WORKSPACES_DIR", "/workspaces"))
 WORKSPACE_TOKEN = os.getenv("TRITON_WORKSPACE_TOKEN", "")
 TASKS_DIR = WORKSPACES_DIR / ".tasks"
+SNAPSHOTS_DIR = WORKSPACES_DIR / ".snapshots"
 MAX_CONCURRENT_TASKS = 5
 
 app = FastAPI(title="Triton Workspace Runner", docs_url=None, redoc_url=None)
@@ -40,6 +42,11 @@ class WorkspaceTaskRequest(BaseModel):
     command: str = Field(min_length=1)
     name: str = ""
     directory: str = "."
+
+
+class WorkspaceSnapshotRequest(BaseModel):
+    session_id: str = Field(min_length=1)
+    turn_index: int = Field(ge=1)
 
 
 def _require_token(token: str | None) -> None:
@@ -69,6 +76,12 @@ def _tool_path(workspace_id: str, value: object) -> Path:
     if not isinstance(value, str) or not value:
         raise ValueError("a non-empty path is required")
     return _workspace_file(workspace_id, value)
+
+
+def _snapshot_dir(workspace_id: str, session_id: str, turn_index: int) -> Path:
+    if not _SNAPSHOT_SESSION_PATTERN.fullmatch(session_id):
+        raise HTTPException(400, "invalid session id")
+    return SNAPSHOTS_DIR / workspace_id / f"{session_id}_{turn_index}"
 
 
 def _task_file(task_id: str) -> Path:
@@ -394,6 +407,7 @@ def delete_workspace(
     if not workspace.is_dir():
         raise HTTPException(404, "workspace not found")
     shutil.rmtree(workspace)
+    shutil.rmtree(SNAPSHOTS_DIR / workspace_id, ignore_errors=True)
     return {"ok": True}
 
 
@@ -553,3 +567,81 @@ def delete_task(
     _task_file(task_id).unlink(missing_ok=True)
     (TASKS_DIR / f"{task_id}.log").unlink(missing_ok=True)
     return {"deleted": True}
+
+
+@app.get("/workspaces/{workspace_id}/snapshots")
+def list_workspace_snapshots(
+    workspace_id: str,
+    session_id: str,
+    x_triton_workspace_token: str | None = Header(default=None),
+) -> list[dict[str, object]]:
+    _require_token(x_triton_workspace_token)
+    if not _SNAPSHOT_SESSION_PATTERN.fullmatch(session_id):
+        raise HTTPException(400, "invalid session id")
+    base = SNAPSHOTS_DIR / workspace_id
+    prefix = f"{session_id}_"
+    points: list[dict[str, object]] = []
+    if base.is_dir():
+        for entry in base.iterdir():
+            if not entry.is_dir() or not entry.name.startswith(prefix):
+                continue
+            raw_turn_index = entry.name.removeprefix(prefix)
+            if not raw_turn_index.isdigit():
+                continue
+            meta_path = entry / "meta.json"
+            meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+            points.append(
+                {"turn_index": int(raw_turn_index), "created_at": meta.get("created_at", "")}
+            )
+    points.sort(key=lambda p: cast(int, p["turn_index"]))
+    return points
+
+
+@app.post("/workspaces/{workspace_id}/snapshots")
+def ensure_workspace_snapshot(
+    workspace_id: str,
+    body: WorkspaceSnapshotRequest,
+    x_triton_workspace_token: str | None = Header(default=None),
+) -> dict[str, bool]:
+    _require_token(x_triton_workspace_token)
+    workspace = _workspace_path(workspace_id)
+    if not workspace.is_dir():
+        raise HTTPException(404, "workspace not found")
+    target = _snapshot_dir(workspace_id, body.session_id, body.turn_index)
+    if target.exists():
+        return {"taken": False}
+    target.mkdir(parents=True)
+    shutil.copytree(workspace, target / "files", ignore=shutil.ignore_patterns(".git"))
+    (target / "meta.json").write_text(
+        json.dumps({"created_at": datetime.now(UTC).isoformat(timespec="seconds")})
+    )
+    return {"taken": True}
+
+
+@app.post("/workspaces/{workspace_id}/snapshots/restore")
+def restore_workspace_snapshot(
+    workspace_id: str,
+    body: WorkspaceSnapshotRequest,
+    x_triton_workspace_token: str | None = Header(default=None),
+) -> dict[str, bool]:
+    _require_token(x_triton_workspace_token)
+    workspace = _workspace_path(workspace_id)
+    if not workspace.is_dir():
+        raise HTTPException(404, "workspace not found")
+    source = _snapshot_dir(workspace_id, body.session_id, body.turn_index) / "files"
+    if not source.is_dir():
+        raise HTTPException(404, "no snapshot for this session at that turn")
+    for child in workspace.iterdir():
+        if child.name == ".git":
+            continue
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+    for child in source.iterdir():
+        destination = workspace / child.name
+        if child.is_dir():
+            shutil.copytree(child, destination)
+        else:
+            shutil.copy2(child, destination)
+    return {"restored": True}

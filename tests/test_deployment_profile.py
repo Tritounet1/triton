@@ -86,6 +86,19 @@ def test_web_profile_allows_multi_agent_settings_only_when_remote_workspaces_ena
     )
 
 
+def test_web_profile_allows_snapshot_routes_only_when_remote_workspaces_enabled():
+    assert not path_is_allowed(DeploymentProfile.WEB, "/sessions/session-1/snapshots")
+    assert not path_is_allowed(DeploymentProfile.WEB, "/sessions/session-1/snapshot/restore")
+    assert path_is_allowed(
+        DeploymentProfile.WEB, "/sessions/session-1/snapshots", remote_workspaces_enabled=True
+    )
+    assert path_is_allowed(
+        DeploymentProfile.WEB,
+        "/sessions/session-1/snapshot/restore",
+        remote_workspaces_enabled=True,
+    )
+
+
 def test_web_profile_denies_host_and_operator_routes():
     assert path_is_allowed(DeploymentProfile.WEB, "/chat")
     assert path_is_allowed(DeploymentProfile.WEB, "/images/generate")

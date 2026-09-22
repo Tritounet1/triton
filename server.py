@@ -65,13 +65,16 @@ from triton.remote_workspaces import (
     create_remote_workspace,
     delete_remote_task,
     delete_remote_workspace,
+    ensure_remote_snapshot,
     get_remote_task,
     invoke_remote_workspace_tool,
+    list_remote_snapshots,
     list_remote_tasks,
     load_remote_workspace_config,
     normalize_remote_workspace_args,
     remote_workspace_file,
     remote_workspace_tree,
+    restore_remote_snapshot,
     start_remote_task,
     stop_remote_task,
 )
@@ -566,6 +569,20 @@ def _invoke_chat_tool(
         return f"error: {exc}"
 
 
+def _ensure_write_snapshot(
+    project: Project | None, session_id: str, turn_index: int, workspace_id: str | None
+) -> bool:
+    if workspace_id is None:
+        return ensure_snapshot(project, session_id, turn_index)
+    config = REMOTE_WORKSPACE_CONFIG
+    if config is None:
+        return False
+    try:
+        return ensure_remote_snapshot(config, workspace_id, session_id, turn_index)
+    except RemoteWorkspaceError:
+        return False
+
+
 def _require_profile_project_access(project_id: str | None) -> None:
     if not project_is_allowed(DEPLOYMENT_PROFILE, project_id, REMOTE_WORKSPACE_CONFIG is not None):
         raise HTTPException(403, "projects are unavailable in the web deployment profile")
@@ -981,8 +998,9 @@ def run_chat_stream(
                             sandbox_error is None
                             and tool is not None
                             and name in WRITE_TOOL_NAMES
-                            and workspace_id is None
-                            and ensure_snapshot(project, session_id, turn_index)
+                            and _ensure_write_snapshot(
+                                project, session_id, turn_index, workspace_id
+                            )
                         ):
                             yield emit(
                                 "info",
@@ -2236,8 +2254,29 @@ def list_session_snapshots(session_id: str) -> list[SnapshotPoint]:
     write triggered a snapshot (see tools/snapshot.py's ensure_snapshot),
     oldest first. Empty rather than a 404 when there are none: the
     desktop app uses an empty list the same way it used to use a 404, to
-    decide whether to offer a restore action at all."""
+    decide whether to offer a restore action at all. For a remote
+    (workspace://) session, only a restore-to-before-this-turn point
+    exists - no per-file diff/content preview, so `kind` is "remote" and
+    `has_final_state` always false (GET .../snapshot/diff and .../file
+    stay local-only, gracefully 404 for these)."""
     _session_file_path(session_id)
+    remote = _remote_workspace_for_session(session_id)
+    if remote is not None:
+        config, workspace_id = remote
+        try:
+            points = list_remote_snapshots(config, workspace_id, session_id)
+        except RemoteWorkspaceError:
+            return []
+        return [
+            SnapshotPoint(
+                turn_index=cast(int, p["turn_index"]),
+                kind="remote",
+                created_at=cast(str, p["created_at"]),
+                message_preview=_user_message_preview(session_id, cast(int, p["turn_index"])),
+                has_final_state=False,
+            )
+            for p in points
+        ]
     return [
         SnapshotPoint(
             turn_index=s.turn_index,
@@ -2348,8 +2387,18 @@ def restore_session_snapshot(session_id: str, body: SnapshotRestoreRequest) -> d
     session, or a more recent one to only undo back to a specific turn.
     Destructive (see tools/snapshot.py's restore_snapshot) - the desktop
     app is expected to confirm with the user before calling this, the
-    same way it does for any other irreversible action."""
+    same way it does for any other irreversible action. For a remote
+    (workspace://) session, only "before" semantics exist - `state` is
+    ignored, matching the only value /undo ever actually sends."""
     _session_file_path(session_id)
+    remote = _remote_workspace_for_session(session_id)
+    if remote is not None:
+        config, workspace_id = remote
+        try:
+            restore_remote_snapshot(config, workspace_id, session_id, body.turn_index)
+        except RemoteWorkspaceError as exc:
+            raise HTTPException(404, "no snapshot for this session at that turn") from exc
+        return {"restored": True}
     snapshot = get_snapshot(session_id, body.turn_index)
     if snapshot is None:
         raise HTTPException(404, "no snapshot for this session at that turn")
