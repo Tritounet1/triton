@@ -450,6 +450,64 @@ def test_web_profile_deletes_the_remote_workspace_with_its_project(monkeypatch, 
     assert deleted_workspaces == ["project-a"]
 
 
+def test_server_logs_remote_project_creation_and_deletion(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(server, "WEB_AUTH_CONFIG", _web_auth_config())
+    monkeypatch.setattr(
+        server,
+        "REMOTE_WORKSPACE_CONFIG",
+        RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
+    )
+    monkeypatch.setattr(projects, "PROJECTS_FILE", tmp_path / "projects.json")
+    monkeypatch.setattr(server, "create_remote_workspace", lambda config, workspace_id: None)
+    monkeypatch.setattr(server, "delete_remote_workspace", lambda config, workspace_id: None)
+    events: list[tuple[str, str, bool]] = []
+    monkeypatch.setattr(
+        server,
+        "log_event",
+        lambda **kwargs: events.append((kwargs["type"], kwargs["project_id"], kwargs["remote"])),
+    )
+
+    with TestClient(server.app) as client:
+        client.post("/auth/login", json={"username": "admin", "password": "password"})
+        created = client.post("/projects", json={"name": "Mon projet"})
+        project_id = created.json()[0]["id"]
+        client.delete(f"/projects/{project_id}")
+
+    assert events == [
+        ("project_created", project_id, True),
+        ("project_deleted", project_id, True),
+    ]
+
+
+def test_web_profile_sweeps_orphaned_workspaces_at_startup(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(
+        server,
+        "REMOTE_WORKSPACE_CONFIG",
+        RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
+    )
+    monkeypatch.setattr(projects, "PROJECTS_FILE", tmp_path / "projects.json")
+    projects.create_project("Mon projet", "workspace://project-a", "project-a")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        server,
+        "purge_remote_maintenance",
+        lambda config, keep_workspace_ids: (
+            calls.append(keep_workspace_ids)
+            or {
+                "orphaned_workspaces_removed": 0,
+                "expired_snapshots_removed": 0,
+            }
+        ),
+    )
+
+    with TestClient(server.app):
+        pass
+
+    assert calls == [["project-a"]]
+
+
 def _workspace_session(monkeypatch, tmp_path, workspace_id: str = "project-a") -> str:
     sessions_dir = tmp_path / "sessions"
     monkeypatch.setattr(sessions, "SESSIONS_DIR", sessions_dir)

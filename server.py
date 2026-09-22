@@ -72,6 +72,7 @@ from triton.remote_workspaces import (
     list_remote_tasks,
     load_remote_workspace_config,
     normalize_remote_workspace_args,
+    purge_remote_maintenance,
     remote_workspace_file,
     remote_workspace_tree,
     restore_remote_snapshot,
@@ -228,6 +229,24 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             logging.getLogger("uvicorn").info(
                 "purged %d snapshot(s) older than %d days", purged, SNAPSHOT_MAX_AGE_DAYS
             )
+    elif REMOTE_WORKSPACE_CONFIG is not None:
+        keep_workspace_ids = [
+            p.folder_path.removeprefix("workspace://")
+            for p in load_projects()
+            if p.folder_path.startswith("workspace://")
+        ]
+        try:
+            result = purge_remote_maintenance(REMOTE_WORKSPACE_CONFIG, keep_workspace_ids)
+        except RemoteWorkspaceError:
+            logging.getLogger("uvicorn").warning("workspace maintenance sweep failed at startup")
+        else:
+            if result["orphaned_workspaces_removed"] or result["expired_snapshots_removed"]:
+                logging.getLogger("uvicorn").info(
+                    "workspace maintenance: removed %d orphaned workspace(s), "
+                    "%d expired snapshot(s)",
+                    result["orphaned_workspaces_removed"],
+                    result["expired_snapshots_removed"],
+                )
     if agentic_background_work_enabled:
         scheduler_thread = threading.Thread(target=_scheduled_tasks_poll_loop, daemon=True)
         scheduler_thread.start()
@@ -2553,11 +2572,13 @@ def add_project(body: ProjectCreate) -> list[Project]:
         except RemoteWorkspaceError as exc:
             raise HTTPException(503, str(exc)) from exc
         create_project(body.name, f"workspace://{project_id}", project_id)
+        log_event(type="project_created", project_id=project_id, remote=True)
         return load_projects()
     folder = Path(body.folder_path)
     if not folder.is_dir():
         raise HTTPException(400, "folder not found")
-    create_project(body.name, str(folder))
+    project = create_project(body.name, str(folder))
+    log_event(type="project_created", project_id=project.id, remote=False)
     return load_projects()
 
 
@@ -2583,6 +2604,11 @@ def remove_project(project_id: str) -> list[Project]:
             raise HTTPException(503, str(exc)) from exc
     else:
         discard_snapshots_for_project(project_id)
+    log_event(
+        type="project_deleted",
+        project_id=project_id,
+        remote=project.folder_path.startswith("workspace://"),
+    )
     delete_project(project_id)
     for session_id in (p.stem for p in SESSIONS_DIR.glob("*.json")):
         if load_session_project(session_id) == project_id:
