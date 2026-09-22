@@ -42,7 +42,6 @@ REMOTE_WORKSPACE_TOOL_NAMES = frozenset(
 )
 
 WEB_DENIED_PATH_PREFIXES = (
-    "/backup",
     "/background_tasks",
     "/orchestrator",
     "/projects",

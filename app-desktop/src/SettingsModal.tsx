@@ -81,6 +81,7 @@ const WEB_CATEGORY_IDS: SettingsCategory[] = [
   "mcp",
   "memory",
   "logs",
+  "backup",
 ];
 const WEB_REMOTE_WORKSPACE_CATEGORY_IDS: SettingsCategory[] = [
   "multi_agent_roles",
