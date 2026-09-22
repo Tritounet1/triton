@@ -221,7 +221,7 @@ def _check_hard_denylist(name: str, args: dict[str, object]) -> str | None:
 
 
 def enforce_project_sandbox(
-    name: str, args: dict[str, object], project: Project | None
+    name: str, args: dict[str, object], project: Project | None, remote_workspace: bool = False
 ) -> str | None:
     """Returns an error message if a tool call is disallowed, or None if
     it's allowed. Three things it enforces:
@@ -257,6 +257,9 @@ def enforce_project_sandbox(
             "the local filesystem or run commands at all, to avoid reading or "
             "modifying anything outside whatever a project explicitly scopes it to."
         )
+
+    if remote_workspace:
+        return None
 
     root = Path(project.folder_path).resolve()
 

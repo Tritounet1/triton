@@ -4,7 +4,6 @@ import { Button } from "@astryxdesign/core/Button";
 import { IconButton } from "@astryxdesign/core/IconButton";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
-import { open as openFolderDialog } from "@tauri-apps/plugin-dialog";
 import { FolderIcon, XIcon } from "./icons";
 
 import { API_BASE } from "./api";
@@ -19,12 +18,18 @@ interface NewProjectModalProps {
   isOpen: boolean;
   onClose: () => void;
   onCreated: (projects: Project[]) => void;
+  isWebDeployment?: boolean;
 }
 
 /** Modale de creation de projet, style Claude Desktop (titre, champ nom,
  * bouton dossier, Annuler/Creer) plutot que le formulaire replie dans la
  * sidebar - ferme au clic en dehors ou sur Echap comme SettingsModal. */
-export function NewProjectModal({ isOpen, onClose, onCreated }: NewProjectModalProps) {
+export function NewProjectModal({
+  isOpen,
+  onClose,
+  onCreated,
+  isWebDeployment = false,
+}: NewProjectModalProps) {
   const [name, setName] = useState("");
   const [folder, setFolder] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -43,12 +48,13 @@ export function NewProjectModal({ isOpen, onClose, onCreated }: NewProjectModalP
   }
 
   async function pickFolder() {
+    const { open: openFolderDialog } = await import("@tauri-apps/plugin-dialog");
     const picked = await openFolderDialog({ directory: true, multiple: false });
     if (typeof picked === "string") setFolder(picked);
   }
 
   async function submit() {
-    if (!name.trim() || !folder.trim()) {
+    if (!name.trim() || (!isWebDeployment && !folder.trim())) {
       setError("le nom et le dossier sont obligatoires.");
       return;
     }
@@ -59,7 +65,9 @@ export function NewProjectModal({ isOpen, onClose, onCreated }: NewProjectModalP
       const res = await fetch(`${API_BASE}/projects`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), folder_path: folder.trim() }),
+        body: JSON.stringify(
+          isWebDeployment ? { name: name.trim() } : { name: name.trim(), folder_path: folder.trim() },
+        ),
       });
 
       if (!res.ok) {
@@ -71,7 +79,7 @@ export function NewProjectModal({ isOpen, onClose, onCreated }: NewProjectModalP
       onCreated((await res.json()) as Project[]);
       handleClose();
     } catch {
-      setError("impossible de contacter l'API Triton (127.0.0.1:8000).");
+      setError("impossible de contacter l'API Triton.");
     } finally {
       setCreating(false);
     }
@@ -115,20 +123,26 @@ export function NewProjectModal({ isOpen, onClose, onCreated }: NewProjectModalP
           />
         </div>
 
-        <div className="flex flex-col gap-1.5">
-          <Text size="sm" weight="medium">
-            Dossier de travail
+        {isWebDeployment ? (
+          <Text size="sm" color="secondary">
+            Un workspace isolé sera créé pour ce projet.
           </Text>
-          <Button
-            label={folder || "Utiliser un dossier"}
-            icon={<FolderIcon />}
-            variant="secondary"
-            onClick={() => {
-              void pickFolder();
-            }}
-            className="justify-start truncate"
-          />
-        </div>
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            <Text size="sm" weight="medium">
+              Dossier de travail
+            </Text>
+            <Button
+              label={folder || "Utiliser un dossier"}
+              icon={<FolderIcon />}
+              variant="secondary"
+              onClick={() => {
+                void pickFolder();
+              }}
+              className="justify-start truncate"
+            />
+          </div>
+        )}
 
         {error && (
           <Text size="sm" className="text-error">

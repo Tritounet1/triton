@@ -557,6 +557,7 @@ function App() {
   const [deletingSession, setDeletingSession] = useState<Session | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [remoteProjectsEnabled, setRemoteProjectsEnabled] = useState(!isWebDeployment);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [showProjectForm, setShowProjectForm] = useState(false);
   const [deletingProject, setDeletingProject] = useState<Project | null>(null);
@@ -914,7 +915,19 @@ function App() {
           list.find((s) => s.id === stored)?.project_id ?? null,
         );
     });
-    if (!isWebDeployment) loadProjects();
+    if (!isWebDeployment) {
+      loadProjects();
+      return;
+    }
+    fetch(`${API_BASE}/deployment/capabilities`)
+      .then((r) => (r.ok ? r.json() : { remote_workspaces: false }))
+      .then((data: { remote_workspaces: boolean }) => {
+        setRemoteProjectsEnabled(data.remote_workspaces);
+        if (data.remote_workspaces) loadProjects();
+      })
+      .catch(() => {
+        setRemoteProjectsEnabled(false);
+      });
   }, []);
 
   // relance automatiquement le modele une fois qu'un sous-agent dispatche
@@ -1618,7 +1631,7 @@ function App() {
       header={sidebarHeader.header}
       topContent={sidebarHeader.topContent}
     >
-      {!isWebDeployment && <ProjectSidebarSection
+      {remoteProjectsEnabled && <ProjectSidebarSection
         projects={projects}
         sessions={sessions}
         activeProjectId={activeProjectId}
@@ -2502,7 +2515,7 @@ function App() {
                       })()}
                   </ChatMessageList>
                 </ChatLayout>
-                {!isWebDeployment && (activeProject && openFile ? (
+                {remoteProjectsEnabled && activeProject && openFile ? (
                   <FileViewerPanel
                     key={`${openFile.projectId}:${openFile.path}`}
                     file={openFile}
@@ -2510,7 +2523,7 @@ function App() {
                       setOpenFile(null);
                     }}
                   />
-                ) : activeProject ? (
+                ) : remoteProjectsEnabled && activeProject ? (
                   <ProjectFilePanel
                     projectId={activeProject.id}
                     projectName={activeProject.name}
@@ -2525,6 +2538,7 @@ function App() {
                     onStopTask={stopTask}
                     onDeleteTask={deleteTask}
                     onOpenFile={setOpenFile}
+                    showSnapshots={!isWebDeployment}
                   />
                 ) : (
                   <BackgroundTasksPanel
@@ -2533,7 +2547,7 @@ function App() {
                     onStop={stopTask}
                     onDelete={deleteTask}
                   />
-                ))}
+                )}
               </div>
             )}
           </AppShell>
@@ -2584,7 +2598,7 @@ function App() {
         onAction={confirmDeleteSession}
       />
 
-      {!isWebDeployment && <AlertDialog
+      {remoteProjectsEnabled && <AlertDialog
         isOpen={deletingProject !== null}
         onOpenChange={(isOpen) => {
           if (!isOpen) setDeletingProject(null);
@@ -2619,12 +2633,13 @@ function App() {
         onImageModelChanged={refreshImageModel}
       />
 
-      {!isWebDeployment && <NewProjectModal
+      {remoteProjectsEnabled && <NewProjectModal
         isOpen={showProjectForm}
         onClose={() => {
           setShowProjectForm(false);
         }}
         onCreated={setProjects}
+        isWebDeployment={isWebDeployment}
       />}
     </Theme>
   );

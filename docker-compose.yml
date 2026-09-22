@@ -21,8 +21,6 @@ services:
     restart: unless-stopped
 
   workspace:
-    profiles:
-      - workspaces
     build:
       context: .
       dockerfile: workspace/Dockerfile

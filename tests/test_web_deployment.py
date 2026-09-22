@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 import server
 from triton.deployment import DeploymentProfile, WebAuthConfig
-from triton.remote_workspaces import RemoteWorkspaceConfig
+from triton.remote_workspaces import RemoteWorkspaceConfig, normalize_remote_workspace_args
 from triton.storage import projects
 from triton.web_runtime import SlidingWindowRateLimiter, WebRuntimeConfig
 
@@ -20,10 +20,65 @@ def _tool_names() -> set[str]:
 
 def test_web_profile_only_advertises_safe_remote_tools(monkeypatch):
     monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(server, "REMOTE_WORKSPACE_CONFIG", None)
 
     names = _tool_names()
 
     assert names == {"fetch_url", "show_link_preview", "show_map", "web_search"}
+
+
+def test_web_profile_advertises_isolated_project_tools_with_a_workspace(monkeypatch):
+    monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(
+        server,
+        "REMOTE_WORKSPACE_CONFIG",
+        RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
+    )
+
+    names = _tool_names()
+
+    assert {
+        "read_file",
+        "list_files",
+        "write_file",
+        "edit_file",
+        "delete_file",
+        "move_file",
+        "run_shell",
+    }.issubset(names)
+
+
+def test_remote_workspace_tool_arguments_stay_in_the_selected_workspace():
+    assert normalize_remote_workspace_args(
+        "project-a",
+        "write_file",
+        {"path": "workspace://project-a/src/main.py", "content": "print('ok')"},
+    ) == {"path": "src/main.py", "content": "print('ok')"}
+
+
+def test_server_invokes_project_tools_through_the_workspace_runner(monkeypatch):
+    monkeypatch.setattr(
+        server,
+        "REMOTE_WORKSPACE_CONFIG",
+        RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
+    )
+    calls: list[tuple[str, str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        server,
+        "invoke_remote_workspace_tool",
+        lambda config, workspace_id, name, args: calls.append((workspace_id, name, args)) or "done",
+    )
+
+    result = server._invoke_chat_tool(
+        server.TOOLS_REGISTRY["write_file"],
+        "write_file",
+        {"path": "main.py", "content": "print('ok')"},
+        "session-a",
+        "project-a",
+    )
+
+    assert result == "done"
+    assert calls == [("project-a", "write_file", {"path": "main.py", "content": "print('ok')"})]
 
 
 def test_desktop_profile_keeps_local_tools(monkeypatch):
@@ -114,6 +169,66 @@ def test_web_profile_creates_projects_in_the_remote_workspace(monkeypatch, tmp_p
     project = response.json()[0]
     assert project["folder_path"] == f"workspace://{project['id']}"
     assert created_workspaces == [project["id"]]
+
+
+def test_web_profile_reads_remote_project_files(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(server, "WEB_AUTH_CONFIG", _web_auth_config())
+    monkeypatch.setattr(
+        server,
+        "REMOTE_WORKSPACE_CONFIG",
+        RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
+    )
+    monkeypatch.setattr(projects, "PROJECTS_FILE", tmp_path / "projects.json")
+    projects.create_project("Mon projet", "workspace://project-a", "project-a")
+    monkeypatch.setattr(
+        server,
+        "remote_workspace_tree",
+        lambda config, workspace_id: {"tree": [{"name": "readme.md"}], "truncated": False},
+    )
+    monkeypatch.setattr(
+        server,
+        "remote_workspace_file",
+        lambda config, workspace_id, path: (b"# Triton", "text/markdown"),
+    )
+
+    with TestClient(server.app) as client:
+        login = client.post("/auth/login", json={"username": "admin", "password": "password"})
+        tree = client.get("/projects/project-a/tree")
+        file = client.get("/projects/project-a/file", params={"path": "readme.md"})
+        capabilities = client.get("/deployment/capabilities")
+
+    assert login.status_code == 200
+    assert tree.json() == {"tree": [{"name": "readme.md"}], "truncated": False}
+    assert file.content == b"# Triton"
+    assert file.headers["content-type"] == "text/markdown; charset=utf-8"
+    assert capabilities.json() == {"remote_workspaces": True}
+
+
+def test_web_profile_deletes_the_remote_workspace_with_its_project(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(server, "WEB_AUTH_CONFIG", _web_auth_config())
+    monkeypatch.setattr(
+        server,
+        "REMOTE_WORKSPACE_CONFIG",
+        RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
+    )
+    monkeypatch.setattr(projects, "PROJECTS_FILE", tmp_path / "projects.json")
+    projects.create_project("Mon projet", "workspace://project-a", "project-a")
+    deleted_workspaces: list[str] = []
+    monkeypatch.setattr(
+        server,
+        "delete_remote_workspace",
+        lambda config, workspace_id: deleted_workspaces.append(workspace_id),
+    )
+
+    with TestClient(server.app) as client:
+        login = client.post("/auth/login", json={"username": "admin", "password": "password"})
+        response = client.delete("/projects/project-a")
+
+    assert login.status_code == 200
+    assert response.json() == []
+    assert deleted_workspaces == ["project-a"]
 
 
 def test_web_profile_allows_image_generation_in_a_conversation(monkeypatch, tmp_path):
