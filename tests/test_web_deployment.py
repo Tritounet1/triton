@@ -164,6 +164,36 @@ def test_server_lists_and_stops_background_tasks_through_the_workspace_runner(mo
     assert stopped_result == "task task-1 stopped"
 
 
+def test_server_invokes_mcp_tools_locally_even_inside_a_remote_workspace(monkeypatch):
+    monkeypatch.setattr(
+        server,
+        "REMOTE_WORKSPACE_CONFIG",
+        RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
+    )
+    calls: list[tuple[str, dict[str, object], str]] = []
+    monkeypatch.setattr(
+        server,
+        "invoke_tool",
+        lambda tool, name, args, session_id: calls.append((name, args, session_id)) or "done",
+    )
+    monkeypatch.setattr(
+        server,
+        "invoke_remote_workspace_tool",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("should not reach the runner")),
+    )
+
+    result = server._invoke_chat_tool(
+        server.TOOLS_REGISTRY.get("mcp__example__tool", server.TOOLS_REGISTRY["write_file"]),
+        "mcp__example__tool",
+        {"query": "hi"},
+        "session-a",
+        "project-a",
+    )
+
+    assert result == "done"
+    assert calls == [("mcp__example__tool", {"query": "hi"}, "session-a")]
+
+
 def test_desktop_profile_keeps_local_tools(monkeypatch):
     monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.DESKTOP)
 
