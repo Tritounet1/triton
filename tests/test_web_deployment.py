@@ -6,7 +6,11 @@ from fastapi.testclient import TestClient
 
 import server
 from triton.deployment import DeploymentProfile, WebAuthConfig
-from triton.remote_workspaces import RemoteWorkspaceConfig, normalize_remote_workspace_args
+from triton.remote_workspaces import (
+    RemoteWorkspaceConfig,
+    mcp_session_workspace_id,
+    normalize_remote_workspace_args,
+)
 from triton.storage import projects, sessions
 from triton.web_runtime import SlidingWindowRateLimiter, WebRuntimeConfig
 
@@ -56,7 +60,7 @@ def test_web_profile_advertises_isolated_project_tools_with_a_workspace(monkeypa
     }.issubset(names)
 
 
-def test_web_profile_advertises_only_runner_mcp_tools_for_a_workspace(monkeypatch):
+def test_web_profile_advertises_runner_mcp_tools_without_a_project(monkeypatch):
     monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
     monkeypatch.setattr(
         server,
@@ -78,9 +82,52 @@ def test_web_profile_advertises_only_runner_mcp_tools_for_a_workspace(monkeypatc
         ],
     )
 
-    names = {schema["function"]["name"] for schema in server._active_tool_schemas("project-a")}
+    names = {schema["function"]["name"] for schema in server._active_tool_schemas()}
 
     assert "mcp__runner__search" in names
+
+
+def test_web_mcp_uses_a_dedicated_workspace_for_a_projectless_session(monkeypatch):
+    monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(
+        server,
+        "REMOTE_WORKSPACE_CONFIG",
+        RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
+    )
+    created: list[str] = []
+    monkeypatch.setattr(
+        server,
+        "ensure_remote_mcp_session_workspace",
+        lambda config, session_id: created.append(session_id) or "mcp-session-test",
+    )
+
+    workspace_id = server._mcp_execution_workspace("session-a", None)
+
+    assert workspace_id == "mcp-session-test"
+    assert created == ["session-a"]
+    assert mcp_session_workspace_id("session-a") == mcp_session_workspace_id("session-a")
+    assert mcp_session_workspace_id("session-a") != mcp_session_workspace_id("session-b")
+
+
+def test_deleting_a_projectless_web_session_removes_its_mcp_workspace(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(
+        server,
+        "REMOTE_WORKSPACE_CONFIG",
+        RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
+    )
+    monkeypatch.setattr(sessions, "SESSIONS_DIR", tmp_path / "sessions")
+    session_path = sessions.new_session_path()
+    sessions.save_session(session_path, [])
+    removed: list[str] = []
+    monkeypatch.setattr(
+        server,
+        "delete_remote_workspace",
+        lambda config, workspace_id: removed.append(workspace_id),
+    )
+
+    assert server.remove_session(session_path.stem) == {"ok": True}
+    assert removed == [mcp_session_workspace_id(session_path.stem)]
 
 
 def test_server_invokes_project_mcp_tools_through_the_workspace_runner(monkeypatch):
@@ -577,6 +624,7 @@ def test_web_profile_sweeps_orphaned_workspaces_at_startup(monkeypatch, tmp_path
         RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
     )
     monkeypatch.setattr(projects, "PROJECTS_FILE", tmp_path / "projects.json")
+    monkeypatch.setattr(server, "SESSIONS_DIR", tmp_path / "sessions")
     projects.create_project("Mon projet", "workspace://project-a", "project-a")
     calls: list[list[str]] = []
     monkeypatch.setattr(
@@ -595,6 +643,33 @@ def test_web_profile_sweeps_orphaned_workspaces_at_startup(monkeypatch, tmp_path
         pass
 
     assert calls == [["project-a"]]
+
+
+def test_web_profile_preserves_mcp_workspaces_for_existing_sessions(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(
+        server,
+        "REMOTE_WORKSPACE_CONFIG",
+        RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
+    )
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    (sessions_dir / "session-a.json").write_text("[]")
+    monkeypatch.setattr(server, "SESSIONS_DIR", sessions_dir)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        server,
+        "purge_remote_maintenance",
+        lambda config, keep_workspace_ids: (
+            calls.append(keep_workspace_ids)
+            or {"orphaned_workspaces_removed": 0, "expired_snapshots_removed": 0}
+        ),
+    )
+
+    with TestClient(server.app):
+        pass
+
+    assert calls == [[mcp_session_workspace_id("session-a")]]
 
 
 def _workspace_session(monkeypatch, tmp_path, workspace_id: str = "project-a") -> str:
