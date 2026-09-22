@@ -40,6 +40,7 @@ def normalize_remote_workspace_args(
         "delete_file": ("path",),
         "move_file": ("source", "destination"),
         "run_shell": ("directory",),
+        "start_background_task": ("directory",),
     }.get(name, ()):
         if key in normalized:
             normalized[key] = _relative_workspace_path(workspace_id, normalized[key])
@@ -148,3 +149,76 @@ def invoke_remote_workspace_tool(
     if not isinstance(result, str):
         raise RemoteWorkspaceError("workspace runner returned an invalid response")
     return result
+
+
+def _post(
+    config: RemoteWorkspaceConfig, path: str, json_body: dict[str, object] | None = None
+) -> requests.Response:
+    try:
+        response = requests.post(
+            f"{config.base_url}{path}",
+            headers={"X-Triton-Workspace-Token": config.token},
+            json=cast(dict[str, Any], json_body),
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        raise RemoteWorkspaceError("workspace runner is unavailable") from exc
+    if not response.ok:
+        raise RemoteWorkspaceError("workspace runner rejected the request")
+    return response
+
+
+def start_remote_task(
+    config: RemoteWorkspaceConfig,
+    workspace_id: str,
+    session_id: str,
+    command: str,
+    name: str = "",
+    directory: str = "",
+) -> dict[str, object]:
+    response = _post(
+        config,
+        f"/workspaces/{workspace_id}/tasks",
+        {
+            "session_id": session_id,
+            "command": command,
+            "name": name,
+            "directory": directory or ".",
+        },
+    )
+    return cast(dict[str, object], response.json())
+
+
+def list_remote_tasks(
+    config: RemoteWorkspaceConfig, workspace_id: str, session_id: str | None = None
+) -> list[dict[str, object]]:
+    params = {"session_id": session_id} if session_id else None
+    response = _request(config, f"/workspaces/{workspace_id}/tasks", params)
+    return cast(list[dict[str, object]], response.json())
+
+
+def get_remote_task(
+    config: RemoteWorkspaceConfig, workspace_id: str, task_id: str
+) -> dict[str, object]:
+    response = _request(config, f"/workspaces/{workspace_id}/tasks/{task_id}")
+    return cast(dict[str, object], response.json())
+
+
+def stop_remote_task(
+    config: RemoteWorkspaceConfig, workspace_id: str, task_id: str
+) -> dict[str, object]:
+    response = _post(config, f"/workspaces/{workspace_id}/tasks/{task_id}/stop")
+    return cast(dict[str, object], response.json())
+
+
+def delete_remote_task(config: RemoteWorkspaceConfig, workspace_id: str, task_id: str) -> None:
+    try:
+        response = requests.delete(
+            f"{config.base_url}/workspaces/{workspace_id}/tasks/{task_id}",
+            headers={"X-Triton-Workspace-Token": config.token},
+            timeout=10,
+        )
+    except requests.RequestException as exc:
+        raise RemoteWorkspaceError("workspace runner is unavailable") from exc
+    if not response.ok:
+        raise RemoteWorkspaceError("workspace runner rejected the request")

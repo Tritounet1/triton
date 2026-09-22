@@ -1,7 +1,12 @@
+import contextlib
+import json
 import os
 import re
 import shutil
+import signal
 import subprocess
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
@@ -12,6 +17,8 @@ from pydantic import BaseModel, Field
 WORKSPACE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 WORKSPACES_DIR = Path(os.getenv("TRITON_WORKSPACES_DIR", "/workspaces"))
 WORKSPACE_TOKEN = os.getenv("TRITON_WORKSPACE_TOKEN", "")
+TASKS_DIR = WORKSPACES_DIR / ".tasks"
+MAX_CONCURRENT_TASKS = 5
 
 app = FastAPI(title="Triton Workspace Runner", docs_url=None, redoc_url=None)
 
@@ -23,6 +30,13 @@ class WorkspaceCreateRequest(BaseModel):
 class WorkspaceToolRequest(BaseModel):
     name: str
     args: dict[str, object]
+
+
+class WorkspaceTaskRequest(BaseModel):
+    session_id: str
+    command: str = Field(min_length=1)
+    name: str = ""
+    directory: str = "."
 
 
 def _require_token(token: str | None) -> None:
@@ -48,6 +62,35 @@ def _tool_path(workspace_id: str, value: object) -> Path:
     if not isinstance(value, str) or not value:
         raise ValueError("a non-empty path is required")
     return _workspace_file(workspace_id, value)
+
+
+def _task_file(task_id: str) -> Path:
+    return TASKS_DIR / f"{task_id}.json"
+
+
+def _load_task(task_id: str) -> dict[str, object] | None:
+    try:
+        return json.loads(_task_file(task_id).read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def _save_task(task: dict[str, object]) -> None:
+    TASKS_DIR.mkdir(parents=True, exist_ok=True)
+    _task_file(str(task["id"])).write_text(json.dumps(task))
+
+
+def _refresh_task(task: dict[str, object]) -> dict[str, object]:
+    if task["status"] != "running":
+        return task
+    pid = task.get("pid")
+    if isinstance(pid, int):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            task["status"] = "exited"
+            _save_task(task)
+    return task
 
 
 def _run_tool(workspace_id: str, name: str, args: dict[str, object]) -> str:
@@ -225,3 +268,120 @@ def workspace_tool(
         return {"result": _run_tool(workspace_id, body.name, body.args)}
     except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
         return {"result": f"error: {exc}"}
+
+
+def _running_task_count() -> int:
+    return sum(
+        1
+        for path in TASKS_DIR.glob("*.json")
+        if (task := _load_task(path.stem)) and _refresh_task(task)["status"] == "running"
+    )
+
+
+@app.post("/workspaces/{workspace_id}/tasks")
+def start_task(
+    workspace_id: str,
+    body: WorkspaceTaskRequest,
+    x_triton_workspace_token: str | None = Header(default=None),
+) -> dict[str, object]:
+    _require_token(x_triton_workspace_token)
+    TASKS_DIR.mkdir(parents=True, exist_ok=True)
+    if _running_task_count() >= MAX_CONCURRENT_TASKS:
+        raise HTTPException(429, f"{MAX_CONCURRENT_TASKS} background tasks are already running")
+    directory = _tool_path(workspace_id, body.directory)
+    task_id = uuid.uuid4().hex[:12]
+    log_path = TASKS_DIR / f"{task_id}.log"
+    with log_path.open("wb") as log_file:
+        process = subprocess.Popen(
+            body.command,
+            shell=True,
+            cwd=directory,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    task: dict[str, object] = {
+        "id": task_id,
+        "workspace_id": workspace_id,
+        "session_id": body.session_id,
+        "name": body.name or body.command,
+        "command": body.command,
+        "directory": str(directory.relative_to(_workspace_path(workspace_id))),
+        "status": "running",
+        "pid": process.pid,
+        "created_at": datetime.now(UTC).isoformat(),
+    }
+    _save_task(task)
+    return task
+
+
+@app.get("/workspaces/{workspace_id}/tasks")
+def list_tasks(
+    workspace_id: str,
+    session_id: str | None = None,
+    x_triton_workspace_token: str | None = Header(default=None),
+) -> list[dict[str, object]]:
+    _require_token(x_triton_workspace_token)
+    tasks = [
+        _refresh_task(task) for path in TASKS_DIR.glob("*.json") if (task := _load_task(path.stem))
+    ]
+    return [
+        task
+        for task in tasks
+        if task["workspace_id"] == workspace_id
+        and (not session_id or task["session_id"] == session_id)
+    ]
+
+
+def _resolve_task(workspace_id: str, task_id: str) -> dict[str, object]:
+    task = _load_task(task_id)
+    if task is None or task.get("workspace_id") != workspace_id:
+        raise HTTPException(404, "task not found")
+    return _refresh_task(task)
+
+
+@app.get("/workspaces/{workspace_id}/tasks/{task_id}")
+def get_task(
+    workspace_id: str,
+    task_id: str,
+    x_triton_workspace_token: str | None = Header(default=None),
+) -> dict[str, object]:
+    _require_token(x_triton_workspace_token)
+    task = _resolve_task(workspace_id, task_id)
+    log_path = TASKS_DIR / f"{task_id}.log"
+    return {
+        **task,
+        "logs": log_path.read_text(errors="replace")[-524288:] if log_path.exists() else "",
+    }
+
+
+@app.post("/workspaces/{workspace_id}/tasks/{task_id}/stop")
+def stop_task(
+    workspace_id: str,
+    task_id: str,
+    x_triton_workspace_token: str | None = Header(default=None),
+) -> dict[str, object]:
+    _require_token(x_triton_workspace_token)
+    task = _resolve_task(workspace_id, task_id)
+    pid = task.get("pid")
+    if task["status"] == "running" and isinstance(pid, int):
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(pid, signal.SIGTERM)
+        task["status"] = "stopped"
+        _save_task(task)
+    return task
+
+
+@app.delete("/workspaces/{workspace_id}/tasks/{task_id}")
+def delete_task(
+    workspace_id: str,
+    task_id: str,
+    x_triton_workspace_token: str | None = Header(default=None),
+) -> dict[str, bool]:
+    _require_token(x_triton_workspace_token)
+    task = _resolve_task(workspace_id, task_id)
+    if task["status"] == "running":
+        raise HTTPException(409, "task is still running, stop it before deleting it")
+    _task_file(task_id).unlink(missing_ok=True)
+    (TASKS_DIR / f"{task_id}.log").unlink(missing_ok=True)
+    return {"deleted": True}
