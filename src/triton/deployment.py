@@ -50,16 +50,22 @@ def tool_is_allowed(profile: DeploymentProfile, tool_name: str) -> bool:
     return profile is DeploymentProfile.DESKTOP or tool_name in WEB_TOOL_NAMES
 
 
-def path_is_allowed(profile: DeploymentProfile, path: str) -> bool:
+def path_is_allowed(
+    profile: DeploymentProfile, path: str, remote_workspaces_enabled: bool = False
+) -> bool:
     if profile is DeploymentProfile.DESKTOP:
         return True
     if path in WEB_DENIED_PATHS or any(segment in path for segment in WEB_DENIED_PATH_SEGMENTS):
         return False
+    if path.startswith("/projects") and remote_workspaces_enabled:
+        return True
     return not path.startswith(WEB_DENIED_PATH_PREFIXES)
 
 
-def project_is_allowed(profile: DeploymentProfile, project_id: str | None) -> bool:
-    return profile is DeploymentProfile.DESKTOP or project_id is None
+def project_is_allowed(
+    profile: DeploymentProfile, project_id: str | None, remote_workspaces_enabled: bool = False
+) -> bool:
+    return profile is DeploymentProfile.DESKTOP or project_id is None or remote_workspaces_enabled
 
 
 @dataclass(frozen=True)

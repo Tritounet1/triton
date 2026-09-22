@@ -40,9 +40,9 @@ def get_project(project_id: str) -> Project | None:
     return next((p for p in load_projects() if p.id == project_id), None)
 
 
-def create_project(name: str, folder_path: str) -> Project:
+def create_project(name: str, folder_path: str, project_id: str | None = None) -> Project:
     projects = load_projects()
-    project = Project(id=uuid.uuid4().hex, name=name, folder_path=folder_path)
+    project = Project(id=project_id or uuid.uuid4().hex, name=name, folder_path=folder_path)
     projects.append(project)
     save_projects(projects)
     return project

@@ -5,6 +5,8 @@ from fastapi.testclient import TestClient
 
 import server
 from triton.deployment import DeploymentProfile, WebAuthConfig
+from triton.remote_workspaces import RemoteWorkspaceConfig
+from triton.storage import projects
 from triton.web_runtime import SlidingWindowRateLimiter, WebRuntimeConfig
 
 
@@ -33,6 +35,7 @@ def test_desktop_profile_keeps_local_tools(monkeypatch):
 
 def test_web_profile_rejects_host_management_routes(monkeypatch):
     monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(server, "REMOTE_WORKSPACE_CONFIG", None)
 
     with TestClient(server.app) as client:
         response = client.get("/projects")
@@ -72,6 +75,7 @@ def test_web_profile_serves_frontend_images_after_login(monkeypatch, tmp_path):
 def test_web_profile_rejects_project_scoped_chat(monkeypatch):
     monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
     monkeypatch.setattr(server, "WEB_AUTH_CONFIG", _web_auth_config())
+    monkeypatch.setattr(server, "REMOTE_WORKSPACE_CONFIG", None)
 
     with TestClient(server.app) as client:
         login = client.post("/auth/login", json={"username": "admin", "password": "password"})
@@ -83,6 +87,33 @@ def test_web_profile_rejects_project_scoped_chat(monkeypatch):
     assert login.status_code == 200
     assert response.status_code == 403
     assert response.json()["detail"] == "projects are unavailable in the web deployment profile"
+
+
+def test_web_profile_creates_projects_in_the_remote_workspace(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(server, "WEB_AUTH_CONFIG", _web_auth_config())
+    monkeypatch.setattr(
+        server,
+        "REMOTE_WORKSPACE_CONFIG",
+        RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
+    )
+    monkeypatch.setattr(projects, "PROJECTS_FILE", tmp_path / "projects.json")
+    created_workspaces: list[str] = []
+    monkeypatch.setattr(
+        server,
+        "create_remote_workspace",
+        lambda config, workspace_id: created_workspaces.append(workspace_id),
+    )
+
+    with TestClient(server.app) as client:
+        login = client.post("/auth/login", json={"username": "admin", "password": "password"})
+        response = client.post("/projects", json={"name": "Mon projet"})
+
+    assert login.status_code == 200
+    assert response.status_code == 200
+    project = response.json()[0]
+    assert project["folder_path"] == f"workspace://{project['id']}"
+    assert created_workspaces == [project["id"]]
 
 
 def test_web_profile_allows_image_generation_in_a_conversation(monkeypatch, tmp_path):

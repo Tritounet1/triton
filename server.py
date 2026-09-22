@@ -59,6 +59,11 @@ from triton.llm.chat_loop import (
 )
 from triton.llm.model_roles import ROLE_MODELS
 from triton.paths import ROOT_DIR
+from triton.remote_workspaces import (
+    RemoteWorkspaceError,
+    create_remote_workspace,
+    load_remote_workspace_config,
+)
 from triton.storage import scheduled_tasks
 from triton.storage.logs import LOGS_FILE, current_month_cost, events_for_month, log_event
 from triton.storage.memory import append_global_memory, load_global_memory, set_global_memory
@@ -168,6 +173,7 @@ LOCAL_API_TOKEN_HEADER = "X-Triton-Local-Token"
 DEPLOYMENT_PROFILE = load_deployment_profile()
 WEB_AUTH_CONFIG = load_web_auth_config()
 WEB_RUNTIME_CONFIG = load_web_runtime_config()
+REMOTE_WORKSPACE_CONFIG = load_remote_workspace_config()
 WEB_RATE_LIMITER = SlidingWindowRateLimiter(WEB_RUNTIME_CONFIG)
 WEB_AUTH_PUBLIC_PATHS = {"/", "/auth/login", "/auth/session", "/health"}
 WEB_FRONTEND_DIR = Path(__file__).resolve().parent / "app-desktop" / "dist"
@@ -406,7 +412,9 @@ async def require_local_api_token(request: Request, call_next):
                     status_code=429,
                 )
                 return response
-        if not path_is_allowed(DEPLOYMENT_PROFILE, request.url.path):
+        if not path_is_allowed(
+            DEPLOYMENT_PROFILE, request.url.path, REMOTE_WORKSPACE_CONFIG is not None
+        ):
             response = Response(
                 content='{"detail":"this endpoint is unavailable in the web deployment profile"}',
                 media_type="application/json",
@@ -469,7 +477,7 @@ def _active_tool_schemas() -> list[ChatCompletionToolParam]:
 
 
 def _require_profile_project_access(project_id: str | None) -> None:
-    if not project_is_allowed(DEPLOYMENT_PROFILE, project_id):
+    if not project_is_allowed(DEPLOYMENT_PROFILE, project_id, REMOTE_WORKSPACE_CONFIG is not None):
         raise HTTPException(403, "projects are unavailable in the web deployment profile")
 
 
@@ -572,7 +580,7 @@ class MCPServerToggle(BaseModel):
 
 class ProjectCreate(BaseModel):
     name: str
-    folder_path: str
+    folder_path: str = ""
 
 
 class ProjectRename(BaseModel):
@@ -2352,6 +2360,17 @@ def list_projects() -> list[Project]:
 
 @app.post("/projects", tags=["Projects"])
 def add_project(body: ProjectCreate) -> list[Project]:
+    if DEPLOYMENT_PROFILE is DeploymentProfile.WEB:
+        config = REMOTE_WORKSPACE_CONFIG
+        if config is None:
+            raise HTTPException(503, "remote workspaces are not configured")
+        project_id = uuid.uuid4().hex
+        try:
+            create_remote_workspace(config, project_id)
+        except RemoteWorkspaceError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        create_project(body.name, f"workspace://{project_id}", project_id)
+        return load_projects()
     folder = Path(body.folder_path)
     if not folder.is_dir():
         raise HTTPException(400, "folder not found")
