@@ -29,6 +29,7 @@ services:
       TRITON_WORKSPACE_MAX_BYTES: ${TRITON_WORKSPACE_MAX_BYTES:-2147483648}
     networks:
       - workspace
+      - runner-egress
     volumes:
       - triton-workspaces:/workspaces
     read_only: true
@@ -50,3 +51,4 @@ volumes:
 networks:
   workspace:
     internal: true
+  runner-egress:
