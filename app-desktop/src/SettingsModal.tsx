@@ -75,10 +75,17 @@ const CATEGORIES: CategoryDef[] = [
   { id: "backup", label: "Sauvegarde", icon: <DownloadIcon className="h-4 w-4" /> },
 ];
 
-const WEB_CATEGORY_IDS: SettingsCategory[] = ["model", "image_generation", "mcp"];
+const WEB_CATEGORY_IDS: SettingsCategory[] = [
+  "model",
+  "image_generation",
+  "mcp",
+  "memory",
+  "logs",
+];
 const WEB_REMOTE_WORKSPACE_CATEGORY_IDS: SettingsCategory[] = [
   "multi_agent_roles",
   "role_models",
+  "scheduled_tasks",
 ];
 
 function webCategories(remoteWorkspacesEnabled: boolean): CategoryDef[] {

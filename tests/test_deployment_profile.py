@@ -18,6 +18,8 @@ def test_desktop_profile_keeps_existing_capabilities():
 
 def test_web_profile_allows_only_remote_safe_tools():
     assert tool_is_allowed(DeploymentProfile.WEB, "web_search")
+    assert tool_is_allowed(DeploymentProfile.WEB, "remember")
+    assert tool_is_allowed(DeploymentProfile.WEB, "todo_write")
     assert not tool_is_allowed(DeploymentProfile.WEB, "read_file")
     assert not tool_is_allowed(DeploymentProfile.WEB, "run_shell")
 
@@ -25,6 +27,25 @@ def test_web_profile_allows_only_remote_safe_tools():
 def test_web_profile_always_allows_mcp_tools():
     assert tool_is_allowed(DeploymentProfile.WEB, "mcp__local__tool")
     assert path_is_allowed(DeploymentProfile.WEB, "/mcp/servers")
+
+
+def test_web_profile_always_allows_memory_logs_and_budget():
+    assert path_is_allowed(DeploymentProfile.WEB, "/memory/global")
+    assert path_is_allowed(DeploymentProfile.WEB, "/logs")
+    assert path_is_allowed(DeploymentProfile.WEB, "/logs/cost_summary")
+    assert path_is_allowed(DeploymentProfile.WEB, "/settings/budget")
+    assert path_is_allowed(DeploymentProfile.WEB, "/settings/budget/status")
+
+
+def test_web_profile_allows_scheduled_tasks_only_when_remote_workspaces_enabled():
+    assert not path_is_allowed(DeploymentProfile.WEB, "/scheduled_tasks")
+    assert path_is_allowed(
+        DeploymentProfile.WEB, "/scheduled_tasks", remote_workspaces_enabled=True
+    )
+    assert not path_is_allowed(DeploymentProfile.WEB, "/settings/max_subtasks")
+    assert path_is_allowed(
+        DeploymentProfile.WEB, "/settings/max_subtasks", remote_workspaces_enabled=True
+    )
 
 
 def test_web_profile_allows_remote_workspace_tools_only_when_enabled():

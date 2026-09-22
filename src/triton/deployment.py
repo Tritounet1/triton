@@ -10,7 +10,9 @@ class DeploymentProfile(StrEnum):
     WEB = "web"
 
 
-WEB_TOOL_NAMES = frozenset({"fetch_url", "show_link_preview", "show_map", "web_search"})
+WEB_TOOL_NAMES = frozenset(
+    {"fetch_url", "show_link_preview", "show_map", "web_search", "remember", "todo_write"}
+)
 REMOTE_WORKSPACE_TOOL_NAMES = frozenset(
     {
         "read_file",
@@ -42,7 +44,6 @@ REMOTE_WORKSPACE_TOOL_NAMES = frozenset(
 WEB_DENIED_PATH_PREFIXES = (
     "/backup",
     "/background_tasks",
-    "/logs",
     "/orchestrator",
     "/projects",
     "/scheduled_tasks",
@@ -50,18 +51,18 @@ WEB_DENIED_PATH_PREFIXES = (
 )
 
 WEB_DENIED_PATHS = {
-    "/memory/global",
     "/settings/api_key",
-    "/settings/budget",
-    "/settings/budget/status",
-    "/settings/max_subtasks",
     "/settings/tavily_key",
 }
 
 # meaningless without a remote workspace to actually run subtasks in -
 # same override pattern as WEB_DENIED_PATH_PREFIXES below, just against
 # an exact settings path rather than a whole route tree
-WEB_REMOTE_WORKSPACE_SETTINGS_PATHS = ("/settings/multi_agent_roles", "/settings/role_models")
+WEB_REMOTE_WORKSPACE_SETTINGS_PATHS = (
+    "/settings/multi_agent_roles",
+    "/settings/role_models",
+    "/settings/max_subtasks",
+)
 
 
 def load_deployment_profile(value: str | None = None) -> DeploymentProfile:
@@ -98,7 +99,9 @@ def path_is_allowed(
     if path in WEB_DENIED_PATHS:
         return False
     if (
-        path.startswith(("/projects", "/background_tasks", "/subagents", "/orchestrator"))
+        path.startswith(
+            ("/projects", "/background_tasks", "/subagents", "/orchestrator", "/scheduled_tasks")
+        )
         and remote_workspaces_enabled
     ):
         return True
