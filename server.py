@@ -201,8 +201,8 @@ def _session_file_path(session_id: str) -> Path:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    mcp_client.manager.connect_all_enabled()
     if DEPLOYMENT_PROFILE is DeploymentProfile.DESKTOP:
-        mcp_client.manager.connect_all_enabled()
         resumed = orchestrator.resume_incomplete_runs()
         if resumed:
             logging.getLogger("uvicorn").info(
@@ -225,7 +225,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     yield
     if DEPLOYMENT_PROFILE is DeploymentProfile.DESKTOP:
         _scheduler_stop_event.set()
-        mcp_client.manager.disconnect_all()
+    mcp_client.manager.disconnect_all()
 
 
 # checked only while the backend happens to be running (no OS-level cron) -
@@ -543,7 +543,7 @@ def _remote_background_task_result(
 def _invoke_chat_tool(
     tool: Tool, name: str, args: dict[str, object], session_id: str, workspace_id: str | None
 ) -> str:
-    if workspace_id is None:
+    if workspace_id is None or name.startswith(mcp_client.MCP_PREFIX):
         return invoke_tool(tool, name, args, session_id)
     config = REMOTE_WORKSPACE_CONFIG
     if config is None:

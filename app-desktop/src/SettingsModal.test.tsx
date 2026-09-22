@@ -16,7 +16,7 @@ describe("SettingsModal", () => {
 
     expect(screen.getAllByText("Modèle")).toHaveLength(2);
     expect(screen.getByText("Génération d’images")).toBeInTheDocument();
+    expect(screen.getByText("Serveurs MCP")).toBeInTheDocument();
     expect(screen.queryByText("Clé API")).toBeNull();
-    expect(screen.queryByText("Serveurs MCP")).toBeNull();
   });
 });

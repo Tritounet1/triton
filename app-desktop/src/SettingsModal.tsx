@@ -76,7 +76,8 @@ const CATEGORIES: CategoryDef[] = [
 ];
 
 const WEB_CATEGORIES: CategoryDef[] = CATEGORIES.filter(
-  (category) => category.id === "model" || category.id === "image_generation",
+  (category) =>
+    category.id === "model" || category.id === "image_generation" || category.id === "mcp",
 );
 
 interface SettingsModalProps {

@@ -20,7 +20,11 @@ def test_web_profile_allows_only_remote_safe_tools():
     assert tool_is_allowed(DeploymentProfile.WEB, "web_search")
     assert not tool_is_allowed(DeploymentProfile.WEB, "read_file")
     assert not tool_is_allowed(DeploymentProfile.WEB, "run_shell")
-    assert not tool_is_allowed(DeploymentProfile.WEB, "mcp__local__tool")
+
+
+def test_web_profile_always_allows_mcp_tools():
+    assert tool_is_allowed(DeploymentProfile.WEB, "mcp__local__tool")
+    assert path_is_allowed(DeploymentProfile.WEB, "/mcp/servers")
 
 
 def test_web_profile_allows_remote_workspace_tools_only_when_enabled():

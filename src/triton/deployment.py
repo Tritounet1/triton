@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from os import getenv
 
+from triton.mcp_client import MCP_PREFIX
+
 
 class DeploymentProfile(StrEnum):
     DESKTOP = "desktop"
@@ -28,7 +30,6 @@ WEB_DENIED_PATH_PREFIXES = (
     "/backup",
     "/background_tasks",
     "/logs",
-    "/mcp",
     "/orchestrator",
     "/projects",
     "/scheduled_tasks",
@@ -66,6 +67,7 @@ def tool_is_allowed(
     return (
         profile is DeploymentProfile.DESKTOP
         or tool_name in WEB_TOOL_NAMES
+        or tool_name.startswith(MCP_PREFIX)
         or (remote_workspaces_enabled and tool_name in REMOTE_WORKSPACE_TOOL_NAMES)
     )
 
