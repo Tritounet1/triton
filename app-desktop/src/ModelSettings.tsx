@@ -267,7 +267,7 @@ export function ModelSettings({ onModelChanged }: ModelSettingsProps) {
 
       {currentModel && selectedFamily && (
         <section className="mb-4 flex items-center gap-3 rounded-2xl border border-accent bg-accent-muted px-4 py-3">
-          <Avatar name={selectedFamily.label} src={selectedFamily.logo} size="sm" tooltip={false} />
+          <Avatar name={selectedFamily.label} src={selectedFamily.logo} size="lg" tooltip={false} />
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <Text weight="semibold">{selectedModel?.name ?? currentModel}</Text>
@@ -327,8 +327,8 @@ export function ModelSettings({ onModelChanged }: ModelSettingsProps) {
                   onClick={() => { toggleFamily(key); }}
                   className="flex w-full items-center gap-3 px-4 py-3.5 text-left hover:bg-muted"
                 >
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent-muted">
-                    <Avatar name={info.label} src={info.logo} size="xsm" tooltip={false} />
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent-muted">
+                    <Avatar name={info.label} src={info.logo} size="md" tooltip={false} />
                   </div>
                   <Text weight="medium" className="flex-1">
                     {info.label}
