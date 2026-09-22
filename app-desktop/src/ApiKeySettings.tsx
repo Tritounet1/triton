@@ -21,7 +21,7 @@ interface ApiKeyFieldProps {
  * pre-rempli avec la vraie valeur (le backend ne la renvoie jamais non
  * plus), juste un champ mot de passe vide et un badge qui dit si une cle
  * est deja active. */
-function ApiKeyField({ title, description, endpoint, placeholder, isRequired = false }: ApiKeyFieldProps) {
+export function ApiKeyField({ title, description, endpoint, placeholder, isRequired = false }: ApiKeyFieldProps) {
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [saving, setSaving] = useState(false);
@@ -129,11 +129,11 @@ export function ApiKeySettings() {
     <div>
       <div className="mb-4 pr-8">
         <Text size="lg" weight="semibold" className="mb-1 block">
-          Clés API
+          Clé API
         </Text>
         <Text size="sm" color="secondary" className="block max-w-xl">
-          Configure les accès utilisés par Triton. Les clés sont conservées localement et ne sont
-          jamais réaffichées après enregistrement.
+          Configure l'accès utilisé par Triton. La clé est conservée localement et n'est jamais
+          réaffichée après enregistrement.
         </Text>
       </div>
 
@@ -147,51 +147,27 @@ export function ApiKeySettings() {
         </Text>
       </div>
 
-      <div className="flex flex-col gap-3">
-        <ApiKeyField
-          title="OpenRouter"
-          endpoint="/settings/api_key"
-          placeholder="sk-or-v1-..."
-          isRequired
-          description={
-            <>
-              Clé{" "}
-              <a
-                href="https://openrouter.ai/settings/keys"
-                target="_blank"
-                rel="noreferrer"
-                className="underline"
-              >
-                OpenRouter
-              </a>{" "}
-              utilisée pour tous les appels au modèle. Enregistrée ici, elle prend effet
-              immédiatement, sans redémarrer l'application. Obligatoire pour discuter.
-            </>
-          }
-        />
-
-        <ApiKeyField
-          title="Tavily (recherche web)"
-          endpoint="/settings/tavily_key"
-          placeholder="tvly-..."
-          description={
-            <>
-              Clé{" "}
-              <a
-                href="https://app.tavily.com"
-                target="_blank"
-                rel="noreferrer"
-                className="underline"
-              >
-                Tavily
-              </a>{" "}
-              utilisée en priorité par l'outil de recherche web (résultats avec extraits de
-              contenu, pas juste des liens). Optionnelle : sans elle, ou si les crédits sont
-              épuisés, la recherche retombe automatiquement sur un scraping de DuckDuckGo.
-            </>
-          }
-        />
-      </div>
+      <ApiKeyField
+        title="OpenRouter"
+        endpoint="/settings/api_key"
+        placeholder="sk-or-v1-..."
+        isRequired
+        description={
+          <>
+            Clé{" "}
+            <a
+              href="https://openrouter.ai/settings/keys"
+              target="_blank"
+              rel="noreferrer"
+              className="underline"
+            >
+              OpenRouter
+            </a>{" "}
+            utilisée pour tous les appels au modèle. Enregistrée ici, elle prend effet
+            immédiatement, sans redémarrer l'application. Obligatoire pour discuter.
+          </>
+        }
+      />
     </div>
   );
 }

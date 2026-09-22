@@ -41,6 +41,11 @@ def test_web_profile_always_allows_backup_export():
     assert path_is_allowed(DeploymentProfile.WEB, "/backup/export")
 
 
+def test_web_profile_allows_the_tavily_key_but_not_the_openrouter_key():
+    assert path_is_allowed(DeploymentProfile.WEB, "/settings/tavily_key")
+    assert not path_is_allowed(DeploymentProfile.WEB, "/settings/api_key")
+
+
 def test_web_profile_allows_scheduled_tasks_only_when_remote_workspaces_enabled():
     assert not path_is_allowed(DeploymentProfile.WEB, "/scheduled_tasks")
     assert path_is_allowed(

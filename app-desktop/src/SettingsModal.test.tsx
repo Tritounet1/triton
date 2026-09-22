@@ -20,6 +20,7 @@ describe("SettingsModal", () => {
     expect(screen.getByText("Mémoire")).toBeInTheDocument();
     expect(screen.getByText("Logs & coûts")).toBeInTheDocument();
     expect(screen.getByText("Sauvegarde")).toBeInTheDocument();
+    expect(screen.getByText("Tavily")).toBeInTheDocument();
     expect(screen.queryByText("Clé API")).toBeNull();
     expect(screen.queryByText("Rôles multi-agent")).toBeNull();
     expect(screen.queryByText("Tâches récurrentes")).toBeNull();

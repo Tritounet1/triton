@@ -152,4 +152,73 @@ describe("runChatConversationStream", () => {
     await running;
     expect(confirmations).toEqual(new Map());
   });
+
+  it("does not leave a stray empty assistant bubble after a tool-error abort", async () => {
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      return setTimeout(() => {
+        callback(0);
+      }, 0) as unknown as number;
+    });
+    let messages: ChatMsg[] = [];
+    const encoder = new TextEncoder();
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+
+    const running = runChatConversationStream({
+      request: { ...request, session_id: "session-1" },
+      inFlightModel: "model-1",
+      initialSessionId: "session-1",
+      isDisplayed: () => true,
+      updateMessages: (updater) => {
+        messages = updater(messages);
+      },
+      updateSessions: vi.fn(),
+      setSessionCreated: vi.fn(),
+      markSending: vi.fn(),
+      markInFlightModel: vi.fn(),
+      moveSendingKey: vi.fn(),
+      setFileRefreshTick: vi.fn(),
+      addPendingSubagent: vi.fn(),
+      setPendingConfirmation: vi.fn(),
+      pendingConfirmations: new Map(),
+      abortControllers: new Map(),
+      onStreamEvent: vi.fn(),
+      onStreamFinished: vi.fn(),
+      refreshSessions: vi.fn(),
+      notifyCompletion: vi.fn(),
+      startStream: () =>
+        Promise.resolve(
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                streamController = controller;
+              },
+            }),
+          ),
+        ),
+    });
+
+    streamController?.enqueue(
+      encoder.encode('event: token\ndata: {"text":"Oui, je peux chercher."}\n\n'),
+    );
+    streamController?.enqueue(
+      encoder.encode(
+        'event: tool_call\ndata: {"tool":"web_search","args":{},"result":"error: unsupported workspace tool","model":"model-1"}\n\n',
+      ),
+    );
+    streamController?.enqueue(
+      encoder.encode(
+        'event: error\ndata: {"message":"6 appels d\'outils ont échoué d\'affilée."}\n\n',
+      ),
+    );
+    streamController?.close();
+    await running;
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
+
+    expect(messages[messages.length - 1]).toMatchObject({ kind: "error" });
+    const toolIndex = messages.findIndex((m) => m.kind === "tool");
+    const trailing = messages.slice(toolIndex + 1);
+    expect(trailing.some((m) => m.kind === "assistant" && m.text === "")).toBe(false);
+  });
 });

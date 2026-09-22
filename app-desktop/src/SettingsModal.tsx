@@ -27,9 +27,11 @@ import { ModelSettings } from "./ModelSettings";
 import { MultiAgentRolesSettings } from "./MultiAgentRolesSettings";
 import { RoleModelsSettings } from "./RoleModelsSettings";
 import { ScheduledTasksSettings } from "./ScheduledTasksSettings";
+import { TavilySettings } from "./TavilySettings";
 
 type SettingsCategory =
   | "api_key"
+  | "tavily"
   | "model"
   | "image_generation"
   | "role_models"
@@ -48,6 +50,7 @@ interface CategoryDef {
 
 const CATEGORIES: CategoryDef[] = [
   { id: "api_key", label: "Clé API", icon: <KeyIcon className="h-4 w-4" /> },
+  { id: "tavily", label: "Tavily", icon: <SearchIcon className="h-4 w-4" /> },
   { id: "model", label: "Modèle", icon: <CpuIcon className="h-4 w-4" /> },
   {
     id: "image_generation",
@@ -76,6 +79,7 @@ const CATEGORIES: CategoryDef[] = [
 ];
 
 const WEB_CATEGORY_IDS: SettingsCategory[] = [
+  "tavily",
   "model",
   "image_generation",
   "mcp",
@@ -186,6 +190,7 @@ export function SettingsModal({
           />
           <div key={category} className="animate-fade-in">
             {category === "api_key" && <ApiKeySettings />}
+            {category === "tavily" && <TavilySettings />}
             {category === "model" && <ModelSettings onModelChanged={onModelChanged} />}
             {category === "image_generation" && (
               <ImageGenerationSettings onModelChanged={onImageModelChanged} />
