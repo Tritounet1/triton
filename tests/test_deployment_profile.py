@@ -25,6 +25,7 @@ def test_web_profile_allows_only_remote_safe_tools():
 
 def test_web_profile_denies_host_and_operator_routes():
     assert path_is_allowed(DeploymentProfile.WEB, "/chat")
+    assert path_is_allowed(DeploymentProfile.WEB, "/images/generate")
     assert path_is_allowed(DeploymentProfile.WEB, "/sessions/session-1")
     assert not path_is_allowed(DeploymentProfile.WEB, "/projects/project-1/file")
     assert not path_is_allowed(DeploymentProfile.WEB, "/sessions/session-1/snapshots")

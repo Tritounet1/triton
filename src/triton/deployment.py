@@ -13,7 +13,6 @@ WEB_TOOL_NAMES = frozenset({"fetch_url", "show_link_preview", "show_map", "web_s
 WEB_DENIED_PATH_PREFIXES = (
     "/backup",
     "/background_tasks",
-    "/images",
     "/logs",
     "/mcp",
     "/orchestrator",
