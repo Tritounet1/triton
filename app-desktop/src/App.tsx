@@ -117,6 +117,7 @@ import {
 import { SnapshotHistoryView } from "./SnapshotHistoryView";
 import { SubagentsPanel } from "./SubagentsPanel";
 import { TaskView } from "./TaskView";
+import { useDeploymentCapabilities } from "./useDeploymentCapabilities";
 
 // au dela de ce delai sans le moindre evenement SSE, on considere qu'on
 // est dans un "silence" (ex. un outil qui tourne cote serveur) plutot que
@@ -462,6 +463,7 @@ function multiAgentSubtaskDetail(t: ToolMsg): ReactNode {
 }
 
 function App() {
+  const capabilities = useDeploymentCapabilities();
   // Sous macOS/Tauri, la fenetre utilise une titlebar « Overlay ». Ce test
   // conserve la barre native habituelle dans le navigateur de developpement
   // et sur les autres plateformes, tout en laissant de la place aux boutons
@@ -557,7 +559,6 @@ function App() {
   const [deletingSession, setDeletingSession] = useState<Session | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [remoteProjectsEnabled, setRemoteProjectsEnabled] = useState(!isWebDeployment);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [showProjectForm, setShowProjectForm] = useState(false);
   const [deletingProject, setDeletingProject] = useState<Project | null>(null);
@@ -915,20 +916,10 @@ function App() {
           list.find((s) => s.id === stored)?.project_id ?? null,
         );
     });
-    if (!isWebDeployment) {
+    if (!isWebDeployment || capabilities.projects) {
       loadProjects();
-      return;
     }
-    fetch(`${API_BASE}/deployment/capabilities`)
-      .then((r) => (r.ok ? r.json() : { remote_workspaces: false }))
-      .then((data: { remote_workspaces: boolean }) => {
-        setRemoteProjectsEnabled(data.remote_workspaces);
-        if (data.remote_workspaces) loadProjects();
-      })
-      .catch(() => {
-        setRemoteProjectsEnabled(false);
-      });
-  }, []);
+  }, [capabilities.projects]);
 
   // relance automatiquement le modele une fois qu'un sous-agent dispatche
   // dans la conversation active se termine : sans ca, le tour se termine
@@ -971,7 +962,7 @@ function App() {
   // ProjectFilePanel), quel que soit le view courant, pour rester "vite
   // accessibles" pendant que le modele travaille dans la conversation.
   useEffect(() => {
-    if (isWebDeployment || !sessionId) return;
+    if (!capabilities.background_tasks || !sessionId) return;
     let cancelled = false;
     function load() {
       fetch(`${API_BASE}/background_tasks?session_id=${sessionId}`)
@@ -989,7 +980,7 @@ function App() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [sessionId]);
+  }, [capabilities.background_tasks, sessionId]);
 
   // surcharge de modele de la conversation en cours (voir /model) : pas de
   // reset synchrone a null ici (interdit dans un effet - voir
@@ -1328,7 +1319,7 @@ function App() {
       return;
     }
 
-    if (!isEdit && !isWebDeployment) {
+    if (!isEdit && capabilities.orchestrator) {
       if (text.toLowerCase().startsWith(MULTI_AGENT_PREFIX)) {
         await dispatchMultiAgent(text);
         return;
@@ -1631,7 +1622,7 @@ function App() {
       header={sidebarHeader.header}
       topContent={sidebarHeader.topContent}
     >
-      {remoteProjectsEnabled && <ProjectSidebarSection
+      {capabilities.projects && <ProjectSidebarSection
         projects={projects}
         sessions={sessions}
         activeProjectId={activeProjectId}
@@ -1671,7 +1662,7 @@ function App() {
         }}
       />}
 
-      {remoteProjectsEnabled && <SubagentsPanel />}
+      {capabilities.subagents && <SubagentsPanel />}
 
       <ConversationSidebarSection
         sessions={topLevelSessions}
@@ -2519,7 +2510,7 @@ function App() {
                       })()}
                   </ChatMessageList>
                 </ChatLayout>
-                {remoteProjectsEnabled && activeProject && openFile ? (
+                {capabilities.projects && activeProject && openFile ? (
                   <FileViewerPanel
                     key={`${openFile.projectId}:${openFile.path}`}
                     file={openFile}
@@ -2527,7 +2518,7 @@ function App() {
                       setOpenFile(null);
                     }}
                   />
-                ) : remoteProjectsEnabled && activeProject ? (
+                ) : capabilities.projects && activeProject ? (
                   <ProjectFilePanel
                     projectId={activeProject.id}
                     projectName={activeProject.name}
@@ -2542,7 +2533,7 @@ function App() {
                     onStopTask={stopTask}
                     onDeleteTask={deleteTask}
                     onOpenFile={setOpenFile}
-                    showSnapshots={!isWebDeployment}
+                    showSnapshots={capabilities.snapshots}
                   />
                 ) : (
                   <BackgroundTasksPanel
@@ -2602,7 +2593,7 @@ function App() {
         onAction={confirmDeleteSession}
       />
 
-      {remoteProjectsEnabled && <AlertDialog
+      {capabilities.projects && <AlertDialog
         isOpen={deletingProject !== null}
         onOpenChange={(isOpen) => {
           if (!isOpen) setDeletingProject(null);
@@ -2613,7 +2604,7 @@ function App() {
         onAction={confirmDeleteProject}
       />}
 
-      {!isWebDeployment && <AlertDialog
+      {capabilities.snapshots && <AlertDialog
         isOpen={undoTarget !== null}
         onOpenChange={(isOpen) => {
           if (!isOpen) setUndoTarget(null);
@@ -2633,12 +2624,12 @@ function App() {
           setSettingsOpen(false);
         }}
         isWebDeployment={isWebDeployment}
-        remoteWorkspacesEnabled={remoteProjectsEnabled}
+        remoteWorkspacesEnabled={capabilities.remote_workspaces}
         onModelChanged={refreshApiModel}
         onImageModelChanged={refreshImageModel}
       />
 
-      {remoteProjectsEnabled && <NewProjectModal
+      {capabilities.projects && <NewProjectModal
         isOpen={showProjectForm}
         onClose={() => {
           setShowProjectForm(false);

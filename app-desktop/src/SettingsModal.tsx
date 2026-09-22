@@ -79,10 +79,8 @@ const CATEGORIES: CategoryDef[] = [
 ];
 
 const WEB_CATEGORY_IDS: SettingsCategory[] = [
-  "tavily",
   "model",
   "image_generation",
-  "mcp",
   "memory",
   "logs",
   "backup",
@@ -90,6 +88,7 @@ const WEB_CATEGORY_IDS: SettingsCategory[] = [
 const WEB_REMOTE_WORKSPACE_CATEGORY_IDS: SettingsCategory[] = [
   "multi_agent_roles",
   "role_models",
+  "mcp",
   "scheduled_tasks",
 ];
 

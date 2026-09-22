@@ -2,12 +2,15 @@ import contextlib
 import json
 import os
 import re
+import resource
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
 import uuid
+from collections.abc import Callable
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -16,7 +19,11 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from triton import mcp_client
+from triton.tools import TOOLS_REGISTRY, invoke_tool
+
 WORKSPACE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
+MCP_SERVER_NAME_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$"
 _SNAPSHOT_SESSION_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
 _SKIP_DIR_NAMES = {".git", "node_modules", ".venv"}
 WORKSPACES_DIR = Path(os.getenv("TRITON_WORKSPACES_DIR", "/workspaces"))
@@ -27,8 +34,6 @@ MAX_CONCURRENT_TASKS = 5
 MAX_CONCURRENT_TASKS_PER_WORKSPACE = 3
 MAX_WORKSPACE_BYTES = int(os.getenv("TRITON_WORKSPACE_MAX_BYTES", str(2 * 1024**3)))
 SNAPSHOT_MAX_AGE_DAYS = int(os.getenv("TRITON_SNAPSHOT_MAX_AGE_DAYS", "30"))
-
-app = FastAPI(title="Triton Workspace Runner", docs_url=None, redoc_url=None)
 
 
 class WorkspaceCreateRequest(BaseModel):
@@ -50,6 +55,30 @@ class WorkspaceTaskRequest(BaseModel):
 class WorkspaceSnapshotRequest(BaseModel):
     session_id: str = Field(min_length=1)
     turn_index: int = Field(ge=1)
+
+
+class MCPServerCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=64, pattern=MCP_SERVER_NAME_PATTERN)
+    command: str = Field(min_length=1)
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    enabled: bool = True
+
+
+class MCPServerToggleRequest(BaseModel):
+    enabled: bool
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    mcp_client.manager.connect_all_enabled()
+    try:
+        yield
+    finally:
+        mcp_client.manager.disconnect_all()
+
+
+app = FastAPI(title="Triton Workspace Runner", docs_url=None, redoc_url=None, lifespan=lifespan)
 
 
 def _require_token(token: str | None) -> None:
@@ -103,8 +132,63 @@ def _save_task(task: dict[str, object]) -> None:
     _task_file(str(task["id"])).write_text(json.dumps(task))
 
 
+def _project_storage_size_bytes(workspace_id: str) -> int:
+    locations = (_workspace_path(workspace_id), SNAPSHOTS_DIR / workspace_id)
+    return sum(
+        path.stat().st_size
+        for location in locations
+        if location.is_dir()
+        for path in location.rglob("*")
+        if path.is_file() and not path.is_symlink()
+    )
+
+
+def _directory_size_bytes(directory: Path) -> int:
+    if not directory.is_dir():
+        return 0
+    return sum(
+        path.stat().st_size
+        for path in directory.rglob("*")
+        if path.is_file() and not path.is_symlink()
+    )
+
+
+def _quota_error() -> ValueError:
+    return ValueError(f"workspace would exceed its {MAX_WORKSPACE_BYTES} byte quota")
+
+
+def _ensure_project_capacity(workspace_id: str, additional_bytes: int = 0) -> None:
+    if _project_storage_size_bytes(workspace_id) + additional_bytes > MAX_WORKSPACE_BYTES:
+        raise _quota_error()
+
+
+def _subprocess_quota_limit(workspace_id: str) -> int:
+    return max(MAX_WORKSPACE_BYTES - _project_storage_size_bytes(workspace_id), 0)
+
+
+def _apply_subprocess_quota(limit: int) -> None:
+    resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
+
+
+def _subprocess_quota_preexec(workspace_id: str) -> Callable[[], object]:
+    return lambda: _apply_subprocess_quota(_subprocess_quota_limit(workspace_id))
+
+
 def _refresh_task(task: dict[str, object]) -> dict[str, object]:
     if task["status"] != "running":
+        return task
+    workspace_id = task.get("workspace_id")
+    exceeds_quota = isinstance(workspace_id, str) and (
+        _project_storage_size_bytes(workspace_id) > MAX_WORKSPACE_BYTES
+    )
+    if exceeds_quota:
+        pid = task.get("pid")
+        if isinstance(pid, int):
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(pid, signal.SIGTERM)
+        task["status"] = "stopped"
+        task["error"] = f"workspace exceeded its {MAX_WORKSPACE_BYTES} byte quota"
+        _save_task(task)
         return task
     pid = task.get("pid")
     if isinstance(pid, int):
@@ -152,9 +236,7 @@ def _run_tool(workspace_id: str, name: str, args: dict[str, object]) -> str:
         if not isinstance(content, str):
             raise ValueError("content must be a string")
         existing_size = path.stat().st_size if path.is_file() else 0
-        projected = _workspace_size_bytes(workspace_id) - existing_size + len(content.encode())
-        if projected > MAX_WORKSPACE_BYTES:
-            raise ValueError(f"workspace would exceed its {MAX_WORKSPACE_BYTES} byte quota")
+        _ensure_project_capacity(workspace_id, len(content.encode()) - existing_size)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
         return f"file {args['path']} written ({len(content)} characters)"
@@ -174,8 +256,6 @@ def _run_tool(workspace_id: str, name: str, args: dict[str, object]) -> str:
         edits = args.get("edits")
         if not isinstance(edits, list) or not edits:
             raise ValueError("no edits provided")
-        if _workspace_size_bytes(workspace_id) > MAX_WORKSPACE_BYTES:
-            raise ValueError(f"workspace already exceeds its {MAX_WORKSPACE_BYTES} byte quota")
         prepared: dict[Path, list[dict[str, object]]] = {}
         for edit in edits:
             if not isinstance(edit, dict):
@@ -186,7 +266,8 @@ def _run_tool(workspace_id: str, name: str, args: dict[str, object]) -> str:
             if not isinstance(old_string, str) or not isinstance(new_string, str):
                 raise ValueError("each edit needs old_string and new_string")
             prepared.setdefault(path, []).append(edit)
-        results: list[str] = []
+        updated: dict[Path, tuple[str, int]] = {}
+        additional_bytes = 0
         for path, edits_for_path in prepared.items():
             content = path.read_text()
             for edit in edits_for_path:
@@ -200,10 +281,14 @@ def _run_tool(workspace_id: str, name: str, args: dict[str, object]) -> str:
                 content = content.replace(
                     old_string, new_string, -1 if edit.get("replace_all") else 1
                 )
+            updated[path] = (content, len(edits_for_path))
+            additional_bytes += len(content.encode()) - path.stat().st_size
+        _ensure_project_capacity(workspace_id, additional_bytes)
+        results: list[str] = []
+        for path, (content, edit_count) in updated.items():
             path.write_text(content)
             results.append(
-                f"{path.relative_to(_workspace_path(workspace_id))}: "
-                f"{len(edits_for_path)} edit(s) applied"
+                f"{path.relative_to(_workspace_path(workspace_id))}: {edit_count} edit(s) applied"
             )
         return "\n".join(results)
     if name == "run_shell":
@@ -218,7 +303,10 @@ def _run_tool(workspace_id: str, name: str, args: dict[str, object]) -> str:
             capture_output=True,
             text=True,
             timeout=120,
+            preexec_fn=_subprocess_quota_preexec(workspace_id),
         )
+        if _project_storage_size_bytes(workspace_id) > MAX_WORKSPACE_BYTES:
+            return f"error: workspace exceeded its {MAX_WORKSPACE_BYTES} byte quota"
         output = (result.stdout + result.stderr).strip()
         if len(output) > 30_000:
             output = f"{output[:30_000]}\n(truncated)"
@@ -323,10 +411,17 @@ def _run_tool(workspace_id: str, name: str, args: dict[str, object]) -> str:
             test_args = ["pytest", "-q", *([path] if path else [])]
             try:
                 result = subprocess.run(
-                    test_args, cwd=directory, capture_output=True, text=True, timeout=120
+                    test_args,
+                    cwd=directory,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    preexec_fn=_subprocess_quota_preexec(workspace_id),
                 )
             except OSError as e:
                 return f"error: could not run tests ({e})"
+            if _project_storage_size_bytes(workspace_id) > MAX_WORKSPACE_BYTES:
+                return f"error: workspace exceeded its {MAX_WORKSPACE_BYTES} byte quota"
             output = (result.stdout + result.stderr).strip()
             return output or f"(no output, exit code {result.returncode})"
         code = args.get("code")
@@ -353,11 +448,14 @@ def _run_tool(workspace_id: str, name: str, args: dict[str, object]) -> str:
                     capture_output=True,
                     text=True,
                     timeout=15,
+                    preexec_fn=_subprocess_quota_preexec(workspace_id),
                 )
             except OSError as e:
                 return f"error: could not run {language} code ({e})"
         finally:
             Path(script_path).unlink(missing_ok=True)
+        if _project_storage_size_bytes(workspace_id) > MAX_WORKSPACE_BYTES:
+            return f"error: workspace exceeded its {MAX_WORKSPACE_BYTES} byte quota"
         output = (result.stdout + result.stderr).strip()
         if len(output) > 8000:
             output = output[:8000] + "\n(truncated)"
@@ -461,6 +559,88 @@ def workspace_tool(
         return {"result": f"error: {exc}"}
 
 
+@app.get("/mcp/servers")
+def list_mcp_servers(
+    x_triton_workspace_token: str | None = Header(default=None),
+) -> list[mcp_client.ServerStatus]:
+    _require_token(x_triton_workspace_token)
+    return mcp_client.manager.status()
+
+
+@app.post("/mcp/servers")
+def add_mcp_server(
+    body: MCPServerCreateRequest,
+    x_triton_workspace_token: str | None = Header(default=None),
+) -> list[mcp_client.ServerStatus]:
+    _require_token(x_triton_workspace_token)
+    config = mcp_client.MCPServerConfig(
+        name=body.name,
+        command=body.command,
+        args=body.args,
+        env=body.env,
+        enabled=body.enabled,
+    )
+    try:
+        mcp_client.manager.add_server(config)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return mcp_client.manager.status()
+
+
+@app.put("/mcp/servers/{name}")
+def toggle_mcp_server(
+    name: str,
+    body: MCPServerToggleRequest,
+    x_triton_workspace_token: str | None = Header(default=None),
+) -> list[mcp_client.ServerStatus]:
+    _require_token(x_triton_workspace_token)
+    try:
+        mcp_client.manager.set_enabled(name, body.enabled)
+    except KeyError as exc:
+        raise HTTPException(404, "MCP server not found") from exc
+    return mcp_client.manager.status()
+
+
+@app.delete("/mcp/servers/{name}")
+def remove_mcp_server(
+    name: str,
+    x_triton_workspace_token: str | None = Header(default=None),
+) -> list[mcp_client.ServerStatus]:
+    _require_token(x_triton_workspace_token)
+    mcp_client.manager.remove_server(name)
+    return mcp_client.manager.status()
+
+
+@app.get("/mcp/tools")
+def list_mcp_tools(
+    x_triton_workspace_token: str | None = Header(default=None),
+) -> list[dict[str, object]]:
+    _require_token(x_triton_workspace_token)
+    return [
+        cast(dict[str, object], tool.schema)
+        for name, tool in TOOLS_REGISTRY.items()
+        if name.startswith(mcp_client.MCP_PREFIX)
+    ]
+
+
+@app.post("/workspaces/{workspace_id}/mcp/{tool_name}")
+def invoke_workspace_mcp_tool(
+    workspace_id: str,
+    tool_name: str,
+    body: WorkspaceToolRequest,
+    x_triton_workspace_token: str | None = Header(default=None),
+) -> dict[str, str]:
+    _require_token(x_triton_workspace_token)
+    if not _workspace_path(workspace_id).is_dir():
+        raise HTTPException(404, "workspace not found")
+    if tool_name != body.name or not tool_name.startswith(mcp_client.MCP_PREFIX):
+        raise HTTPException(400, "invalid MCP tool")
+    tool = TOOLS_REGISTRY.get(tool_name)
+    if tool is None:
+        raise HTTPException(404, "MCP tool not found")
+    return {"result": invoke_tool(tool, tool_name, body.args, session_id="remote-workspace")}
+
+
 def _running_task_count(workspace_id: str | None = None) -> int:
     return sum(
         1
@@ -469,13 +649,6 @@ def _running_task_count(workspace_id: str | None = None) -> int:
         and (workspace_id is None or task.get("workspace_id") == workspace_id)
         and _refresh_task(task)["status"] == "running"
     )
-
-
-def _workspace_size_bytes(workspace_id: str) -> int:
-    workspace = _workspace_path(workspace_id)
-    if not workspace.is_dir():
-        return 0
-    return sum(f.stat().st_size for f in workspace.rglob("*") if f.is_file())
 
 
 @app.post("/workspaces/{workspace_id}/tasks")
@@ -505,6 +678,7 @@ def start_task(
             stdout=log_file,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+            preexec_fn=_subprocess_quota_preexec(workspace_id),
         )
     task: dict[str, object] = {
         "id": task_id,
@@ -634,6 +808,13 @@ def ensure_workspace_snapshot(
     target = _snapshot_dir(workspace_id, body.session_id, body.turn_index)
     if target.exists():
         return {"taken": False}
+    snapshot_source_size = sum(
+        path.stat().st_size
+        for path in workspace.rglob("*")
+        if path.is_file() and not path.is_symlink() and ".git" not in path.parts
+    )
+    if _project_storage_size_bytes(workspace_id) + snapshot_source_size > MAX_WORKSPACE_BYTES:
+        raise HTTPException(413, f"workspace would exceed its {MAX_WORKSPACE_BYTES} byte quota")
     target.mkdir(parents=True)
     shutil.copytree(workspace, target / "files", ignore=shutil.ignore_patterns(".git"))
     (target / "meta.json").write_text(
@@ -655,6 +836,11 @@ def restore_workspace_snapshot(
     source = _snapshot_dir(workspace_id, body.session_id, body.turn_index) / "files"
     if not source.is_dir():
         raise HTTPException(404, "no snapshot for this session at that turn")
+    source_size = _directory_size_bytes(source)
+    current_size = _project_storage_size_bytes(workspace_id)
+    workspace_size = _directory_size_bytes(workspace)
+    if current_size - workspace_size + source_size > MAX_WORKSPACE_BYTES:
+        raise HTTPException(413, f"workspace would exceed its {MAX_WORKSPACE_BYTES} byte quota")
     for child in workspace.iterdir():
         if child.name == ".git":
             continue

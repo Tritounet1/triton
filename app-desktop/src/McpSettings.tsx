@@ -117,7 +117,7 @@ export function McpSettings() {
       setServers(data);
       resetForm();
     } catch {
-      setFormError("impossible de contacter l'API Triton (127.0.0.1:8000).");
+      setFormError("impossible de contacter l'API Triton.");
     } finally {
       setSubmitting(false);
     }

@@ -162,6 +162,74 @@ def invoke_remote_workspace_tool(
     return result
 
 
+def list_remote_mcp_servers(config: RemoteWorkspaceConfig) -> list[dict[str, object]]:
+    return cast(list[dict[str, object]], _request(config, "/mcp/servers").json())
+
+
+def add_remote_mcp_server(
+    config: RemoteWorkspaceConfig, server: dict[str, object]
+) -> list[dict[str, object]]:
+    return cast(list[dict[str, object]], _post(config, "/mcp/servers", server).json())
+
+
+def toggle_remote_mcp_server(
+    config: RemoteWorkspaceConfig, name: str, enabled: bool
+) -> list[dict[str, object]]:
+    try:
+        response = requests.put(
+            f"{config.base_url}/mcp/servers/{name}",
+            headers={"X-Triton-Workspace-Token": config.token},
+            json={"enabled": enabled},
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        raise RemoteWorkspaceError("workspace runner is unavailable") from exc
+    if not response.ok:
+        raise RemoteWorkspaceError("workspace runner rejected the request")
+    return cast(list[dict[str, object]], response.json())
+
+
+def delete_remote_mcp_server(config: RemoteWorkspaceConfig, name: str) -> list[dict[str, object]]:
+    try:
+        response = requests.delete(
+            f"{config.base_url}/mcp/servers/{name}",
+            headers={"X-Triton-Workspace-Token": config.token},
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        raise RemoteWorkspaceError("workspace runner is unavailable") from exc
+    if not response.ok:
+        raise RemoteWorkspaceError("workspace runner rejected the request")
+    return cast(list[dict[str, object]], response.json())
+
+
+def list_remote_mcp_tools(config: RemoteWorkspaceConfig) -> list[dict[str, object]]:
+    return cast(list[dict[str, object]], _request(config, "/mcp/tools").json())
+
+
+def invoke_remote_mcp_tool(
+    config: RemoteWorkspaceConfig,
+    workspace_id: str,
+    name: str,
+    args: dict[str, object],
+) -> str:
+    try:
+        response = requests.post(
+            f"{config.base_url}/workspaces/{workspace_id}/mcp/{name}",
+            headers={"X-Triton-Workspace-Token": config.token},
+            json=cast(dict[str, Any], {"name": name, "args": args}),
+            timeout=70,
+        )
+    except requests.RequestException as exc:
+        raise RemoteWorkspaceError("workspace runner is unavailable") from exc
+    if not response.ok:
+        raise RemoteWorkspaceError("workspace runner rejected the request")
+    result = response.json().get("result")
+    if not isinstance(result, str):
+        raise RemoteWorkspaceError("workspace runner returned an invalid response")
+    return result
+
+
 def _post(
     config: RemoteWorkspaceConfig, path: str, json_body: dict[str, object] | None = None
 ) -> requests.Response:

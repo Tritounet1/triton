@@ -24,9 +24,11 @@ def test_web_profile_allows_only_remote_safe_tools():
     assert not tool_is_allowed(DeploymentProfile.WEB, "run_shell")
 
 
-def test_web_profile_always_allows_mcp_tools():
-    assert tool_is_allowed(DeploymentProfile.WEB, "mcp__local__tool")
-    assert path_is_allowed(DeploymentProfile.WEB, "/mcp/servers")
+def test_web_profile_rejects_local_mcp_tools_and_routes():
+    assert not tool_is_allowed(DeploymentProfile.WEB, "mcp__local__tool")
+    assert not path_is_allowed(DeploymentProfile.WEB, "/mcp/servers")
+    assert tool_is_allowed(DeploymentProfile.WEB, "mcp__runner__tool", True)
+    assert path_is_allowed(DeploymentProfile.WEB, "/mcp/servers", True)
 
 
 def test_web_profile_always_allows_memory_logs_and_budget():
@@ -41,8 +43,8 @@ def test_web_profile_always_allows_backup_export():
     assert path_is_allowed(DeploymentProfile.WEB, "/backup/export")
 
 
-def test_web_profile_allows_the_tavily_key_but_not_the_openrouter_key():
-    assert path_is_allowed(DeploymentProfile.WEB, "/settings/tavily_key")
+def test_web_profile_rejects_operator_api_key_routes():
+    assert not path_is_allowed(DeploymentProfile.WEB, "/settings/tavily_key")
     assert not path_is_allowed(DeploymentProfile.WEB, "/settings/api_key")
 
 
