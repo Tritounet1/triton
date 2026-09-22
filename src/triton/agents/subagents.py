@@ -25,6 +25,7 @@ import json
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Literal
@@ -40,6 +41,7 @@ from triton.remote_workspaces import (
     RemoteWorkspaceConfig,
     RemoteWorkspaceError,
     invoke_remote_workspace_tool,
+    load_remote_workspace_config,
     normalize_remote_workspace_args,
 )
 from triton.storage.logs import log_event
@@ -50,6 +52,20 @@ if TYPE_CHECKING:
     from triton.tools import Tool
 
 Workspace = tuple[RemoteWorkspaceConfig, str]
+
+
+def resolve_workspace(project: Project | None) -> Workspace | None:
+    """(config, workspace_id) for a remote project, or None for a local
+    one/no project - shared by tools/background.py's dispatch_subagent
+    and orchestrator.py's _run/_resume_one, which each need to know the
+    same thing about whatever project their own run is scoped to."""
+    if project is None or not project.folder_path.startswith("workspace://"):
+        return None
+    config = load_remote_workspace_config()
+    if config is None:
+        return None
+    return (config, project.folder_path.removeprefix("workspace://"))
+
 
 SUBAGENT_MAX_ITERATIONS = 8
 
@@ -109,14 +125,22 @@ class SubagentTask:
 TASKS: dict[str, SubagentTask] = {}
 
 
-def _invoke_subagent_tool(
+def invoke_agent_tool(
     tool: "Tool | None",
     name: str,
     args: dict[str, object],
     project: Project | None,
     workspace: Workspace | None,
+    before_execute: Callable[[], object] | None = None,
 ) -> str:
-    if workspace is not None and name in SANDBOXED_PATH_ARGS:
+    """Shared by this module's own _run and orchestrator.py's _run_subtask:
+    both dispatch a background agentic loop's tool calls the same way, and
+    both need the same local-vs-remote-workspace routing (see the module
+    docstring and remote_workspaces.py). `before_execute`, called only once
+    a call is confirmed allowed and about to actually run, is how
+    orchestrator.py's write-capable "code" role still gets its snapshot
+    safety net taken at the right moment either way."""
+    if workspace is not None and (name == "edit_file" or name in SANDBOXED_PATH_ARGS):
         config, workspace_id = workspace
         try:
             args = normalize_remote_workspace_args(workspace_id, name, args)
@@ -127,6 +151,8 @@ def _invoke_subagent_tool(
             return sandbox_error
         if tool is None:
             return f"unknown tool: {name}"
+        if before_execute is not None:
+            before_execute()
         try:
             return invoke_remote_workspace_tool(config, workspace_id, name, args)
         except RemoteWorkspaceError as exc:
@@ -136,6 +162,8 @@ def _invoke_subagent_tool(
         return sandbox_error
     if tool is None:
         return f"unknown tool: {name}"
+    if before_execute is not None:
+        before_execute()
     try:
         return tool.fn(**args)
     except TypeError as e:
@@ -209,9 +237,7 @@ def _run(
                     result = f"error: invalid arguments ({tool_call.function.arguments})"
                     args = {}
                 else:
-                    result = _invoke_subagent_tool(
-                        registry.get(name), name, args, project, workspace
-                    )
+                    result = invoke_agent_tool(registry.get(name), name, args, project, workspace)
 
                 log_event(
                     type="subagent_tool_call",

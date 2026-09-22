@@ -18,5 +18,22 @@ describe("SettingsModal", () => {
     expect(screen.getByText("Génération d’images")).toBeInTheDocument();
     expect(screen.getByText("Serveurs MCP")).toBeInTheDocument();
     expect(screen.queryByText("Clé API")).toBeNull();
+    expect(screen.queryByText("Rôles multi-agent")).toBeNull();
+  });
+
+  it("also shows multi-agent settings once remote workspaces are enabled", () => {
+    render(
+      <SettingsModal
+        isOpen
+        isWebDeployment
+        remoteWorkspacesEnabled
+        onClose={vi.fn()}
+        onModelChanged={vi.fn()}
+        onImageModelChanged={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Rôles multi-agent")).toBeInTheDocument();
+    expect(screen.getByText("Modèles des rôles")).toBeInTheDocument();
   });
 });

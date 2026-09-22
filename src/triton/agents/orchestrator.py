@@ -49,7 +49,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Literal, cast
 
-from triton.agents.subagents import SUBAGENT_TOOL_NAMES
+from triton.agents.subagents import (
+    SUBAGENT_TOOL_NAMES,
+    Workspace,
+    invoke_agent_tool,
+    resolve_workspace,
+)
 from triton.llm.api import call_chat
 from triton.llm.chat_loop import to_tool_call_params
 from triton.llm.model_roles import model_for_role
@@ -61,7 +66,6 @@ from triton.storage.sessions import load_session, save_session, session_path
 from triton.storage.settings import load_max_subtasks, load_multi_agent_roles
 from triton.tools import (
     WRITE_TOOL_NAMES,
-    enforce_project_sandbox,
     ensure_snapshot,
     finalize_snapshot,
 )
@@ -445,6 +449,7 @@ def _run_subtask(
     turn_index: int,
     all_subtasks: list[Subtask],
     roles: list[MultiAgentRole],
+    workspace: Workspace | None,
 ) -> None:
     from triton.tools import TOOLS_REGISTRY
 
@@ -523,24 +528,14 @@ def _run_subtask(
                 except json.JSONDecodeError:
                     result = f"error: invalid arguments ({tool_call.function.arguments})"
                 else:
-                    sandbox_error = enforce_project_sandbox(name, args, project)
-                    if sandbox_error is not None:
-                        result = sandbox_error
-                    else:
-                        tool = registry.get(name)
-                        if tool is None:
-                            result = f"unknown tool: {name}"
-                        else:
-                            if name in WRITE_TOOL_NAMES and session_id is not None:
-                                # this role runs fully unsupervised (see the
-                                # module docstring) - the snapshot taken
-                                # here is the only safety net a "code"
-                                # subtask's writes get at all
-                                ensure_snapshot(project, session_id, turn_index)
-                            try:
-                                result = tool.fn(**args)
-                            except TypeError as e:
-                                result = f"error: invalid arguments for {name} ({e})"
+                    before_execute = (
+                        (lambda: ensure_snapshot(project, session_id, turn_index))
+                        if name in WRITE_TOOL_NAMES and session_id is not None
+                        else None
+                    )
+                    result = invoke_agent_tool(
+                        registry.get(name), name, args, project, workspace, before_execute
+                    )
                 log_event(
                     type="orchestrator_subtask_tool_call",
                     subtask_id=subtask.id,
@@ -590,6 +585,7 @@ def _run_subtask(
 
 def _run(run: OrchestratorRun) -> None:
     project = get_project(run.project_id) if run.project_id else None
+    workspace = resolve_workspace(project)
     project_context = f"\n\nWorking directory available: {project.folder_path}" if project else ""
     # loaded once per run (not re-read mid-run): a run in flight shouldn't
     # have its role set/cap change under it because someone edited Settings
@@ -647,11 +643,14 @@ def _run(run: OrchestratorRun) -> None:
     run.status = "running"
     _persist(run)
 
-    _execute_subtasks(run, project, roles)
+    _execute_subtasks(run, project, roles, workspace)
 
 
 def _execute_subtasks(
-    run: OrchestratorRun, project: Project | None, roles: list[MultiAgentRole]
+    run: OrchestratorRun,
+    project: Project | None,
+    roles: list[MultiAgentRole],
+    workspace: Workspace | None = None,
 ) -> None:
     """Runs every subtask that isn't already "done" (respecting dependency
     waves via _schedule_waves), then synthesizes the final answer. Reused
@@ -672,7 +671,7 @@ def _execute_subtasks(
         threads = [
             threading.Thread(
                 target=_run_subtask,
-                args=(s, project, run.session_id, run.turn_index, run.subtasks, roles),
+                args=(s, project, run.session_id, run.turn_index, run.subtasks, roles, workspace),
                 daemon=True,
             )
             for s in wave_to_run
@@ -830,7 +829,7 @@ def _resume_one(run: OrchestratorRun) -> None:
         _run(run)
         return
     project = get_project(run.project_id) if run.project_id else None
-    _execute_subtasks(run, project, load_roles())
+    _execute_subtasks(run, project, load_roles(), resolve_workspace(project))
 
 
 def resume_incomplete_runs() -> list[str]:

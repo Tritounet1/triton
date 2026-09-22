@@ -67,6 +67,25 @@ def test_web_profile_allows_subagents_only_when_remote_workspaces_enabled():
     assert tool_is_allowed(DeploymentProfile.WEB, "check_subagent", remote_workspaces_enabled=True)
 
 
+def test_web_profile_allows_orchestrator_only_when_remote_workspaces_enabled():
+    assert not path_is_allowed(DeploymentProfile.WEB, "/orchestrator")
+    assert path_is_allowed(DeploymentProfile.WEB, "/orchestrator", remote_workspaces_enabled=True)
+    assert path_is_allowed(
+        DeploymentProfile.WEB, "/orchestrator/run-1", remote_workspaces_enabled=True
+    )
+
+
+def test_web_profile_allows_multi_agent_settings_only_when_remote_workspaces_enabled():
+    assert not path_is_allowed(DeploymentProfile.WEB, "/settings/multi_agent_roles")
+    assert not path_is_allowed(DeploymentProfile.WEB, "/settings/role_models")
+    assert path_is_allowed(
+        DeploymentProfile.WEB, "/settings/multi_agent_roles", remote_workspaces_enabled=True
+    )
+    assert path_is_allowed(
+        DeploymentProfile.WEB, "/settings/role_models", remote_workspaces_enabled=True
+    )
+
+
 def test_web_profile_denies_host_and_operator_routes():
     assert path_is_allowed(DeploymentProfile.WEB, "/chat")
     assert path_is_allowed(DeploymentProfile.WEB, "/images/generate")
