@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from hashlib import sha256
 from os import getenv
 from pathlib import PurePosixPath
 from typing import Any, cast
@@ -14,6 +15,10 @@ class RemoteWorkspaceConfig:
 
 class RemoteWorkspaceError(RuntimeError):
     pass
+
+
+def mcp_session_workspace_id(session_id: str) -> str:
+    return f"mcp-session-{sha256(session_id.encode()).hexdigest()[:24]}"
 
 
 def _relative_workspace_path(workspace_id: str, value: object) -> str:
@@ -91,6 +96,16 @@ def create_remote_workspace(config: RemoteWorkspaceConfig, workspace_id: str) ->
         raise RemoteWorkspaceError("workspace already exists")
     if not response.ok:
         raise RemoteWorkspaceError("workspace runner rejected the request")
+
+
+def ensure_remote_mcp_session_workspace(config: RemoteWorkspaceConfig, session_id: str) -> str:
+    workspace_id = mcp_session_workspace_id(session_id)
+    try:
+        create_remote_workspace(config, workspace_id)
+    except RemoteWorkspaceError as exc:
+        if str(exc) != "workspace already exists":
+            raise
+    return workspace_id
 
 
 def delete_remote_workspace(config: RemoteWorkspaceConfig, workspace_id: str) -> None:

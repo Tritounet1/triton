@@ -67,6 +67,7 @@ from triton.remote_workspaces import (
     delete_remote_mcp_server,
     delete_remote_task,
     delete_remote_workspace,
+    ensure_remote_mcp_session_workspace,
     ensure_remote_snapshot,
     get_remote_task,
     invoke_remote_mcp_tool,
@@ -76,6 +77,7 @@ from triton.remote_workspaces import (
     list_remote_snapshots,
     list_remote_tasks,
     load_remote_workspace_config,
+    mcp_session_workspace_id,
     normalize_remote_workspace_args,
     purge_remote_maintenance,
     remote_workspace_file,
@@ -243,6 +245,9 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             for p in load_projects()
             if p.folder_path.startswith("workspace://")
         ]
+        keep_workspace_ids.extend(
+            mcp_session_workspace_id(path.stem) for path in SESSIONS_DIR.glob("*.json")
+        )
         try:
             result = purge_remote_maintenance(REMOTE_WORKSPACE_CONFIG, keep_workspace_ids)
         except RemoteWorkspaceError:
@@ -523,8 +528,8 @@ async def require_local_api_token(request: Request, call_next):
             )
 
 
-def _remote_mcp_tools(workspace_id: str | None) -> dict[str, Tool]:
-    if workspace_id is None or REMOTE_WORKSPACE_CONFIG is None:
+def _remote_mcp_tools() -> dict[str, Tool]:
+    if REMOTE_WORKSPACE_CONFIG is None:
         return {}
     try:
         schemas = list_remote_mcp_tools(REMOTE_WORKSPACE_CONFIG)
@@ -547,8 +552,11 @@ def _active_tool_schemas(workspace_id: str | None = None) -> list[ChatCompletion
         tool.schema
         for name, tool in TOOLS_REGISTRY.items()
         if tool_is_allowed(DEPLOYMENT_PROFILE, name, REMOTE_WORKSPACE_CONFIG is not None)
+        and not (
+            DEPLOYMENT_PROFILE is DeploymentProfile.WEB and name.startswith(mcp_client.MCP_PREFIX)
+        )
     ]
-    return [*schemas, *(tool.schema for tool in _remote_mcp_tools(workspace_id).values())]
+    return [*schemas, *(tool.schema for tool in _remote_mcp_tools().values())]
 
 
 def _invoke_chat_tool(
@@ -563,6 +571,14 @@ def _invoke_chat_tool(
         stop_remote_task,
         list_remote_tasks,
     ).invoke(tool, name, args, session_id, workspace_id)
+
+
+def _mcp_execution_workspace(session_id: str, workspace_id: str | None) -> str | None:
+    if workspace_id is not None:
+        return workspace_id
+    if DEPLOYMENT_PROFILE is not DeploymentProfile.WEB or REMOTE_WORKSPACE_CONFIG is None:
+        return None
+    return ensure_remote_mcp_session_workspace(REMOTE_WORKSPACE_CONFIG, session_id)
 
 
 def _ensure_write_snapshot(
@@ -966,7 +982,13 @@ def run_chat_stream(
                     except json.JSONDecodeError:
                         result = f"error: invalid arguments ({tool_call.function.arguments})"
                     else:
-                        tool = TOOLS_REGISTRY.get(name) or _remote_mcp_tools(workspace_id).get(name)
+                        remote_mcp_tool = _remote_mcp_tools().get(name)
+                        tool = (
+                            remote_mcp_tool
+                            if DEPLOYMENT_PROFILE is DeploymentProfile.WEB
+                            and name.startswith(mcp_client.MCP_PREFIX)
+                            else TOOLS_REGISTRY.get(name)
+                        )
                         if workspace_id is not None:
                             try:
                                 args = normalize_remote_workspace_args(workspace_id, name, args)
@@ -1007,7 +1029,12 @@ def run_chat_stream(
                                 },
                             )
 
-                        if not tool_is_allowed(DEPLOYMENT_PROFILE, name, workspace_id is not None):
+                        remote_tool_enabled = workspace_id is not None or (
+                            DEPLOYMENT_PROFILE is DeploymentProfile.WEB
+                            and REMOTE_WORKSPACE_CONFIG is not None
+                            and name.startswith(mcp_client.MCP_PREFIX)
+                        )
+                        if not tool_is_allowed(DEPLOYMENT_PROFILE, name, remote_tool_enabled):
                             result = f"error: {name} is unavailable in the web deployment profile"
                         elif sandbox_error is not None:
                             result = sandbox_error
@@ -1021,7 +1048,14 @@ def run_chat_stream(
                         ):
                             if name in WRITE_TOOL_NAMES:
                                 turn_has_write = True
-                            result = _invoke_chat_tool(tool, name, args, session_id, workspace_id)
+                            execution_workspace_id = (
+                                _mcp_execution_workspace(session_id, workspace_id)
+                                if name.startswith(mcp_client.MCP_PREFIX)
+                                else workspace_id
+                            )
+                            result = _invoke_chat_tool(
+                                tool, name, args, session_id, execution_workspace_id
+                            )
                         else:
                             confirmation_id = str(uuid.uuid4())
                             pending = PendingConfirmation()
@@ -1040,8 +1074,13 @@ def run_chat_stream(
                                     allow_always(session_id, name)
                                 if name in WRITE_TOOL_NAMES:
                                     turn_has_write = True
+                                execution_workspace_id = (
+                                    _mcp_execution_workspace(session_id, workspace_id)
+                                    if name.startswith(mcp_client.MCP_PREFIX)
+                                    else workspace_id
+                                )
                                 result = _invoke_chat_tool(
-                                    tool, name, args, session_id, workspace_id
+                                    tool, name, args, session_id, execution_workspace_id
                                 )
                             else:
                                 result = "action denied by the user"
@@ -2191,6 +2230,13 @@ def remove_session(session_id: str) -> dict[str, bool]:
     if not delete_session(session_id):
         raise HTTPException(404, "session not found")
     discard_snapshot(session_id)
+    if DEPLOYMENT_PROFILE is DeploymentProfile.WEB and REMOTE_WORKSPACE_CONFIG is not None:
+        try:
+            delete_remote_workspace(REMOTE_WORKSPACE_CONFIG, mcp_session_workspace_id(session_id))
+        except RemoteWorkspaceError:
+            logging.getLogger("uvicorn").warning(
+                "could not delete MCP workspace for session %s", session_id
+            )
     return {"ok": True}
 
 
