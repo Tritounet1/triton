@@ -28,7 +28,6 @@ WEB_DENIED_PATHS = {
     "/settings/api_key",
     "/settings/budget",
     "/settings/budget/status",
-    "/settings/image_model",
     "/settings/max_subtasks",
     "/settings/multi_agent_roles",
     "/settings/role_models",

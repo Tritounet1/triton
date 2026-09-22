@@ -75,9 +75,14 @@ const CATEGORIES: CategoryDef[] = [
   { id: "backup", label: "Sauvegarde", icon: <DownloadIcon className="h-4 w-4" /> },
 ];
 
+const WEB_CATEGORIES: CategoryDef[] = CATEGORIES.filter(
+  (category) => category.id === "model" || category.id === "image_generation",
+);
+
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
+  isWebDeployment?: boolean;
   // le modele courant est tenu par App.tsx (apiModel) pour l'utiliser
   // ailleurs (composer, avatar...) - propage jusqu'a ModelSettings pour
   // qu'un changement se reflete tout de suite, sans attendre la fermeture
@@ -91,11 +96,20 @@ interface SettingsModalProps {
  * que des pages a part entiere : ferme au clic en dehors ou sur Echap
  * (Dialog purpose="info"), remplace SettingsPage/LogsPage/McpServersPage/
  * ModelPage. */
-export function SettingsModal({ isOpen, onClose, onModelChanged, onImageModelChanged }: SettingsModalProps) {
-  const [category, setCategory] = useState<SettingsCategory>("api_key");
+export function SettingsModal({
+  isOpen,
+  onClose,
+  isWebDeployment = false,
+  onModelChanged,
+  onImageModelChanged,
+}: SettingsModalProps) {
+  const [category, setCategory] = useState<SettingsCategory>(
+    isWebDeployment ? "model" : "api_key",
+  );
   const [search, setSearch] = useState("");
+  const categories = isWebDeployment ? WEB_CATEGORIES : CATEGORIES;
 
-  const filtered = CATEGORIES.filter((c) =>
+  const filtered = categories.filter((c) =>
     c.label.toLowerCase().includes(search.trim().toLowerCase()),
   );
 
