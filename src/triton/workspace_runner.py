@@ -5,6 +5,8 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
+import tempfile
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,6 +17,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 WORKSPACE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
+_SKIP_DIR_NAMES = {".git", "node_modules", ".venv"}
 WORKSPACES_DIR = Path(os.getenv("TRITON_WORKSPACES_DIR", "/workspaces"))
 WORKSPACE_TOKEN = os.getenv("TRITON_WORKSPACE_TOKEN", "")
 TASKS_DIR = WORKSPACES_DIR / ".tasks"
@@ -58,6 +61,10 @@ def _workspace_file(workspace_id: str, raw_path: str) -> Path:
     return target
 
 
+def _skipped(path: Path) -> bool:
+    return any(part in _SKIP_DIR_NAMES for part in path.parts)
+
+
 def _tool_path(workspace_id: str, value: object) -> Path:
     if not isinstance(value, str) or not value:
         raise ValueError("a non-empty path is required")
@@ -91,6 +98,28 @@ def _refresh_task(task: dict[str, object]) -> dict[str, object]:
             task["status"] = "exited"
             _save_task(task)
     return task
+
+
+def _run_git(args: list[str], directory: Path, timeout: float = 15) -> str:
+    result = subprocess.run(
+        ["git", *args], cwd=directory, capture_output=True, text=True, timeout=timeout
+    )
+    output = (result.stdout + result.stderr).strip()
+    return output or "(no output)"
+
+
+def _python_interpreter() -> list[str]:
+    return [sys.executable]
+
+
+def _language_interpreter(language: str) -> list[str] | None:
+    lang = {"py": "python", "js": "javascript", "node": "javascript"}.get(language, language)
+    if lang == "python":
+        return _python_interpreter()
+    if lang == "javascript":
+        found = shutil.which("node")
+        return [found] if found else None
+    return None
 
 
 def _run_tool(workspace_id: str, name: str, args: dict[str, object]) -> str:
@@ -172,6 +201,145 @@ def _run_tool(workspace_id: str, name: str, args: dict[str, object]) -> str:
         if len(output) > 30_000:
             output = f"{output[:30_000]}\n(truncated)"
         return output or f"(no output, exit code {result.returncode})"
+    if name == "grep":
+        pattern = args.get("pattern")
+        if not isinstance(pattern, str) or not pattern:
+            raise ValueError("a pattern is required")
+        try:
+            regex = re.compile(pattern)
+        except re.error as e:
+            return f"error: invalid regex ({e})"
+        directory = _tool_path(workspace_id, args.get("directory", "."))
+        file_glob = args.get("file_glob") or "**/*"
+        workspace = _workspace_path(workspace_id)
+        matches: list[str] = []
+        for path in sorted(directory.glob(cast(str, file_glob))):
+            if not path.is_file() or _skipped(path):
+                continue
+            try:
+                text = path.read_text()
+            except (OSError, UnicodeDecodeError):
+                continue
+            relative = path.relative_to(workspace)
+            for lineno, line in enumerate(text.splitlines(), start=1):
+                if regex.search(line):
+                    matches.append(f"{relative}:{lineno}:{line.strip()}")
+                    if len(matches) >= 200:
+                        return "\n".join(matches) + "\n(truncated at 200 matches)"
+        return "\n".join(matches) if matches else "(no matches)"
+    if name == "glob":
+        pattern = args.get("pattern")
+        if not isinstance(pattern, str) or not pattern:
+            raise ValueError("a pattern is required")
+        directory = _tool_path(workspace_id, args.get("directory", "."))
+        workspace = _workspace_path(workspace_id)
+        results = sorted(
+            str(p.relative_to(workspace)) for p in directory.glob(pattern) if not _skipped(p)
+        )
+        if not results:
+            return "(no matches)"
+        if len(results) > 500:
+            return "\n".join(results[:500]) + "\n(truncated at 500 results)"
+        return "\n".join(results)
+    if name in {
+        "git_status",
+        "git_diff",
+        "git_commit",
+        "git_log",
+        "git_branch",
+        "git_checkout",
+        "git_push",
+    }:
+        directory = _tool_path(workspace_id, args.get("directory", "."))
+        if name == "git_status":
+            return _run_git(["status", "--short", "--branch"], directory)
+        if name == "git_diff":
+            path = args.get("path")
+            return _run_git(["diff", *([cast(str, path)] if path else [])], directory)
+        if name == "git_commit":
+            message = args.get("message")
+            if not isinstance(message, str) or not message:
+                raise ValueError("a commit message is required")
+            paths = args.get("paths")
+            add_args = paths if isinstance(paths, list) and paths else ["-A"]
+            add_result = _run_git(["add", *cast("list[str]", add_args)], directory)
+            if add_result.startswith("error:"):
+                return add_result
+            return _run_git(["commit", "-m", message], directory)
+        if name == "git_log":
+            max_count = args.get("max_count", 20)
+            path = args.get("path")
+            log_args = ["log", "--oneline", f"-n{int(cast(int, max_count))}"]
+            if path:
+                log_args += ["--", cast(str, path)]
+            return _run_git(log_args, directory)
+        if name == "git_branch":
+            return _run_git(["branch", "--list"], directory)
+        if name == "git_checkout":
+            branch = args.get("branch")
+            if not isinstance(branch, str) or not branch:
+                raise ValueError("a branch is required")
+            checkout_args = (
+                ["checkout", "-b", branch] if args.get("create") else ["checkout", branch]
+            )
+            return _run_git(checkout_args, directory)
+        remote = cast(str, args.get("remote") or "origin")
+        branch = args.get("branch")
+        push_args = ["push"]
+        if args.get("set_upstream"):
+            push_args.append("-u")
+        push_args.append(remote)
+        if branch:
+            push_args.append(cast(str, branch))
+        elif args.get("set_upstream"):
+            push_args.append("HEAD")
+        return _run_git(push_args, directory, timeout=60)
+    if name in {"run_tests", "run_code"}:
+        directory = _tool_path(workspace_id, args.get("directory", "."))
+        if name == "run_tests":
+            path = args.get("path")
+            test_args = ["pytest", "-q", *([path] if path else [])]
+            try:
+                result = subprocess.run(
+                    test_args, cwd=directory, capture_output=True, text=True, timeout=120
+                )
+            except OSError as e:
+                return f"error: could not run tests ({e})"
+            output = (result.stdout + result.stderr).strip()
+            return output or f"(no output, exit code {result.returncode})"
+        code = args.get("code")
+        if not isinstance(code, str) or not code:
+            raise ValueError("code is required")
+        language = cast(str, args.get("language") or "python")
+        interpreter = _language_interpreter(language)
+        if interpreter is None:
+            return f"error: no {language} interpreter found on this system"
+        suffix = {"python": ".py", "javascript": ".js"}.get(
+            {"py": "python", "js": "javascript", "node": "javascript"}.get(language, language),
+            "",
+        )
+        if not suffix:
+            return f"error: unsupported language '{language}' - use 'python' or 'javascript'"
+        with tempfile.NamedTemporaryFile("w", suffix=suffix, delete=False, encoding="utf-8") as f:
+            f.write(code)
+            script_path = f.name
+        try:
+            try:
+                result = subprocess.run(
+                    [*interpreter, script_path],
+                    cwd=directory,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+            except OSError as e:
+                return f"error: could not run {language} code ({e})"
+        finally:
+            Path(script_path).unlink(missing_ok=True)
+        output = (result.stdout + result.stderr).strip()
+        if len(output) > 8000:
+            output = output[:8000] + "\n(truncated)"
+        return output or f"(no output, exit code {result.returncode})"
     raise ValueError("unsupported workspace tool")
 
 
@@ -180,7 +348,7 @@ def _tree(directory: Path, workspace: Path, budget: list[int]) -> list[dict[str,
     for child in sorted(directory.iterdir(), key=lambda path: (path.is_file(), path.name.lower())):
         if budget[0] <= 0:
             break
-        if child.is_symlink() or child.name in {".git", "node_modules", ".venv"}:
+        if child.is_symlink() or child.name in _SKIP_DIR_NAMES:
             continue
         budget[0] -= 1
         relative_path = str(child.relative_to(workspace))

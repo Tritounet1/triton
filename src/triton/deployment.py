@@ -23,6 +23,17 @@ REMOTE_WORKSPACE_TOOL_NAMES = frozenset(
         "start_background_task",
         "stop_background_task",
         "list_background_tasks",
+        "grep",
+        "glob",
+        "git_status",
+        "git_diff",
+        "git_commit",
+        "git_log",
+        "git_branch",
+        "git_checkout",
+        "git_push",
+        "run_tests",
+        "run_code",
     }
 )
 

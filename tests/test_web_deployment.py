@@ -64,6 +64,15 @@ def test_remote_workspace_normalizes_start_background_task_directory():
     ) == {"command": "pnpm dev", "directory": "app"}
 
 
+def test_remote_workspace_normalizes_search_and_git_directory_arguments():
+    assert normalize_remote_workspace_args(
+        "project-a", "grep", {"pattern": "TODO", "directory": "workspace://project-a/src"}
+    ) == {"pattern": "TODO", "directory": "src"}
+    assert normalize_remote_workspace_args(
+        "project-a", "git_commit", {"message": "wip", "directory": "workspace://project-a"}
+    ) == {"message": "wip", "directory": "."}
+
+
 def test_server_invokes_project_tools_through_the_workspace_runner(monkeypatch):
     monkeypatch.setattr(
         server,
