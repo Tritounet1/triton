@@ -41,6 +41,17 @@ def normalize_remote_workspace_args(
         "move_file": ("source", "destination"),
         "run_shell": ("directory",),
         "start_background_task": ("directory",),
+        "grep": ("directory",),
+        "glob": ("directory",),
+        "git_status": ("directory",),
+        "git_diff": ("directory",),
+        "git_commit": ("directory",),
+        "git_log": ("directory",),
+        "git_branch": ("directory",),
+        "git_checkout": ("directory",),
+        "git_push": ("directory",),
+        "run_tests": ("directory",),
+        "run_code": ("directory",),
     }.get(name, ()):
         if key in normalized:
             normalized[key] = _relative_workspace_path(workspace_id, normalized[key])

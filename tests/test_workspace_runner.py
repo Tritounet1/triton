@@ -1,4 +1,5 @@
 import json
+import subprocess
 import time
 
 from fastapi.testclient import TestClient
@@ -231,6 +232,88 @@ def test_workspace_runner_deletes_a_stopped_task_but_not_a_running_one(monkeypat
     assert denied.status_code == 409
     assert allowed.json() == {"deleted": True}
     assert not (tmp_path / ".tasks" / f"{task_id}.json").exists()
+
+
+def test_workspace_runner_greps_and_globs_inside_its_workspace(monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_runner, "WORKSPACES_DIR", tmp_path)
+    monkeypatch.setattr(workspace_runner, "WORKSPACE_TOKEN", "workspace-token")
+    workspace = tmp_path / "project-a"
+    (workspace / "src").mkdir(parents=True)
+    (workspace / "src" / "main.py").write_text("def hello():\n    return 'hi'\n")
+    (workspace / "notes.md").write_text("hello there")
+    (workspace / "node_modules").mkdir()
+    (workspace / "node_modules" / "ignored.py").write_text("hello")
+
+    with TestClient(workspace_runner.app) as client:
+        grep = client.post(
+            "/workspaces/project-a/tools",
+            json={"name": "grep", "args": {"pattern": "hello"}},
+            headers=TOKEN_HEADER,
+        )
+        glob = client.post(
+            "/workspaces/project-a/tools",
+            json={"name": "glob", "args": {"pattern": "**/*.py"}},
+            headers=TOKEN_HEADER,
+        )
+
+    assert "notes.md:1:hello there" in grep.json()["result"]
+    assert "node_modules" not in grep.json()["result"]
+    assert glob.json()["result"] == "src/main.py"
+
+
+def test_workspace_runner_runs_git_commands_inside_its_workspace(monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_runner, "WORKSPACES_DIR", tmp_path)
+    monkeypatch.setattr(workspace_runner, "WORKSPACE_TOKEN", "workspace-token")
+    workspace = tmp_path / "project-a"
+    workspace.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=workspace, check=True)
+    subprocess.run(["git", "config", "user.email", "a@b.c"], cwd=workspace, check=True)
+    subprocess.run(["git", "config", "user.name", "a"], cwd=workspace, check=True)
+    (workspace / "readme.md").write_text("Triton")
+
+    with TestClient(workspace_runner.app) as client:
+        status_before = client.post(
+            "/workspaces/project-a/tools",
+            json={"name": "git_status", "args": {}},
+            headers=TOKEN_HEADER,
+        )
+        commit = client.post(
+            "/workspaces/project-a/tools",
+            json={"name": "git_commit", "args": {"message": "initial"}},
+            headers=TOKEN_HEADER,
+        )
+        log = client.post(
+            "/workspaces/project-a/tools",
+            json={"name": "git_log", "args": {}},
+            headers=TOKEN_HEADER,
+        )
+
+    assert "readme.md" in status_before.json()["result"]
+    assert "initial" in commit.json()["result"]
+    assert "initial" in log.json()["result"]
+
+
+def test_workspace_runner_runs_tests_and_code_inside_its_workspace(monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_runner, "WORKSPACES_DIR", tmp_path)
+    monkeypatch.setattr(workspace_runner, "WORKSPACE_TOKEN", "workspace-token")
+    workspace = tmp_path / "project-a"
+    workspace.mkdir()
+    (workspace / "test_ok.py").write_text("def test_ok():\n    assert True\n")
+
+    with TestClient(workspace_runner.app) as client:
+        tests = client.post(
+            "/workspaces/project-a/tools",
+            json={"name": "run_tests", "args": {}},
+            headers=TOKEN_HEADER,
+        )
+        code = client.post(
+            "/workspaces/project-a/tools",
+            json={"name": "run_code", "args": {"code": "print(1 + 1)"}},
+            headers=TOKEN_HEADER,
+        )
+
+    assert "1 passed" in tests.json()["result"]
+    assert code.json()["result"] == "2"
 
 
 def test_workspace_runner_caps_concurrent_tasks(monkeypatch, tmp_path):

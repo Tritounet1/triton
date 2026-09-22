@@ -40,7 +40,10 @@ def test_web_profile_allows_remote_workspace_tools_only_when_enabled():
     assert tool_is_allowed(
         DeploymentProfile.WEB, "list_background_tasks", remote_workspaces_enabled=True
     )
-    assert not tool_is_allowed(DeploymentProfile.WEB, "run_tests", remote_workspaces_enabled=True)
+    assert tool_is_allowed(DeploymentProfile.WEB, "grep", remote_workspaces_enabled=True)
+    assert tool_is_allowed(DeploymentProfile.WEB, "git_status", remote_workspaces_enabled=True)
+    assert tool_is_allowed(DeploymentProfile.WEB, "run_tests", remote_workspaces_enabled=True)
+    assert not tool_is_allowed(DeploymentProfile.WEB, "grep")
 
 
 def test_web_profile_allows_background_tasks_route_only_when_remote_workspaces_enabled():
