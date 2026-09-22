@@ -75,15 +75,24 @@ const CATEGORIES: CategoryDef[] = [
   { id: "backup", label: "Sauvegarde", icon: <DownloadIcon className="h-4 w-4" /> },
 ];
 
-const WEB_CATEGORIES: CategoryDef[] = CATEGORIES.filter(
-  (category) =>
-    category.id === "model" || category.id === "image_generation" || category.id === "mcp",
-);
+const WEB_CATEGORY_IDS: SettingsCategory[] = ["model", "image_generation", "mcp"];
+const WEB_REMOTE_WORKSPACE_CATEGORY_IDS: SettingsCategory[] = [
+  "multi_agent_roles",
+  "role_models",
+];
+
+function webCategories(remoteWorkspacesEnabled: boolean): CategoryDef[] {
+  const ids = remoteWorkspacesEnabled
+    ? [...WEB_CATEGORY_IDS, ...WEB_REMOTE_WORKSPACE_CATEGORY_IDS]
+    : WEB_CATEGORY_IDS;
+  return CATEGORIES.filter((category) => ids.includes(category.id));
+}
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   isWebDeployment?: boolean;
+  remoteWorkspacesEnabled?: boolean;
   // le modele courant est tenu par App.tsx (apiModel) pour l'utiliser
   // ailleurs (composer, avatar...) - propage jusqu'a ModelSettings pour
   // qu'un changement se reflete tout de suite, sans attendre la fermeture
@@ -101,6 +110,7 @@ export function SettingsModal({
   isOpen,
   onClose,
   isWebDeployment = false,
+  remoteWorkspacesEnabled = false,
   onModelChanged,
   onImageModelChanged,
 }: SettingsModalProps) {
@@ -108,7 +118,7 @@ export function SettingsModal({
     isWebDeployment ? "model" : "api_key",
   );
   const [search, setSearch] = useState("");
-  const categories = isWebDeployment ? WEB_CATEGORIES : CATEGORIES;
+  const categories = isWebDeployment ? webCategories(remoteWorkspacesEnabled) : CATEGORIES;
 
   const filtered = categories.filter((c) =>
     c.label.toLowerCase().includes(search.trim().toLowerCase()),

@@ -2629,6 +2629,7 @@ function App() {
           setSettingsOpen(false);
         }}
         isWebDeployment={isWebDeployment}
+        remoteWorkspacesEnabled={remoteProjectsEnabled}
         onModelChanged={refreshApiModel}
         onImageModelChanged={refreshImageModel}
       />

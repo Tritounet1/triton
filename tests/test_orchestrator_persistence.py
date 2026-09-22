@@ -86,6 +86,7 @@ def test_resume_reruns_only_unfinished_subtasks_and_keeps_finished_results(monke
         run_arg: orchestrator.OrchestratorRun,
         _project: None,
         _roles: list[orchestrator.MultiAgentRole],
+        _workspace: orchestrator.Workspace | None = None,
     ) -> None:
         seen_unfinished_ids.append([s.id for s in run_arg.subtasks if s.status != "done"])
         run_arg.status = "done"
