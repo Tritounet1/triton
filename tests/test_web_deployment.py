@@ -85,6 +85,28 @@ def test_web_profile_rejects_project_scoped_chat(monkeypatch):
     assert response.json()["detail"] == "projects are unavailable in the web deployment profile"
 
 
+def test_web_profile_allows_image_generation_in_a_conversation(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(server, "WEB_AUTH_CONFIG", _web_auth_config())
+    monkeypatch.setattr(server, "SESSIONS_DIR", tmp_path)
+    monkeypatch.setattr(server, "is_api_key_configured", lambda: True)
+    monkeypatch.setattr(
+        server,
+        "generate_image",
+        lambda prompt, model, references: type(
+            "ImageResult", (), {"images": ["data:image/png;base64,aGVsbG8="], "model": "test/image"}
+        )(),
+    )
+
+    with TestClient(server.app) as client:
+        login = client.post("/auth/login", json={"username": "admin", "password": "password"})
+        response = client.post("/images/generate", json={"prompt": "un chat"})
+
+    assert login.status_code == 200
+    assert response.status_code == 200
+    assert response.json()["images"] == ["data:image/png;base64,aGVsbG8="]
+
+
 def test_web_profile_requires_a_configured_authenticated_session(monkeypatch):
     monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
     monkeypatch.setattr(server, "WEB_AUTH_CONFIG", _web_auth_config())
