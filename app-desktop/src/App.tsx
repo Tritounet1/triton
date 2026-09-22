@@ -1671,7 +1671,7 @@ function App() {
         }}
       />}
 
-      {!isWebDeployment && <SubagentsPanel />}
+      {remoteProjectsEnabled && <SubagentsPanel />}
 
       <ConversationSidebarSection
         sessions={topLevelSessions}

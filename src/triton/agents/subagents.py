@@ -36,12 +36,20 @@ from openai.types.chat import (
 from triton.llm.api import call_chat
 from triton.llm.chat_loop import to_tool_call_params
 from triton.llm.pricing import estimate_cost
+from triton.remote_workspaces import (
+    RemoteWorkspaceConfig,
+    RemoteWorkspaceError,
+    invoke_remote_workspace_tool,
+    normalize_remote_workspace_args,
+)
 from triton.storage.logs import log_event
 from triton.storage.projects import Project
-from triton.tools._shared import enforce_project_sandbox
+from triton.tools._shared import SANDBOXED_PATH_ARGS, enforce_project_sandbox
 
 if TYPE_CHECKING:
     from triton.tools import Tool
+
+Workspace = tuple[RemoteWorkspaceConfig, str]
 
 SUBAGENT_MAX_ITERATIONS = 8
 
@@ -101,7 +109,42 @@ class SubagentTask:
 TASKS: dict[str, SubagentTask] = {}
 
 
-def _run(task_entry: SubagentTask, project: Project | None) -> None:
+def _invoke_subagent_tool(
+    tool: "Tool | None",
+    name: str,
+    args: dict[str, object],
+    project: Project | None,
+    workspace: Workspace | None,
+) -> str:
+    if workspace is not None and name in SANDBOXED_PATH_ARGS:
+        config, workspace_id = workspace
+        try:
+            args = normalize_remote_workspace_args(workspace_id, name, args)
+        except RemoteWorkspaceError as exc:
+            return f"error: {exc}"
+        sandbox_error = enforce_project_sandbox(name, args, project, remote_workspace=True)
+        if sandbox_error is not None:
+            return sandbox_error
+        if tool is None:
+            return f"unknown tool: {name}"
+        try:
+            return invoke_remote_workspace_tool(config, workspace_id, name, args)
+        except RemoteWorkspaceError as exc:
+            return f"error: {exc}"
+    sandbox_error = enforce_project_sandbox(name, args, project)
+    if sandbox_error is not None:
+        return sandbox_error
+    if tool is None:
+        return f"unknown tool: {name}"
+    try:
+        return tool.fn(**args)
+    except TypeError as e:
+        return f"error: invalid arguments for {name} ({e})"
+
+
+def _run(
+    task_entry: SubagentTask, project: Project | None, workspace: Workspace | None = None
+) -> None:
     from triton.tools import TOOLS_REGISTRY
 
     registry: dict[str, Tool] = {
@@ -166,23 +209,9 @@ def _run(task_entry: SubagentTask, project: Project | None) -> None:
                     result = f"error: invalid arguments ({tool_call.function.arguments})"
                     args = {}
                 else:
-                    sandbox_error = enforce_project_sandbox(name, args, project)
-                    if sandbox_error is not None:
-                        result = sandbox_error
-                    else:
-                        tool = registry.get(name)
-                        if tool is None:
-                            result = f"unknown tool: {name}"
-                        else:
-                            try:
-                                result = tool.fn(**args)
-                            except TypeError as e:
-                                # the model can call a tool with an argument
-                                # it doesn't accept (e.g. hallucinated from
-                                # another tool's schema) - report it back
-                                # like any other tool error instead of
-                                # ending the sub-agent early
-                                result = f"error: invalid arguments for {name} ({e})"
+                    result = _invoke_subagent_tool(
+                        registry.get(name), name, args, project, workspace
+                    )
 
                 log_event(
                     type="subagent_tool_call",
@@ -227,15 +256,17 @@ def _run(task_entry: SubagentTask, project: Project | None) -> None:
         task_entry.result = f"{type(e).__name__}: {e}"
 
 
-def dispatch(task: str, project: Project | None = None) -> str:
+def dispatch(task: str, project: Project | None = None, workspace: Workspace | None = None) -> str:
     """Starts a sub-agent in a background thread and returns immediately,
     without waiting for it to finish. `project` (the dispatching
     conversation's own project, if any - see tools/background.py's
     dispatch_subagent) scopes the sub-agent's own file tools the same way
-    - see the module docstring."""
+    - see the module docstring. `workspace` (config, workspace_id), if the
+    project is a remote one, routes those same file tools through the
+    isolated workspace runner instead of the local filesystem."""
     task_entry = SubagentTask(id=uuid.uuid4().hex[:8], task=task)
     TASKS[task_entry.id] = task_entry
-    threading.Thread(target=_run, args=(task_entry, project), daemon=True).start()
+    threading.Thread(target=_run, args=(task_entry, project, workspace), daemon=True).start()
     return (
         f"Sub-agent dispatched (id={task_entry.id}), running in the background. "
         "Continue with other work; call check_subagent with this id later to "

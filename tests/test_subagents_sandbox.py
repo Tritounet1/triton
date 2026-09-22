@@ -17,6 +17,7 @@ from openai.types.chat.chat_completion_message_function_tool_call import Functio
 
 from triton.agents import subagents
 from triton.llm.api import ChatResult
+from triton.remote_workspaces import RemoteWorkspaceConfig
 from triton.storage import projects, sessions
 from triton.storage.projects import Project
 from triton.tools.background import dispatch_subagent
@@ -51,7 +52,13 @@ def _final_reply(content: str) -> ChatResult:
     )
 
 
-def _run_one_tool_call(monkeypatch, project: Project | None, name: str, **arguments: object) -> str:
+def _run_one_tool_call(
+    monkeypatch,
+    project: Project | None,
+    name: str,
+    workspace: subagents.Workspace | None = None,
+    **arguments: object,
+) -> str:
     """Runs a subagent through exactly one tool call, returning the
     result that landed back in its own conversation - the sandbox error
     if enforce_project_sandbox blocked it, or the tool's real output."""
@@ -68,7 +75,7 @@ def _run_one_tool_call(monkeypatch, project: Project | None, name: str, **argume
     monkeypatch.setattr(subagents, "call_chat", _fake_call_chat)
 
     task_entry = subagents.SubagentTask(id="t1", task="test task")
-    subagents._run(task_entry, project)
+    subagents._run(task_entry, project, workspace)
 
     assert task_entry.status == "done"
     return captured[0]
@@ -108,6 +115,41 @@ def test_read_file_succeeds_for_a_path_inside_the_scoped_project(monkeypatch, tm
     assert result == "inside the project"
 
 
+def test_file_tools_route_through_the_workspace_runner_for_a_remote_project(monkeypatch):
+    project = Project(id="p1", name="demo", folder_path="workspace://p1")
+    workspace = (RemoteWorkspaceConfig(base_url="http://workspace:8001", token="tok"), "p1")
+    calls: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        subagents,
+        "invoke_remote_workspace_tool",
+        lambda config, workspace_id, name, args: calls.append((name, args)) or "remote result",
+    )
+
+    result = _run_one_tool_call(
+        monkeypatch, project, "read_file", workspace, path="workspace://p1/notes.md"
+    )
+
+    assert calls == [("read_file", {"path": "notes.md"})]
+    assert result == "remote result"
+
+
+def test_web_search_bypasses_the_workspace_runner_even_when_one_is_configured(monkeypatch):
+    from triton.tools import TOOLS_REGISTRY
+
+    project = Project(id="p1", name="demo", folder_path="workspace://p1")
+    workspace = (RemoteWorkspaceConfig(base_url="http://workspace:8001", token="tok"), "p1")
+    monkeypatch.setattr(
+        subagents,
+        "invoke_remote_workspace_tool",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("should not reach the runner")),
+    )
+    monkeypatch.setattr(TOOLS_REGISTRY["web_search"], "fn", lambda query: f"results for {query}")
+
+    result = _run_one_tool_call(monkeypatch, project, "web_search", workspace, query="triton")
+
+    assert result == "results for triton"
+
+
 def test_web_search_is_unaffected_by_missing_project(monkeypatch):
     from triton.tools import TOOLS_REGISTRY
 
@@ -138,7 +180,11 @@ def test_dispatch_subagent_passes_the_sessions_project_through(
     sessions.save_session_project(session_id, project.id)
 
     seen: list[Project | None] = []
-    monkeypatch.setattr(subagents, "dispatch", lambda _task, project=None: seen.append(project))
+    monkeypatch.setattr(
+        subagents,
+        "dispatch",
+        lambda _task, project=None, workspace=None: seen.append(project),
+    )
 
     dispatch_subagent("do something", session_id)
 
@@ -153,7 +199,11 @@ def test_dispatch_subagent_passes_none_when_the_session_has_no_project(
     session_id = path.stem
 
     seen: list[Project | None] = []
-    monkeypatch.setattr(subagents, "dispatch", lambda _task, project=None: seen.append(project))
+    monkeypatch.setattr(
+        subagents,
+        "dispatch",
+        lambda _task, project=None, workspace=None: seen.append(project),
+    )
 
     dispatch_subagent("do something", session_id)
 

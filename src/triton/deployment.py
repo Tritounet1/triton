@@ -34,6 +34,8 @@ REMOTE_WORKSPACE_TOOL_NAMES = frozenset(
         "git_push",
         "run_tests",
         "run_code",
+        "dispatch_subagent",
+        "check_subagent",
     }
 )
 
@@ -90,7 +92,10 @@ def path_is_allowed(
         return True
     if path in WEB_DENIED_PATHS or any(segment in path for segment in WEB_DENIED_PATH_SEGMENTS):
         return False
-    if path.startswith(("/projects", "/background_tasks")) and remote_workspaces_enabled:
+    if (
+        path.startswith(("/projects", "/background_tasks", "/subagents"))
+        and remote_workspaces_enabled
+    ):
         return True
     return not path.startswith(WEB_DENIED_PATH_PREFIXES)
 

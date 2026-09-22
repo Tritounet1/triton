@@ -203,6 +203,36 @@ def test_server_invokes_mcp_tools_locally_even_inside_a_remote_workspace(monkeyp
     assert calls == [("mcp__example__tool", {"query": "hi"}, "session-a")]
 
 
+def test_server_invokes_dispatch_subagent_locally_even_inside_a_remote_workspace(monkeypatch):
+    monkeypatch.setattr(
+        server,
+        "REMOTE_WORKSPACE_CONFIG",
+        RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(
+        server,
+        "invoke_tool",
+        lambda tool, name, args, session_id: calls.append(name) or "dispatched",
+    )
+    monkeypatch.setattr(
+        server,
+        "invoke_remote_workspace_tool",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("should not reach the runner")),
+    )
+
+    result = server._invoke_chat_tool(
+        server.TOOLS_REGISTRY["dispatch_subagent"],
+        "dispatch_subagent",
+        {"task": "investigate"},
+        "session-a",
+        "project-a",
+    )
+
+    assert result == "dispatched"
+    assert calls == ["dispatch_subagent"]
+
+
 def test_desktop_profile_keeps_local_tools(monkeypatch):
     monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.DESKTOP)
 

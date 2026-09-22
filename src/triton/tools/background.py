@@ -4,6 +4,7 @@ this just exposes it to the model with a JSON schema."""
 
 from triton import background_tasks
 from triton.agents import subagents
+from triton.remote_workspaces import load_remote_workspace_config
 from triton.storage.projects import get_project
 from triton.storage.sessions import load_session_project
 from triton.tools._shared import Tool
@@ -17,7 +18,12 @@ def dispatch_subagent(task: str, session_id: str) -> str:
     # no project (see enforce_project_sandbox).
     project_id = load_session_project(session_id)
     project = get_project(project_id) if project_id else None
-    return subagents.dispatch(task, project)
+    workspace = None
+    if project is not None and project.folder_path.startswith("workspace://"):
+        config = load_remote_workspace_config()
+        if config is not None:
+            workspace = (config, project.folder_path.removeprefix("workspace://"))
+    return subagents.dispatch(task, project, workspace)
 
 
 def check_subagent(task_id: str) -> str:
