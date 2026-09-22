@@ -233,3 +233,31 @@ def delete_remote_task(config: RemoteWorkspaceConfig, workspace_id: str, task_id
         raise RemoteWorkspaceError("workspace runner is unavailable") from exc
     if not response.ok:
         raise RemoteWorkspaceError("workspace runner rejected the request")
+
+
+def list_remote_snapshots(
+    config: RemoteWorkspaceConfig, workspace_id: str, session_id: str
+) -> list[dict[str, object]]:
+    response = _request(config, f"/workspaces/{workspace_id}/snapshots", {"session_id": session_id})
+    return cast(list[dict[str, object]], response.json())
+
+
+def ensure_remote_snapshot(
+    config: RemoteWorkspaceConfig, workspace_id: str, session_id: str, turn_index: int
+) -> bool:
+    response = _post(
+        config,
+        f"/workspaces/{workspace_id}/snapshots",
+        {"session_id": session_id, "turn_index": turn_index},
+    )
+    return bool(cast(dict[str, object], response.json()).get("taken"))
+
+
+def restore_remote_snapshot(
+    config: RemoteWorkspaceConfig, workspace_id: str, session_id: str, turn_index: int
+) -> None:
+    _post(
+        config,
+        f"/workspaces/{workspace_id}/snapshots/restore",
+        {"session_id": session_id, "turn_index": turn_index},
+    )

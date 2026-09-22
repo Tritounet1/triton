@@ -139,6 +139,7 @@ def test_workspace_runner_executes_tools_inside_its_workspace(monkeypatch, tmp_p
 def _setup_workspace(monkeypatch, tmp_path):
     monkeypatch.setattr(workspace_runner, "WORKSPACES_DIR", tmp_path)
     monkeypatch.setattr(workspace_runner, "TASKS_DIR", tmp_path / ".tasks")
+    monkeypatch.setattr(workspace_runner, "SNAPSHOTS_DIR", tmp_path / ".snapshots")
     monkeypatch.setattr(workspace_runner, "WORKSPACE_TOKEN", "workspace-token")
     (tmp_path / "project-a").mkdir()
 
@@ -334,3 +335,82 @@ def test_workspace_runner_caps_concurrent_tasks(monkeypatch, tmp_path):
 
     assert first.status_code == 200
     assert second.status_code == 429
+
+
+def test_workspace_runner_takes_a_snapshot_once_per_turn(monkeypatch, tmp_path):
+    _setup_workspace(monkeypatch, tmp_path)
+    (tmp_path / "project-a" / "readme.md").write_text("v1")
+
+    with TestClient(workspace_runner.app) as client:
+        first = client.post(
+            "/workspaces/project-a/snapshots",
+            json={"session_id": "session-1", "turn_index": 1},
+            headers=TOKEN_HEADER,
+        )
+        second = client.post(
+            "/workspaces/project-a/snapshots",
+            json={"session_id": "session-1", "turn_index": 1},
+            headers=TOKEN_HEADER,
+        )
+        listed = client.get(
+            "/workspaces/project-a/snapshots",
+            params={"session_id": "session-1"},
+            headers=TOKEN_HEADER,
+        )
+
+    assert first.json() == {"taken": True}
+    assert second.json() == {"taken": False}
+    points = listed.json()
+    assert [p["turn_index"] for p in points] == [1]
+    assert points[0]["created_at"]
+
+
+def test_workspace_runner_restores_a_snapshot(monkeypatch, tmp_path):
+    _setup_workspace(monkeypatch, tmp_path)
+    workspace = tmp_path / "project-a"
+    (workspace / "readme.md").write_text("v1")
+
+    with TestClient(workspace_runner.app) as client:
+        client.post(
+            "/workspaces/project-a/snapshots",
+            json={"session_id": "session-1", "turn_index": 1},
+            headers=TOKEN_HEADER,
+        )
+        (workspace / "readme.md").write_text("v2")
+        (workspace / "new.txt").write_text("created after the snapshot")
+        restored = client.post(
+            "/workspaces/project-a/snapshots/restore",
+            json={"session_id": "session-1", "turn_index": 1},
+            headers=TOKEN_HEADER,
+        )
+
+    assert restored.json() == {"restored": True}
+    assert (workspace / "readme.md").read_text() == "v1"
+    assert not (workspace / "new.txt").exists()
+
+
+def test_workspace_runner_restoring_an_unknown_turn_is_a_404(monkeypatch, tmp_path):
+    _setup_workspace(monkeypatch, tmp_path)
+
+    with TestClient(workspace_runner.app) as client:
+        restored = client.post(
+            "/workspaces/project-a/snapshots/restore",
+            json={"session_id": "session-1", "turn_index": 1},
+            headers=TOKEN_HEADER,
+        )
+
+    assert restored.status_code == 404
+
+
+def test_workspace_runner_deletes_snapshots_with_the_workspace(monkeypatch, tmp_path):
+    _setup_workspace(monkeypatch, tmp_path)
+
+    with TestClient(workspace_runner.app) as client:
+        client.post(
+            "/workspaces/project-a/snapshots",
+            json={"session_id": "session-1", "turn_index": 1},
+            headers=TOKEN_HEADER,
+        )
+        client.delete("/workspaces/project-a", headers=TOKEN_HEADER)
+
+    assert not (tmp_path / ".snapshots" / "project-a").exists()

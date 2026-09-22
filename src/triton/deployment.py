@@ -49,8 +49,6 @@ WEB_DENIED_PATH_PREFIXES = (
     "/subagents",
 )
 
-WEB_DENIED_PATH_SEGMENTS = ("/snapshot",)
-
 WEB_DENIED_PATHS = {
     "/memory/global",
     "/settings/api_key",
@@ -93,9 +91,11 @@ def path_is_allowed(
 ) -> bool:
     if profile is DeploymentProfile.DESKTOP:
         return True
-    if path.startswith(WEB_REMOTE_WORKSPACE_SETTINGS_PATHS):
+    if path.startswith(WEB_REMOTE_WORKSPACE_SETTINGS_PATHS) or (
+        path.startswith("/sessions/") and "/snapshot" in path
+    ):
         return remote_workspaces_enabled
-    if path in WEB_DENIED_PATHS or any(segment in path for segment in WEB_DENIED_PATH_SEGMENTS):
+    if path in WEB_DENIED_PATHS:
         return False
     if (
         path.startswith(("/projects", "/background_tasks", "/subagents", "/orchestrator"))

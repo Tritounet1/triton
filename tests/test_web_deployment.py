@@ -477,6 +477,60 @@ def test_web_profile_reads_stops_and_deletes_a_remote_background_task(monkeypatc
     assert deleted == ["task-1"]
 
 
+def test_web_profile_lists_snapshots_from_the_workspace_runner(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(server, "WEB_AUTH_CONFIG", _web_auth_config())
+    monkeypatch.setattr(
+        server,
+        "REMOTE_WORKSPACE_CONFIG",
+        RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
+    )
+    session_id = _workspace_session(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        server,
+        "list_remote_snapshots",
+        lambda config, workspace_id, session_id: [
+            {"turn_index": 1, "created_at": "2026-01-01T00:00:00"}
+        ],
+    )
+
+    with TestClient(server.app) as client:
+        client.post("/auth/login", json={"username": "admin", "password": "password"})
+        response = client.get(f"/sessions/{session_id}/snapshots")
+
+    assert response.status_code == 200
+    [point] = response.json()
+    assert point["turn_index"] == 1
+    assert point["kind"] == "remote"
+    assert point["has_final_state"] is False
+
+
+def test_web_profile_restores_a_snapshot_through_the_workspace_runner(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(server, "WEB_AUTH_CONFIG", _web_auth_config())
+    monkeypatch.setattr(
+        server,
+        "REMOTE_WORKSPACE_CONFIG",
+        RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
+    )
+    session_id = _workspace_session(monkeypatch, tmp_path)
+    calls: list[tuple[str, str, int]] = []
+    monkeypatch.setattr(
+        server,
+        "restore_remote_snapshot",
+        lambda config, workspace_id, session_id, turn_index: calls.append(
+            (workspace_id, session_id, turn_index)
+        ),
+    )
+
+    with TestClient(server.app) as client:
+        client.post("/auth/login", json={"username": "admin", "password": "password"})
+        response = client.post(f"/sessions/{session_id}/snapshot/restore", json={"turn_index": 1})
+
+    assert response.json() == {"restored": True}
+    assert calls == [("project-a", session_id, 1)]
+
+
 def test_web_profile_allows_image_generation_in_a_conversation(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
     monkeypatch.setattr(server, "WEB_AUTH_CONFIG", _web_auth_config())
