@@ -1,6 +1,7 @@
 import json
 import logging
 
+import pytest
 from fastapi.testclient import TestClient
 
 import server
@@ -55,6 +56,58 @@ def test_web_profile_advertises_isolated_project_tools_with_a_workspace(monkeypa
     }.issubset(names)
 
 
+def test_web_profile_advertises_only_runner_mcp_tools_for_a_workspace(monkeypatch):
+    monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(
+        server,
+        "REMOTE_WORKSPACE_CONFIG",
+        RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
+    )
+    monkeypatch.setattr(
+        server,
+        "list_remote_mcp_tools",
+        lambda config: [
+            {
+                "type": "function",
+                "function": {
+                    "name": "mcp__runner__search",
+                    "description": "Search runner data",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+    )
+
+    names = {schema["function"]["name"] for schema in server._active_tool_schemas("project-a")}
+
+    assert "mcp__runner__search" in names
+
+
+def test_server_invokes_project_mcp_tools_through_the_workspace_runner(monkeypatch):
+    monkeypatch.setattr(
+        server,
+        "REMOTE_WORKSPACE_CONFIG",
+        RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
+    )
+    calls: list[tuple[str, str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        server,
+        "invoke_remote_mcp_tool",
+        lambda config, workspace_id, name, args: calls.append((workspace_id, name, args)) or "done",
+    )
+
+    result = server._invoke_chat_tool(
+        server.TOOLS_REGISTRY["write_file"],
+        "mcp__runner__search",
+        {"query": "Triton"},
+        "session-a",
+        "project-a",
+    )
+
+    assert result == "done"
+    assert calls == [("project-a", "mcp__runner__search", {"query": "Triton"})]
+
+
 def test_remote_workspace_tool_arguments_stay_in_the_selected_workspace():
     assert normalize_remote_workspace_args(
         "project-a",
@@ -103,6 +156,35 @@ def test_server_invokes_project_tools_through_the_workspace_runner(monkeypatch):
 
     assert result == "done"
     assert calls == [("project-a", "write_file", {"path": "main.py", "content": "print('ok')"})]
+
+
+@pytest.mark.parametrize(
+    "tool_name, args",
+    [("web_search", {"query": "Triton"}), ("fetch_url", {"url": "https://example.com"})],
+)
+def test_server_keeps_project_network_tools_in_the_api(monkeypatch, tool_name, args):
+    calls: list[tuple[str, dict[str, object], str]] = []
+    monkeypatch.setattr(
+        server,
+        "invoke_remote_workspace_tool",
+        lambda config, workspace_id, name, args: (_ for _ in ()).throw(AssertionError(name)),
+    )
+    monkeypatch.setattr(
+        server,
+        "invoke_tool",
+        lambda tool, name, args, session_id: calls.append((name, args, session_id)) or "result",
+    )
+
+    result = server._invoke_chat_tool(
+        server.TOOLS_REGISTRY[tool_name],
+        tool_name,
+        args,
+        "session-a",
+        "project-a",
+    )
+
+    assert result == "result"
+    assert calls == [(tool_name, args, "session-a")]
 
 
 def test_server_starts_a_background_task_through_the_workspace_runner(monkeypatch):
@@ -180,7 +262,7 @@ def test_server_lists_and_stops_background_tasks_through_the_workspace_runner(mo
     assert stopped_result == "task task-1 stopped"
 
 
-def test_server_invokes_mcp_tools_locally_even_inside_a_remote_workspace(monkeypatch):
+def test_server_keeps_mcp_tools_local_for_the_desktop_executor(monkeypatch):
     monkeypatch.setattr(
         server,
         "REMOTE_WORKSPACE_CONFIG",
@@ -203,7 +285,7 @@ def test_server_invokes_mcp_tools_locally_even_inside_a_remote_workspace(monkeyp
         "mcp__example__tool",
         {"query": "hi"},
         "session-a",
-        "project-a",
+        None,
     )
 
     assert result == "done"
@@ -421,7 +503,14 @@ def test_web_profile_reads_remote_project_files(monkeypatch, tmp_path):
     assert tree.json() == {"tree": [{"name": "readme.md"}], "truncated": False}
     assert file.content == b"# Triton"
     assert file.headers["content-type"] == "text/markdown; charset=utf-8"
-    assert capabilities.json() == {"remote_workspaces": True}
+    assert capabilities.json() == {
+        "remote_workspaces": True,
+        "projects": True,
+        "background_tasks": True,
+        "subagents": True,
+        "snapshots": True,
+        "orchestrator": True,
+    }
 
 
 def test_web_profile_deletes_the_remote_workspace_with_its_project(monkeypatch, tmp_path):

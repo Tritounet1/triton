@@ -34,7 +34,6 @@ from triton import background_tasks, mcp_client
 from triton.agents import orchestrator, subagents
 from triton.backup import build_backup_zip
 from triton.deployment import (
-    WEB_TOOL_NAMES,
     DeploymentProfile,
     load_deployment_profile,
     load_web_auth_config,
@@ -63,12 +62,17 @@ from triton.paths import ROOT_DIR
 from triton.remote_workspaces import (
     RemoteWorkspaceConfig,
     RemoteWorkspaceError,
+    add_remote_mcp_server,
     create_remote_workspace,
+    delete_remote_mcp_server,
     delete_remote_task,
     delete_remote_workspace,
     ensure_remote_snapshot,
     get_remote_task,
+    invoke_remote_mcp_tool,
     invoke_remote_workspace_tool,
+    list_remote_mcp_servers,
+    list_remote_mcp_tools,
     list_remote_snapshots,
     list_remote_tasks,
     load_remote_workspace_config,
@@ -79,6 +83,7 @@ from triton.remote_workspaces import (
     restore_remote_snapshot,
     start_remote_task,
     stop_remote_task,
+    toggle_remote_mcp_server,
 )
 from triton.storage import scheduled_tasks
 from triton.storage.logs import LOGS_FILE, current_month_cost, events_for_month, log_event
@@ -133,6 +138,7 @@ from triton.storage.settings import (
     save_tavily_api_key,
 )
 from triton.storage.snapshots import get_snapshot, list_snapshots
+from triton.tool_executor import ToolExecutor
 from triton.tools import (
     SNAPSHOT_MAX_AGE_DAYS,
     TOOLS_REGISTRY,
@@ -206,7 +212,8 @@ def _session_file_path(session_id: str) -> Path:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    mcp_client.manager.connect_all_enabled()
+    if DEPLOYMENT_PROFILE is DeploymentProfile.DESKTOP:
+        mcp_client.manager.connect_all_enabled()
     # orchestrator runs and scheduled tasks both work against a remote
     # workspace now too (see agents/orchestrator.py's resolve_workspace),
     # so resuming/polling for them shouldn't stay desktop-only - unlike
@@ -259,7 +266,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     yield
     if agentic_background_work_enabled:
         _scheduler_stop_event.set()
-    mcp_client.manager.disconnect_all()
+    if DEPLOYMENT_PROFILE is DeploymentProfile.DESKTOP:
+        mcp_client.manager.disconnect_all()
 
 
 # checked only while the backend happens to be running (no OS-level cron) -
@@ -515,90 +523,46 @@ async def require_local_api_token(request: Request, call_next):
             )
 
 
-def _active_tool_schemas() -> list[ChatCompletionToolParam]:
-    return [
+def _remote_mcp_tools(workspace_id: str | None) -> dict[str, Tool]:
+    if workspace_id is None or REMOTE_WORKSPACE_CONFIG is None:
+        return {}
+    try:
+        schemas = list_remote_mcp_tools(REMOTE_WORKSPACE_CONFIG)
+    except RemoteWorkspaceError:
+        return {}
+    tools: dict[str, Tool] = {}
+    for schema in schemas:
+        function = schema.get("function")
+        name = function.get("name") if isinstance(function, dict) else None
+        if not isinstance(name, str) or not name.startswith(mcp_client.MCP_PREFIX):
+            continue
+        tools[name] = Tool(
+            schema=cast(ChatCompletionToolParam, schema), fn=lambda: "", read_only=False
+        )
+    return tools
+
+
+def _active_tool_schemas(workspace_id: str | None = None) -> list[ChatCompletionToolParam]:
+    schemas = [
         tool.schema
         for name, tool in TOOLS_REGISTRY.items()
         if tool_is_allowed(DEPLOYMENT_PROFILE, name, REMOTE_WORKSPACE_CONFIG is not None)
     ]
-
-
-BACKGROUND_TASK_TOOL_NAMES = {
-    "start_background_task",
-    "stop_background_task",
-    "list_background_tasks",
-}
-
-# dispatch_subagent/check_subagent run in the main server process (they
-# need call_chat, which needs the OpenRouter key the isolated workspace
-# runner never has) - only the sub-agent's own file tools get routed to
-# the remote workspace, from inside agents/subagents.py itself.
-SUBAGENT_DISPATCH_TOOL_NAMES = {"dispatch_subagent", "check_subagent"}
-
-
-def _remote_background_task_result(
-    config: RemoteWorkspaceConfig,
-    workspace_id: str,
-    session_id: str,
-    name: str,
-    args: dict[str, object],
-) -> str:
-    if name == "start_background_task":
-        command = args.get("command")
-        if not isinstance(command, str) or not command:
-            return "error: start_background_task needs a command"
-        task_name = args.get("name")
-        directory = args.get("directory")
-        task = start_remote_task(
-            config,
-            workspace_id,
-            session_id,
-            command,
-            task_name if isinstance(task_name, str) else "",
-            directory if isinstance(directory, str) else "",
-        )
-        return (
-            f"Background task started (id={task['id']}, name={task['name']!r}) in "
-            f"{task['directory']}. It keeps running after this call returns - it doesn't "
-            "block the conversation. Check its status with list_background_tasks, and stop "
-            "it with stop_background_task when you're done with it. The user can also see "
-            "it, read its live output, and stop it from the app."
-        )
-    if name == "stop_background_task":
-        task_id = args.get("task_id")
-        if not isinstance(task_id, str) or not task_id:
-            return "error: stop_background_task needs a task_id"
-        task = stop_remote_task(config, workspace_id, task_id)
-        if task["status"] == "stopped":
-            return f"task {task_id} stopped"
-        return f"{task['status']}: task is not running"
-    tasks = list_remote_tasks(config, workspace_id, session_id)
-    if not tasks:
-        return "(no background tasks in this conversation)"
-    return "\n".join(
-        f"{t['id']} [{t['status']}] {t['name']} (directory={t['directory']})" for t in tasks
-    )
+    return [*schemas, *(tool.schema for tool in _remote_mcp_tools(workspace_id).values())]
 
 
 def _invoke_chat_tool(
     tool: Tool, name: str, args: dict[str, object], session_id: str, workspace_id: str | None
 ) -> str:
-    if (
-        workspace_id is None
-        or name.startswith(mcp_client.MCP_PREFIX)
-        or name in SUBAGENT_DISPATCH_TOOL_NAMES
-        or name in WEB_TOOL_NAMES
-    ):
-        return invoke_tool(tool, name, args, session_id)
-    config = REMOTE_WORKSPACE_CONFIG
-    if config is None:
-        return "error: remote workspaces are not configured"
-    try:
-        if name in BACKGROUND_TASK_TOOL_NAMES:
-            return _remote_background_task_result(config, workspace_id, session_id, name, args)
-        return invoke_remote_workspace_tool(config, workspace_id, name, args)
-    except RemoteWorkspaceError as exc:
-        return f"error: {exc}"
+    return ToolExecutor(
+        REMOTE_WORKSPACE_CONFIG,
+        invoke_tool,
+        invoke_remote_workspace_tool,
+        invoke_remote_mcp_tool,
+        start_remote_task,
+        stop_remote_task,
+        list_remote_tasks,
+    ).invoke(tool, name, args, session_id, workspace_id)
 
 
 def _ensure_write_snapshot(
@@ -882,6 +846,13 @@ def run_chat_stream(
 
     project_id = load_session_project(session_id)
     project = get_project(project_id) if project_id else None
+    workspace_id = (
+        project.folder_path.removeprefix("workspace://")
+        if DEPLOYMENT_PROFILE is DeploymentProfile.WEB
+        and project is not None
+        and project.folder_path.startswith("workspace://")
+        else None
+    )
     session_model = model_override or load_session_model(session_id)
     # computed before compression can collapse old turns away - see
     # turn_index_of's own docstring
@@ -919,7 +890,7 @@ def run_chat_stream(
         try:
             for event in timed_stream_chat(
                 messages,
-                tools=_active_tool_schemas(),
+                tools=_active_tool_schemas(workspace_id),
                 model=session_model,
                 session_id=session_id,
                 project_id=project_id,
@@ -995,14 +966,7 @@ def run_chat_stream(
                     except json.JSONDecodeError:
                         result = f"error: invalid arguments ({tool_call.function.arguments})"
                     else:
-                        tool = TOOLS_REGISTRY.get(name)
-                        workspace_id = (
-                            project.folder_path.removeprefix("workspace://")
-                            if DEPLOYMENT_PROFILE is DeploymentProfile.WEB
-                            and project is not None
-                            and project.folder_path.startswith("workspace://")
-                            else None
-                        )
+                        tool = TOOLS_REGISTRY.get(name) or _remote_mcp_tools(workspace_id).get(name)
                         if workspace_id is not None:
                             try:
                                 args = normalize_remote_workspace_args(workspace_id, name, args)
@@ -2449,11 +2413,25 @@ def restore_session_snapshot(session_id: str, body: SnapshotRestoreRequest) -> d
 
 @app.get("/mcp/servers", tags=["MCP"])
 def list_mcp_servers() -> list[mcp_client.ServerStatus]:
+    if DEPLOYMENT_PROFILE is DeploymentProfile.WEB and REMOTE_WORKSPACE_CONFIG is not None:
+        try:
+            statuses = list_remote_mcp_servers(REMOTE_WORKSPACE_CONFIG)
+            return cast(list[mcp_client.ServerStatus], statuses)
+        except RemoteWorkspaceError as exc:
+            raise HTTPException(503, str(exc)) from exc
     return mcp_client.manager.status()
 
 
 @app.post("/mcp/servers", tags=["MCP"])
 def add_mcp_server(body: MCPServerCreate) -> list[mcp_client.ServerStatus]:
+    if DEPLOYMENT_PROFILE is DeploymentProfile.WEB and REMOTE_WORKSPACE_CONFIG is not None:
+        try:
+            return cast(
+                list[mcp_client.ServerStatus],
+                add_remote_mcp_server(REMOTE_WORKSPACE_CONFIG, body.model_dump()),
+            )
+        except RemoteWorkspaceError as exc:
+            raise HTTPException(503, str(exc)) from exc
     config = mcp_client.MCPServerConfig(
         name=body.name, command=body.command, args=body.args, env=body.env, enabled=body.enabled
     )
@@ -2466,6 +2444,14 @@ def add_mcp_server(body: MCPServerCreate) -> list[mcp_client.ServerStatus]:
 
 @app.put("/mcp/servers/{name}", tags=["MCP"])
 def toggle_mcp_server(name: str, body: MCPServerToggle) -> list[mcp_client.ServerStatus]:
+    if DEPLOYMENT_PROFILE is DeploymentProfile.WEB and REMOTE_WORKSPACE_CONFIG is not None:
+        try:
+            return cast(
+                list[mcp_client.ServerStatus],
+                toggle_remote_mcp_server(REMOTE_WORKSPACE_CONFIG, name, body.enabled),
+            )
+        except RemoteWorkspaceError as exc:
+            raise HTTPException(503, str(exc)) from exc
     try:
         mcp_client.manager.set_enabled(name, body.enabled)
     except KeyError as e:
@@ -2475,6 +2461,14 @@ def toggle_mcp_server(name: str, body: MCPServerToggle) -> list[mcp_client.Serve
 
 @app.delete("/mcp/servers/{name}", tags=["MCP"])
 def remove_mcp_server(name: str) -> list[mcp_client.ServerStatus]:
+    if DEPLOYMENT_PROFILE is DeploymentProfile.WEB and REMOTE_WORKSPACE_CONFIG is not None:
+        try:
+            return cast(
+                list[mcp_client.ServerStatus],
+                delete_remote_mcp_server(REMOTE_WORKSPACE_CONFIG, name),
+            )
+        except RemoteWorkspaceError as exc:
+            raise HTTPException(503, str(exc)) from exc
     mcp_client.manager.remove_server(name)
     return mcp_client.manager.status()
 
@@ -2552,7 +2546,15 @@ def list_projects() -> list[Project]:
 
 @app.get("/deployment/capabilities", tags=["Deployment"])
 def deployment_capabilities() -> dict[str, bool]:
-    return {"remote_workspaces": REMOTE_WORKSPACE_CONFIG is not None}
+    remote_workspaces = REMOTE_WORKSPACE_CONFIG is not None
+    return {
+        "remote_workspaces": remote_workspaces,
+        "projects": DEPLOYMENT_PROFILE is DeploymentProfile.DESKTOP or remote_workspaces,
+        "background_tasks": DEPLOYMENT_PROFILE is DeploymentProfile.DESKTOP or remote_workspaces,
+        "subagents": DEPLOYMENT_PROFILE is DeploymentProfile.DESKTOP or remote_workspaces,
+        "snapshots": DEPLOYMENT_PROFILE is DeploymentProfile.DESKTOP or remote_workspaces,
+        "orchestrator": DEPLOYMENT_PROFILE is DeploymentProfile.DESKTOP or remote_workspaces,
+    }
 
 
 @app.post("/projects", tags=["Projects"])

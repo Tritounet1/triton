@@ -26,6 +26,7 @@ services:
       dockerfile: workspace/Dockerfile
     environment:
       TRITON_WORKSPACE_TOKEN: ${TRITON_WORKSPACE_TOKEN:-}
+      TRITON_WORKSPACE_MAX_BYTES: ${TRITON_WORKSPACE_MAX_BYTES:-2147483648}
     networks:
       - workspace
     volumes:

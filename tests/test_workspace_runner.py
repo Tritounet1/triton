@@ -2,11 +2,17 @@ import json
 import subprocess
 import time
 
+import pytest
 from fastapi.testclient import TestClient
 
-from triton import workspace_runner
+from triton import mcp_client, workspace_runner
 
 TOKEN_HEADER = {"X-Triton-Workspace-Token": "workspace-token"}
+
+
+@pytest.fixture(autouse=True)
+def _isolate_runner_mcp_config(monkeypatch, tmp_path):
+    monkeypatch.setattr(mcp_client, "CONFIG_PATH", tmp_path / "mcp_servers.json")
 
 
 def test_workspace_runner_requires_a_private_token(monkeypatch, tmp_path):
@@ -30,6 +36,41 @@ def test_workspace_runner_requires_a_private_token(monkeypatch, tmp_path):
     assert created.json() == {"id": "project-a"}
     assert (tmp_path / "project-a").is_dir()
     assert duplicate.status_code == 409
+
+
+def test_workspace_runner_exposes_its_own_mcp_registry(monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_runner, "WORKSPACES_DIR", tmp_path)
+    monkeypatch.setattr(workspace_runner, "WORKSPACE_TOKEN", "workspace-token")
+
+    with TestClient(workspace_runner.app) as client:
+        servers = client.get("/mcp/servers", headers=TOKEN_HEADER)
+        tools = client.get("/mcp/tools", headers=TOKEN_HEADER)
+
+    assert servers.json() == []
+    assert tools.json() == []
+
+
+def test_workspace_runner_persists_mcp_servers_in_its_own_data_directory(monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_runner, "WORKSPACES_DIR", tmp_path)
+    monkeypatch.setattr(workspace_runner, "WORKSPACE_TOKEN", "workspace-token")
+
+    with TestClient(workspace_runner.app) as client:
+        created = client.post(
+            "/mcp/servers",
+            json={
+                "name": "notes",
+                "command": "python",
+                "args": ["-m", "notes_mcp"],
+                "env": {"TOKEN": "secret"},
+                "enabled": False,
+            },
+            headers=TOKEN_HEADER,
+        )
+
+    assert created.status_code == 200
+    assert created.json()[0]["name"] == "notes"
+    assert created.json()[0]["connected"] is False
+    assert "secret" not in mcp_client.CONFIG_PATH.read_text()
 
 
 def test_workspace_runner_rejects_path_like_workspace_ids(monkeypatch, tmp_path):
@@ -456,6 +497,61 @@ def test_workspace_runner_rejects_writes_over_its_disk_quota(monkeypatch, tmp_pa
 
     assert "quota" in write.json()["result"]
     assert not (tmp_path / "project-a" / "big.txt").exists()
+
+
+def test_workspace_runner_rejects_edits_over_its_disk_quota(monkeypatch, tmp_path):
+    _setup_workspace(monkeypatch, tmp_path)
+    monkeypatch.setattr(workspace_runner, "MAX_WORKSPACE_BYTES", 10)
+    path = tmp_path / "project-a" / "note.txt"
+    path.write_text("short")
+
+    with TestClient(workspace_runner.app) as client:
+        edit = client.post(
+            "/workspaces/project-a/tools",
+            json={
+                "name": "edit_file",
+                "args": {
+                    "edits": [{"path": "note.txt", "old_string": "short", "new_string": "x" * 11}]
+                },
+            },
+            headers=TOKEN_HEADER,
+        )
+
+    assert "quota" in edit.json()["result"]
+    assert path.read_text() == "short"
+
+
+def test_workspace_runner_reports_shell_commands_that_exceed_the_disk_quota(monkeypatch, tmp_path):
+    _setup_workspace(monkeypatch, tmp_path)
+    monkeypatch.setattr(workspace_runner, "MAX_WORKSPACE_BYTES", 10)
+
+    with TestClient(workspace_runner.app) as client:
+        shell = client.post(
+            "/workspaces/project-a/tools",
+            json={
+                "name": "run_shell",
+                "args": {"command": "printf 123456 > one.txt; printf 123456 > two.txt"},
+            },
+            headers=TOKEN_HEADER,
+        )
+
+    assert "quota" in shell.json()["result"]
+
+
+def test_workspace_runner_rejects_snapshots_over_its_disk_quota(monkeypatch, tmp_path):
+    _setup_workspace(monkeypatch, tmp_path)
+    monkeypatch.setattr(workspace_runner, "MAX_WORKSPACE_BYTES", 10)
+    (tmp_path / "project-a" / "note.txt").write_text("x" * 6)
+
+    with TestClient(workspace_runner.app) as client:
+        snapshot = client.post(
+            "/workspaces/project-a/snapshots",
+            json={"session_id": "session-1", "turn_index": 1},
+            headers=TOKEN_HEADER,
+        )
+
+    assert snapshot.status_code == 413
+    assert "quota" in snapshot.json()["detail"]
 
 
 def test_workspace_runner_maintenance_purges_orphaned_workspaces(monkeypatch, tmp_path):

@@ -2,8 +2,6 @@ from dataclasses import dataclass
 from enum import StrEnum
 from os import getenv
 
-from triton.mcp_client import MCP_PREFIX
-
 
 class DeploymentProfile(StrEnum):
     DESKTOP = "desktop"
@@ -43,6 +41,7 @@ REMOTE_WORKSPACE_TOOL_NAMES = frozenset(
 
 WEB_DENIED_PATH_PREFIXES = (
     "/background_tasks",
+    "/mcp",
     "/orchestrator",
     "/projects",
     "/scheduled_tasks",
@@ -51,6 +50,7 @@ WEB_DENIED_PATH_PREFIXES = (
 
 WEB_DENIED_PATHS = {
     "/settings/api_key",
+    "/settings/tavily_key",
 }
 
 # meaningless without a remote workspace to actually run subtasks in -
@@ -80,8 +80,10 @@ def tool_is_allowed(
     return (
         profile is DeploymentProfile.DESKTOP
         or tool_name in WEB_TOOL_NAMES
-        or tool_name.startswith(MCP_PREFIX)
-        or (remote_workspaces_enabled and tool_name in REMOTE_WORKSPACE_TOOL_NAMES)
+        or (
+            remote_workspaces_enabled
+            and (tool_name in REMOTE_WORKSPACE_TOOL_NAMES or tool_name.startswith("mcp__"))
+        )
     )
 
 
@@ -98,7 +100,14 @@ def path_is_allowed(
         return False
     if (
         path.startswith(
-            ("/projects", "/background_tasks", "/subagents", "/orchestrator", "/scheduled_tasks")
+            (
+                "/mcp",
+                "/projects",
+                "/background_tasks",
+                "/subagents",
+                "/orchestrator",
+                "/scheduled_tasks",
+            )
         )
         and remote_workspaces_enabled
     ):
