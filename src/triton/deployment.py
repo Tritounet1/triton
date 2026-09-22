@@ -51,7 +51,6 @@ WEB_DENIED_PATH_PREFIXES = (
 
 WEB_DENIED_PATHS = {
     "/settings/api_key",
-    "/settings/tavily_key",
 }
 
 # meaningless without a remote workspace to actually run subtasks in -

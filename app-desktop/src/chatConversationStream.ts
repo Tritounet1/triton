@@ -53,6 +53,7 @@ export async function runChatConversationStream(options: ChatConversationStreamO
     flushScheduled = false;
     if (!isDisplayed()) return;
     const text = assistantText;
+    if (!text) return;
     options.updateMessages((messages) => upsertAssistantMessage(messages, text));
   };
   const scheduleFlush = () => {

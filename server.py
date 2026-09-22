@@ -34,6 +34,7 @@ from triton import background_tasks, mcp_client
 from triton.agents import orchestrator, subagents
 from triton.backup import build_backup_zip
 from triton.deployment import (
+    WEB_TOOL_NAMES,
     DeploymentProfile,
     load_deployment_profile,
     load_web_auth_config,
@@ -534,12 +535,6 @@ BACKGROUND_TASK_TOOL_NAMES = {
 # the remote workspace, from inside agents/subagents.py itself.
 SUBAGENT_DISPATCH_TOOL_NAMES = {"dispatch_subagent", "check_subagent"}
 
-# remember/todo_write write to harness-managed storage (memory files,
-# an in-process list) keyed by session/project id, never to project.folder_path
-# - nothing here needs the remote workspace, on top of it not even having a
-# route for either.
-HOST_ONLY_TOOL_NAMES = {"remember", "todo_write"}
-
 
 def _remote_background_task_result(
     config: RemoteWorkspaceConfig,
@@ -592,7 +587,7 @@ def _invoke_chat_tool(
         workspace_id is None
         or name.startswith(mcp_client.MCP_PREFIX)
         or name in SUBAGENT_DISPATCH_TOOL_NAMES
-        or name in HOST_ONLY_TOOL_NAMES
+        or name in WEB_TOOL_NAMES
     ):
         return invoke_tool(tool, name, args, session_id)
     config = REMOTE_WORKSPACE_CONFIG
