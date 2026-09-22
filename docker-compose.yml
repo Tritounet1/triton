@@ -13,7 +13,39 @@ services:
       - "127.0.0.1:8000:8000"
     volumes:
       - triton-data:/data
+    networks:
+      - default
+      - workspace
+    restart: unless-stopped
+
+  workspace:
+    profiles:
+      - workspaces
+    build:
+      context: .
+      dockerfile: workspace/Dockerfile
+    environment:
+      TRITON_WORKSPACE_TOKEN: ${TRITON_WORKSPACE_TOKEN:-}
+    networks:
+      - workspace
+    volumes:
+      - triton-workspaces:/workspaces
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    mem_limit: 1g
+    cpus: 1.0
     restart: unless-stopped
 
 volumes:
   triton-data:
+  triton-workspaces:
+
+networks:
+  workspace:
+    internal: true
