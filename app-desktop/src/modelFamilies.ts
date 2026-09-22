@@ -44,7 +44,7 @@ export const FAMILIES: Record<string, FamilyInfo> = {
   minimax: { label: "MiniMax" },
   moonshotai: { label: "Moonshot AI (Kimi)", logo: "/kimi-logo.png" },
   microsoft: { label: "Microsoft", logo: "/microsoft-logo.png" },
-  xiaomi: { label: "Xiaomi (MiMo)" },
+  xiaomi: { label: "Xiaomi (MiMo)", logo: "/xiaomi-logo.png" },
 };
 
 // prefixes OpenRouter differents pour une meme famille (ex. "meta" et
