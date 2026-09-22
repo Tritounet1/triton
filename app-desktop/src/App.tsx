@@ -2539,7 +2539,7 @@ function App() {
           </AppShell>
           {!sidebarCollapsed && (
             <div className="fixed bottom-3 left-0 z-30 flex w-[260px] justify-end gap-0.5 px-2">
-              {!isWebDeployment && <IconButton
+              <IconButton
                 label="Paramètres"
                 icon={<GearIcon />}
                 variant="ghost"
@@ -2547,7 +2547,7 @@ function App() {
                 onClick={() => {
                   setSettingsOpen(true);
                 }}
-              />}
+              />
               <IconButton
                 label={
                   themeMode === "dark"
@@ -2609,14 +2609,15 @@ function App() {
         }}
       />}
 
-      {!isWebDeployment && <SettingsModal
+      <SettingsModal
         isOpen={settingsOpen}
         onClose={() => {
           setSettingsOpen(false);
         }}
+        isWebDeployment={isWebDeployment}
         onModelChanged={refreshApiModel}
         onImageModelChanged={refreshImageModel}
-      />}
+      />
 
       {!isWebDeployment && <NewProjectModal
         isOpen={showProjectForm}
