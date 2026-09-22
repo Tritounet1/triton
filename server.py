@@ -495,6 +495,12 @@ BACKGROUND_TASK_TOOL_NAMES = {
     "list_background_tasks",
 }
 
+# dispatch_subagent/check_subagent run in the main server process (they
+# need call_chat, which needs the OpenRouter key the isolated workspace
+# runner never has) - only the sub-agent's own file tools get routed to
+# the remote workspace, from inside agents/subagents.py itself.
+SUBAGENT_DISPATCH_TOOL_NAMES = {"dispatch_subagent", "check_subagent"}
+
 
 def _remote_background_task_result(
     config: RemoteWorkspaceConfig,
@@ -543,7 +549,11 @@ def _remote_background_task_result(
 def _invoke_chat_tool(
     tool: Tool, name: str, args: dict[str, object], session_id: str, workspace_id: str | None
 ) -> str:
-    if workspace_id is None or name.startswith(mcp_client.MCP_PREFIX):
+    if (
+        workspace_id is None
+        or name.startswith(mcp_client.MCP_PREFIX)
+        or name in SUBAGENT_DISPATCH_TOOL_NAMES
+    ):
         return invoke_tool(tool, name, args, session_id)
     config = REMOTE_WORKSPACE_CONFIG
     if config is None:

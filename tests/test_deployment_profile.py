@@ -57,6 +57,16 @@ def test_web_profile_allows_background_tasks_route_only_when_remote_workspaces_e
     )
 
 
+def test_web_profile_allows_subagents_only_when_remote_workspaces_enabled():
+    assert not path_is_allowed(DeploymentProfile.WEB, "/subagents")
+    assert path_is_allowed(DeploymentProfile.WEB, "/subagents", remote_workspaces_enabled=True)
+    assert not tool_is_allowed(DeploymentProfile.WEB, "dispatch_subagent")
+    assert tool_is_allowed(
+        DeploymentProfile.WEB, "dispatch_subagent", remote_workspaces_enabled=True
+    )
+    assert tool_is_allowed(DeploymentProfile.WEB, "check_subagent", remote_workspaces_enabled=True)
+
+
 def test_web_profile_denies_host_and_operator_routes():
     assert path_is_allowed(DeploymentProfile.WEB, "/chat")
     assert path_is_allowed(DeploymentProfile.WEB, "/images/generate")
