@@ -24,7 +24,14 @@ def test_web_profile_only_advertises_safe_remote_tools(monkeypatch):
 
     names = _tool_names()
 
-    assert names == {"fetch_url", "show_link_preview", "show_map", "web_search"}
+    assert names == {
+        "fetch_url",
+        "show_link_preview",
+        "show_map",
+        "web_search",
+        "remember",
+        "todo_write",
+    }
 
 
 def test_web_profile_advertises_isolated_project_tools_with_a_workspace(monkeypatch):
@@ -201,6 +208,66 @@ def test_server_invokes_mcp_tools_locally_even_inside_a_remote_workspace(monkeyp
 
     assert result == "done"
     assert calls == [("mcp__example__tool", {"query": "hi"}, "session-a")]
+
+
+def test_web_profile_resumes_orchestrator_runs_when_remote_workspaces_are_configured(
+    monkeypatch,
+):
+    monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(
+        server,
+        "REMOTE_WORKSPACE_CONFIG",
+        RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
+    )
+    calls: list[bool] = []
+    monkeypatch.setattr(server.orchestrator, "resume_incomplete_runs", lambda: calls.append(True))
+
+    with TestClient(server.app):
+        pass
+
+    assert calls == [True]
+
+
+def test_web_profile_does_not_resume_orchestrator_runs_without_remote_workspaces(monkeypatch):
+    monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(server, "REMOTE_WORKSPACE_CONFIG", None)
+    calls: list[bool] = []
+    monkeypatch.setattr(server.orchestrator, "resume_incomplete_runs", lambda: calls.append(True))
+
+    with TestClient(server.app):
+        pass
+
+    assert calls == []
+
+
+def test_server_invokes_remember_locally_even_inside_a_remote_workspace(monkeypatch):
+    monkeypatch.setattr(
+        server,
+        "REMOTE_WORKSPACE_CONFIG",
+        RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(
+        server,
+        "invoke_tool",
+        lambda tool, name, args, session_id: calls.append(name) or "remembered: hi",
+    )
+    monkeypatch.setattr(
+        server,
+        "invoke_remote_workspace_tool",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("should not reach the runner")),
+    )
+
+    result = server._invoke_chat_tool(
+        server.TOOLS_REGISTRY["remember"],
+        "remember",
+        {"note": "hi"},
+        "session-a",
+        "project-a",
+    )
+
+    assert result == "remembered: hi"
+    assert calls == ["remember"]
 
 
 def test_server_invokes_dispatch_subagent_locally_even_inside_a_remote_workspace(monkeypatch):

@@ -205,7 +205,16 @@ def _session_file_path(session_id: str) -> Path:
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     mcp_client.manager.connect_all_enabled()
-    if DEPLOYMENT_PROFILE is DeploymentProfile.DESKTOP:
+    # orchestrator runs and scheduled tasks both work against a remote
+    # workspace now too (see agents/orchestrator.py's resolve_workspace),
+    # so resuming/polling for them shouldn't stay desktop-only - unlike
+    # purge_expired_snapshots below, which only ever cleans up the local
+    # desktop snapshot store and is a no-op (not just harmless, genuinely
+    # nothing to do) for a web profile that never wrote to it.
+    agentic_background_work_enabled = (
+        DEPLOYMENT_PROFILE is DeploymentProfile.DESKTOP or REMOTE_WORKSPACE_CONFIG is not None
+    )
+    if agentic_background_work_enabled:
         resumed = orchestrator.resume_incomplete_runs()
         if resumed:
             logging.getLogger("uvicorn").info(
@@ -213,11 +222,13 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                 len(resumed),
                 ", ".join(resumed),
             )
+    if DEPLOYMENT_PROFILE is DeploymentProfile.DESKTOP:
         purged = purge_expired_snapshots()
         if purged:
             logging.getLogger("uvicorn").info(
                 "purged %d snapshot(s) older than %d days", purged, SNAPSHOT_MAX_AGE_DAYS
             )
+    if agentic_background_work_enabled:
         scheduler_thread = threading.Thread(target=_scheduled_tasks_poll_loop, daemon=True)
         scheduler_thread.start()
     # Tauri waits for this message from the sidecar it spawned before it
@@ -226,7 +237,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     if LOCAL_API_TOKEN is not None:
         print("TRITON_SIDECAR_READY", flush=True)
     yield
-    if DEPLOYMENT_PROFILE is DeploymentProfile.DESKTOP:
+    if agentic_background_work_enabled:
         _scheduler_stop_event.set()
     mcp_client.manager.disconnect_all()
 
@@ -504,6 +515,12 @@ BACKGROUND_TASK_TOOL_NAMES = {
 # the remote workspace, from inside agents/subagents.py itself.
 SUBAGENT_DISPATCH_TOOL_NAMES = {"dispatch_subagent", "check_subagent"}
 
+# remember/todo_write write to harness-managed storage (memory files,
+# an in-process list) keyed by session/project id, never to project.folder_path
+# - nothing here needs the remote workspace, on top of it not even having a
+# route for either.
+HOST_ONLY_TOOL_NAMES = {"remember", "todo_write"}
+
 
 def _remote_background_task_result(
     config: RemoteWorkspaceConfig,
@@ -556,6 +573,7 @@ def _invoke_chat_tool(
         workspace_id is None
         or name.startswith(mcp_client.MCP_PREFIX)
         or name in SUBAGENT_DISPATCH_TOOL_NAMES
+        or name in HOST_ONLY_TOOL_NAMES
     ):
         return invoke_tool(tool, name, args, session_id)
     config = REMOTE_WORKSPACE_CONFIG
