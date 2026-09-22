@@ -414,3 +414,81 @@ def test_workspace_runner_deletes_snapshots_with_the_workspace(monkeypatch, tmp_
         client.delete("/workspaces/project-a", headers=TOKEN_HEADER)
 
     assert not (tmp_path / ".snapshots" / "project-a").exists()
+
+
+def test_workspace_runner_caps_concurrent_tasks_per_workspace(monkeypatch, tmp_path):
+    _setup_workspace(monkeypatch, tmp_path)
+    monkeypatch.setattr(workspace_runner, "MAX_CONCURRENT_TASKS_PER_WORKSPACE", 1)
+    (tmp_path / "project-b").mkdir()
+
+    with TestClient(workspace_runner.app) as client:
+        first = client.post(
+            "/workspaces/project-a/tasks",
+            json={"session_id": "session-1", "command": "sleep 5"},
+            headers=TOKEN_HEADER,
+        )
+        second = client.post(
+            "/workspaces/project-a/tasks",
+            json={"session_id": "session-1", "command": "sleep 5"},
+            headers=TOKEN_HEADER,
+        )
+        other_workspace = client.post(
+            "/workspaces/project-b/tasks",
+            json={"session_id": "session-1", "command": "sleep 5"},
+            headers=TOKEN_HEADER,
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert other_workspace.status_code == 200
+
+
+def test_workspace_runner_rejects_writes_over_its_disk_quota(monkeypatch, tmp_path):
+    _setup_workspace(monkeypatch, tmp_path)
+    monkeypatch.setattr(workspace_runner, "MAX_WORKSPACE_BYTES", 10)
+
+    with TestClient(workspace_runner.app) as client:
+        write = client.post(
+            "/workspaces/project-a/tools",
+            json={"name": "write_file", "args": {"path": "big.txt", "content": "x" * 100}},
+            headers=TOKEN_HEADER,
+        )
+
+    assert "quota" in write.json()["result"]
+    assert not (tmp_path / "project-a" / "big.txt").exists()
+
+
+def test_workspace_runner_maintenance_purges_orphaned_workspaces(monkeypatch, tmp_path):
+    _setup_workspace(monkeypatch, tmp_path)
+    (tmp_path / "project-orphan").mkdir()
+
+    with TestClient(workspace_runner.app) as client:
+        result = client.post(
+            "/maintenance/purge",
+            json={"keep_workspace_ids": ["project-a"]},
+            headers=TOKEN_HEADER,
+        )
+
+    assert result.json()["orphaned_workspaces_removed"] == 1
+    assert not (tmp_path / "project-orphan").exists()
+    assert (tmp_path / "project-a").exists()
+
+
+def test_workspace_runner_maintenance_purges_expired_snapshots(monkeypatch, tmp_path):
+    _setup_workspace(monkeypatch, tmp_path)
+    monkeypatch.setattr(workspace_runner, "SNAPSHOT_MAX_AGE_DAYS", -1)
+
+    with TestClient(workspace_runner.app) as client:
+        client.post(
+            "/workspaces/project-a/snapshots",
+            json={"session_id": "session-1", "turn_index": 1},
+            headers=TOKEN_HEADER,
+        )
+        result = client.post(
+            "/maintenance/purge",
+            json={"keep_workspace_ids": ["project-a"]},
+            headers=TOKEN_HEADER,
+        )
+
+    assert result.json()["expired_snapshots_removed"] == 1
+    assert not (tmp_path / ".snapshots" / "project-a" / "session-1_1").exists()

@@ -24,6 +24,9 @@ WORKSPACE_TOKEN = os.getenv("TRITON_WORKSPACE_TOKEN", "")
 TASKS_DIR = WORKSPACES_DIR / ".tasks"
 SNAPSHOTS_DIR = WORKSPACES_DIR / ".snapshots"
 MAX_CONCURRENT_TASKS = 5
+MAX_CONCURRENT_TASKS_PER_WORKSPACE = 3
+MAX_WORKSPACE_BYTES = int(os.getenv("TRITON_WORKSPACE_MAX_BYTES", str(2 * 1024**3)))
+SNAPSHOT_MAX_AGE_DAYS = int(os.getenv("TRITON_SNAPSHOT_MAX_AGE_DAYS", "30"))
 
 app = FastAPI(title="Triton Workspace Runner", docs_url=None, redoc_url=None)
 
@@ -148,6 +151,10 @@ def _run_tool(workspace_id: str, name: str, args: dict[str, object]) -> str:
         content = args.get("content")
         if not isinstance(content, str):
             raise ValueError("content must be a string")
+        existing_size = path.stat().st_size if path.is_file() else 0
+        projected = _workspace_size_bytes(workspace_id) - existing_size + len(content.encode())
+        if projected > MAX_WORKSPACE_BYTES:
+            raise ValueError(f"workspace would exceed its {MAX_WORKSPACE_BYTES} byte quota")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
         return f"file {args['path']} written ({len(content)} characters)"
@@ -167,6 +174,8 @@ def _run_tool(workspace_id: str, name: str, args: dict[str, object]) -> str:
         edits = args.get("edits")
         if not isinstance(edits, list) or not edits:
             raise ValueError("no edits provided")
+        if _workspace_size_bytes(workspace_id) > MAX_WORKSPACE_BYTES:
+            raise ValueError(f"workspace already exceeds its {MAX_WORKSPACE_BYTES} byte quota")
         prepared: dict[Path, list[dict[str, object]]] = {}
         for edit in edits:
             if not isinstance(edit, dict):
@@ -452,12 +461,21 @@ def workspace_tool(
         return {"result": f"error: {exc}"}
 
 
-def _running_task_count() -> int:
+def _running_task_count(workspace_id: str | None = None) -> int:
     return sum(
         1
         for path in TASKS_DIR.glob("*.json")
-        if (task := _load_task(path.stem)) and _refresh_task(task)["status"] == "running"
+        if (task := _load_task(path.stem))
+        and (workspace_id is None or task.get("workspace_id") == workspace_id)
+        and _refresh_task(task)["status"] == "running"
     )
+
+
+def _workspace_size_bytes(workspace_id: str) -> int:
+    workspace = _workspace_path(workspace_id)
+    if not workspace.is_dir():
+        return 0
+    return sum(f.stat().st_size for f in workspace.rglob("*") if f.is_file())
 
 
 @app.post("/workspaces/{workspace_id}/tasks")
@@ -470,6 +488,12 @@ def start_task(
     TASKS_DIR.mkdir(parents=True, exist_ok=True)
     if _running_task_count() >= MAX_CONCURRENT_TASKS:
         raise HTTPException(429, f"{MAX_CONCURRENT_TASKS} background tasks are already running")
+    if _running_task_count(workspace_id) >= MAX_CONCURRENT_TASKS_PER_WORKSPACE:
+        raise HTTPException(
+            429,
+            f"{MAX_CONCURRENT_TASKS_PER_WORKSPACE} background tasks are already running "
+            "in this project",
+        )
     directory = _tool_path(workspace_id, body.directory)
     task_id = uuid.uuid4().hex[:12]
     log_path = TASKS_DIR / f"{task_id}.log"
@@ -645,3 +669,50 @@ def restore_workspace_snapshot(
         else:
             shutil.copy2(child, destination)
     return {"restored": True}
+
+
+class MaintenancePurgeRequest(BaseModel):
+    keep_workspace_ids: list[str] = Field(default_factory=list)
+
+
+def _purge_expired_snapshots() -> int:
+    if not SNAPSHOTS_DIR.is_dir():
+        return 0
+    cutoff = datetime.now(UTC).timestamp() - SNAPSHOT_MAX_AGE_DAYS * 86400
+    removed = 0
+    for workspace_snapshots in SNAPSHOTS_DIR.iterdir():
+        if not workspace_snapshots.is_dir():
+            continue
+        for entry in workspace_snapshots.iterdir():
+            if not entry.is_dir():
+                continue
+            try:
+                created_at = json.loads((entry / "meta.json").read_text())["created_at"]
+                age_ok = datetime.fromisoformat(created_at).timestamp() >= cutoff
+            except (OSError, ValueError, KeyError):
+                age_ok = entry.stat().st_mtime >= cutoff
+            if not age_ok:
+                shutil.rmtree(entry, ignore_errors=True)
+                removed += 1
+    return removed
+
+
+@app.post("/maintenance/purge")
+def purge_maintenance(
+    body: MaintenancePurgeRequest,
+    x_triton_workspace_token: str | None = Header(default=None),
+) -> dict[str, int]:
+    _require_token(x_triton_workspace_token)
+    keep = set(body.keep_workspace_ids)
+    orphaned_workspaces = 0
+    if WORKSPACES_DIR.is_dir():
+        for entry in WORKSPACES_DIR.iterdir():
+            if not entry.is_dir() or entry.name.startswith(".") or entry.name in keep:
+                continue
+            shutil.rmtree(entry, ignore_errors=True)
+            shutil.rmtree(SNAPSHOTS_DIR / entry.name, ignore_errors=True)
+            orphaned_workspaces += 1
+    return {
+        "orphaned_workspaces_removed": orphaned_workspaces,
+        "expired_snapshots_removed": _purge_expired_snapshots(),
+    }

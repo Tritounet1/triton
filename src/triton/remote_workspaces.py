@@ -261,3 +261,10 @@ def restore_remote_snapshot(
         f"/workspaces/{workspace_id}/snapshots/restore",
         {"session_id": session_id, "turn_index": turn_index},
     )
+
+
+def purge_remote_maintenance(
+    config: RemoteWorkspaceConfig, keep_workspace_ids: list[str]
+) -> dict[str, int]:
+    response = _post(config, "/maintenance/purge", {"keep_workspace_ids": keep_workspace_ids})
+    return cast(dict[str, int], response.json())
