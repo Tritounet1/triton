@@ -7,6 +7,8 @@ services:
     environment:
       TRITON_DATA_DIR: /data
       TRITON_DEPLOYMENT_PROFILE: web
+      TRITON_WORKSPACE_BASE_URL: http://workspace:8001
+      TRITON_WORKSPACE_TOKEN: ${TRITON_WORKSPACE_TOKEN:-}
     expose:
       - "8000"
     ports:
