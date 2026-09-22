@@ -10,7 +10,18 @@ class DeploymentProfile(StrEnum):
 
 WEB_TOOL_NAMES = frozenset({"fetch_url", "show_link_preview", "show_map", "web_search"})
 REMOTE_WORKSPACE_TOOL_NAMES = frozenset(
-    {"read_file", "list_files", "write_file", "edit_file", "delete_file", "move_file", "run_shell"}
+    {
+        "read_file",
+        "list_files",
+        "write_file",
+        "edit_file",
+        "delete_file",
+        "move_file",
+        "run_shell",
+        "start_background_task",
+        "stop_background_task",
+        "list_background_tasks",
+    }
 )
 
 WEB_DENIED_PATH_PREFIXES = (
@@ -66,7 +77,7 @@ def path_is_allowed(
         return True
     if path in WEB_DENIED_PATHS or any(segment in path for segment in WEB_DENIED_PATH_SEGMENTS):
         return False
-    if path.startswith("/projects") and remote_workspaces_enabled:
+    if path.startswith(("/projects", "/background_tasks")) and remote_workspaces_enabled:
         return True
     return not path.startswith(WEB_DENIED_PATH_PREFIXES)
 

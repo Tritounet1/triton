@@ -60,14 +60,20 @@ from triton.llm.chat_loop import (
 from triton.llm.model_roles import ROLE_MODELS
 from triton.paths import ROOT_DIR
 from triton.remote_workspaces import (
+    RemoteWorkspaceConfig,
     RemoteWorkspaceError,
     create_remote_workspace,
+    delete_remote_task,
     delete_remote_workspace,
+    get_remote_task,
     invoke_remote_workspace_tool,
+    list_remote_tasks,
     load_remote_workspace_config,
     normalize_remote_workspace_args,
     remote_workspace_file,
     remote_workspace_tree,
+    start_remote_task,
+    stop_remote_task,
 )
 from triton.storage import scheduled_tasks
 from triton.storage.logs import LOGS_FILE, current_month_cost, events_for_month, log_event
@@ -483,6 +489,57 @@ def _active_tool_schemas() -> list[ChatCompletionToolParam]:
     ]
 
 
+BACKGROUND_TASK_TOOL_NAMES = {
+    "start_background_task",
+    "stop_background_task",
+    "list_background_tasks",
+}
+
+
+def _remote_background_task_result(
+    config: RemoteWorkspaceConfig,
+    workspace_id: str,
+    session_id: str,
+    name: str,
+    args: dict[str, object],
+) -> str:
+    if name == "start_background_task":
+        command = args.get("command")
+        if not isinstance(command, str) or not command:
+            return "error: start_background_task needs a command"
+        task_name = args.get("name")
+        directory = args.get("directory")
+        task = start_remote_task(
+            config,
+            workspace_id,
+            session_id,
+            command,
+            task_name if isinstance(task_name, str) else "",
+            directory if isinstance(directory, str) else "",
+        )
+        return (
+            f"Background task started (id={task['id']}, name={task['name']!r}) in "
+            f"{task['directory']}. It keeps running after this call returns - it doesn't "
+            "block the conversation. Check its status with list_background_tasks, and stop "
+            "it with stop_background_task when you're done with it. The user can also see "
+            "it, read its live output, and stop it from the app."
+        )
+    if name == "stop_background_task":
+        task_id = args.get("task_id")
+        if not isinstance(task_id, str) or not task_id:
+            return "error: stop_background_task needs a task_id"
+        task = stop_remote_task(config, workspace_id, task_id)
+        if task["status"] == "stopped":
+            return f"task {task_id} stopped"
+        return f"{task['status']}: task is not running"
+    tasks = list_remote_tasks(config, workspace_id, session_id)
+    if not tasks:
+        return "(no background tasks in this conversation)"
+    return "\n".join(
+        f"{t['id']} [{t['status']}] {t['name']} (directory={t['directory']})" for t in tasks
+    )
+
+
 def _invoke_chat_tool(
     tool: Tool, name: str, args: dict[str, object], session_id: str, workspace_id: str | None
 ) -> str:
@@ -492,6 +549,8 @@ def _invoke_chat_tool(
     if config is None:
         return "error: remote workspaces are not configured"
     try:
+        if name in BACKGROUND_TASK_TOOL_NAMES:
+            return _remote_background_task_result(config, workspace_id, session_id, name, args)
         return invoke_remote_workspace_tool(config, workspace_id, name, args)
     except RemoteWorkspaceError as exc:
         return f"error: {exc}"
@@ -2610,13 +2669,63 @@ def get_orchestrator_run(run_id: str) -> orchestrator.OrchestratorRun:
     return run
 
 
+def _remote_workspace_for_session(
+    session_id: str | None,
+) -> tuple[RemoteWorkspaceConfig, str] | None:
+    config = REMOTE_WORKSPACE_CONFIG
+    if config is None or session_id is None:
+        return None
+    project_id = load_session_project(session_id)
+    project = get_project(project_id) if project_id else None
+    if project is None or not project.folder_path.startswith("workspace://"):
+        return None
+    return config, project.folder_path.removeprefix("workspace://")
+
+
+def _split_remote_task_id(task_id: str) -> tuple[str, str] | None:
+    workspace_id, sep, remote_id = task_id.partition(":")
+    return (workspace_id, remote_id) if sep else None
+
+
+def _remote_task_summary(workspace_id: str, task: dict[str, object]) -> dict[str, object]:
+    return {
+        "id": f"{workspace_id}:{task['id']}",
+        "session_id": task["session_id"],
+        "name": task["name"],
+        "command": task["command"],
+        "directory": task["directory"],
+        "status": task["status"],
+        "exit_code": None,
+        "created_at": task["created_at"],
+    }
+
+
 @app.get("/background_tasks", tags=["Background Tasks"])
 def list_background_tasks_endpoint(session_id: str | None = None) -> list[dict[str, object]]:
+    remote = _remote_workspace_for_session(session_id)
+    if remote is not None:
+        config, workspace_id = remote
+        try:
+            tasks = list_remote_tasks(config, workspace_id, session_id)
+        except RemoteWorkspaceError:
+            return []
+        return [_remote_task_summary(workspace_id, t) for t in tasks]
     return [background_tasks.summary(t) for t in background_tasks.list_tasks(session_id)]
 
 
 @app.get("/background_tasks/{task_id}", tags=["Background Tasks"])
 def get_background_task(task_id: str) -> dict[str, object]:
+    split = _split_remote_task_id(task_id)
+    if split is not None:
+        workspace_id, remote_id = split
+        config = REMOTE_WORKSPACE_CONFIG
+        if config is None:
+            raise HTTPException(404, "background task not found")
+        try:
+            task = get_remote_task(config, workspace_id, remote_id)
+        except RemoteWorkspaceError as exc:
+            raise HTTPException(404, "background task not found") from exc
+        return {**_remote_task_summary(workspace_id, task), "logs": task.get("logs", "")}
     task = background_tasks.get(task_id)
     if task is None:
         raise HTTPException(404, "background task not found")
@@ -2625,6 +2734,18 @@ def get_background_task(task_id: str) -> dict[str, object]:
 
 @app.post("/background_tasks/{task_id}/stop", tags=["Background Tasks"])
 def stop_background_task_endpoint(task_id: str) -> dict[str, object]:
+    split = _split_remote_task_id(task_id)
+    if split is not None:
+        workspace_id, remote_id = split
+        config = REMOTE_WORKSPACE_CONFIG
+        if config is None:
+            raise HTTPException(404, "background task not found")
+        try:
+            stop_remote_task(config, workspace_id, remote_id)
+            task = get_remote_task(config, workspace_id, remote_id)
+        except RemoteWorkspaceError as exc:
+            raise HTTPException(404, "background task not found") from exc
+        return {**_remote_task_summary(workspace_id, task), "logs": task.get("logs", "")}
     task = background_tasks.get(task_id)
     if task is None:
         raise HTTPException(404, "background task not found")
@@ -2634,6 +2755,17 @@ def stop_background_task_endpoint(task_id: str) -> dict[str, object]:
 
 @app.delete("/background_tasks/{task_id}", tags=["Background Tasks"])
 def delete_background_task_endpoint(task_id: str) -> dict[str, bool]:
+    split = _split_remote_task_id(task_id)
+    if split is not None:
+        workspace_id, remote_id = split
+        config = REMOTE_WORKSPACE_CONFIG
+        if config is None:
+            raise HTTPException(404, "background task not found")
+        try:
+            delete_remote_task(config, workspace_id, remote_id)
+        except RemoteWorkspaceError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"deleted": True}
     if background_tasks.get(task_id) is None:
         raise HTTPException(404, "background task not found")
     result = background_tasks.delete(task_id)

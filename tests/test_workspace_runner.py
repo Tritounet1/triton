@@ -1,6 +1,11 @@
+import json
+import time
+
 from fastapi.testclient import TestClient
 
 from triton import workspace_runner
+
+TOKEN_HEADER = {"X-Triton-Workspace-Token": "workspace-token"}
 
 
 def test_workspace_runner_requires_a_private_token(monkeypatch, tmp_path):
@@ -128,3 +133,121 @@ def test_workspace_runner_executes_tools_inside_its_workspace(monkeypatch, tmp_p
     assert write.json()["result"] == "file notes/readme.md written (6 characters)"
     assert edit.json()["result"] == "notes/readme.md: 1 edit(s) applied"
     assert command.json() == {"result": "Harness"}
+
+
+def _setup_workspace(monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_runner, "WORKSPACES_DIR", tmp_path)
+    monkeypatch.setattr(workspace_runner, "TASKS_DIR", tmp_path / ".tasks")
+    monkeypatch.setattr(workspace_runner, "WORKSPACE_TOKEN", "workspace-token")
+    (tmp_path / "project-a").mkdir()
+
+
+def test_workspace_runner_starts_lists_and_reads_a_task(monkeypatch, tmp_path):
+    _setup_workspace(monkeypatch, tmp_path)
+
+    with TestClient(workspace_runner.app) as client:
+        started = client.post(
+            "/workspaces/project-a/tasks",
+            json={"session_id": "session-1", "command": "echo hi", "name": "greet"},
+            headers=TOKEN_HEADER,
+        )
+        task_id = started.json()["id"]
+        listed = client.get(
+            "/workspaces/project-a/tasks",
+            params={"session_id": "session-1"},
+            headers=TOKEN_HEADER,
+        )
+        detail = None
+        for _ in range(50):
+            detail = client.get(f"/workspaces/project-a/tasks/{task_id}", headers=TOKEN_HEADER)
+            if detail.json()["logs"]:
+                break
+            time.sleep(0.1)
+
+    assert started.status_code == 200
+    assert started.json()["workspace_id"] == "project-a"
+    assert started.json()["session_id"] == "session-1"
+    assert started.json()["name"] == "greet"
+    assert [t["id"] for t in listed.json()] == [task_id]
+    assert detail is not None
+    assert "hi" in detail.json()["logs"]
+
+
+def test_workspace_runner_list_tasks_filters_by_session(monkeypatch, tmp_path):
+    _setup_workspace(monkeypatch, tmp_path)
+
+    with TestClient(workspace_runner.app) as client:
+        client.post(
+            "/workspaces/project-a/tasks",
+            json={"session_id": "session-1", "command": "sleep 5"},
+            headers=TOKEN_HEADER,
+        )
+        client.post(
+            "/workspaces/project-a/tasks",
+            json={"session_id": "session-2", "command": "sleep 5"},
+            headers=TOKEN_HEADER,
+        )
+        listed = client.get(
+            "/workspaces/project-a/tasks",
+            params={"session_id": "session-1"},
+            headers=TOKEN_HEADER,
+        )
+
+    assert len(listed.json()) == 1
+    assert listed.json()[0]["session_id"] == "session-1"
+
+
+def test_workspace_runner_stops_a_task_without_bloating_persisted_state(monkeypatch, tmp_path):
+    _setup_workspace(monkeypatch, tmp_path)
+
+    with TestClient(workspace_runner.app) as client:
+        started = client.post(
+            "/workspaces/project-a/tasks",
+            json={"session_id": "session-1", "command": "sleep 5"},
+            headers=TOKEN_HEADER,
+        )
+        task_id = started.json()["id"]
+        stopped = client.post(f"/workspaces/project-a/tasks/{task_id}/stop", headers=TOKEN_HEADER)
+
+    assert stopped.json()["status"] == "stopped"
+    persisted = json.loads((tmp_path / ".tasks" / f"{task_id}.json").read_text())
+    assert "logs" not in persisted
+
+
+def test_workspace_runner_deletes_a_stopped_task_but_not_a_running_one(monkeypatch, tmp_path):
+    _setup_workspace(monkeypatch, tmp_path)
+
+    with TestClient(workspace_runner.app) as client:
+        started = client.post(
+            "/workspaces/project-a/tasks",
+            json={"session_id": "session-1", "command": "sleep 5"},
+            headers=TOKEN_HEADER,
+        )
+        task_id = started.json()["id"]
+        denied = client.delete(f"/workspaces/project-a/tasks/{task_id}", headers=TOKEN_HEADER)
+        client.post(f"/workspaces/project-a/tasks/{task_id}/stop", headers=TOKEN_HEADER)
+        allowed = client.delete(f"/workspaces/project-a/tasks/{task_id}", headers=TOKEN_HEADER)
+
+    assert denied.status_code == 409
+    assert allowed.json() == {"deleted": True}
+    assert not (tmp_path / ".tasks" / f"{task_id}.json").exists()
+
+
+def test_workspace_runner_caps_concurrent_tasks(monkeypatch, tmp_path):
+    _setup_workspace(monkeypatch, tmp_path)
+    monkeypatch.setattr(workspace_runner, "MAX_CONCURRENT_TASKS", 1)
+
+    with TestClient(workspace_runner.app) as client:
+        first = client.post(
+            "/workspaces/project-a/tasks",
+            json={"session_id": "session-1", "command": "sleep 5"},
+            headers=TOKEN_HEADER,
+        )
+        second = client.post(
+            "/workspaces/project-a/tasks",
+            json={"session_id": "session-1", "command": "sleep 5"},
+            headers=TOKEN_HEADER,
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 429

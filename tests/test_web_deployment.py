@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 import server
 from triton.deployment import DeploymentProfile, WebAuthConfig
 from triton.remote_workspaces import RemoteWorkspaceConfig, normalize_remote_workspace_args
-from triton.storage import projects
+from triton.storage import projects, sessions
 from triton.web_runtime import SlidingWindowRateLimiter, WebRuntimeConfig
 
 
@@ -56,6 +56,14 @@ def test_remote_workspace_tool_arguments_stay_in_the_selected_workspace():
     ) == {"path": "src/main.py", "content": "print('ok')"}
 
 
+def test_remote_workspace_normalizes_start_background_task_directory():
+    assert normalize_remote_workspace_args(
+        "project-a",
+        "start_background_task",
+        {"command": "pnpm dev", "directory": "workspace://project-a/app"},
+    ) == {"command": "pnpm dev", "directory": "app"}
+
+
 def test_server_invokes_project_tools_through_the_workspace_runner(monkeypatch):
     monkeypatch.setattr(
         server,
@@ -79,6 +87,81 @@ def test_server_invokes_project_tools_through_the_workspace_runner(monkeypatch):
 
     assert result == "done"
     assert calls == [("project-a", "write_file", {"path": "main.py", "content": "print('ok')"})]
+
+
+def test_server_starts_a_background_task_through_the_workspace_runner(monkeypatch):
+    monkeypatch.setattr(
+        server,
+        "REMOTE_WORKSPACE_CONFIG",
+        RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
+    )
+    calls: list[tuple[str, str, str, str, str]] = []
+    monkeypatch.setattr(
+        server,
+        "start_remote_task",
+        lambda config, workspace_id, session_id, command, name, directory: (
+            calls.append((workspace_id, session_id, command, name, directory))
+            or {"id": "task-1", "name": name or command, "directory": "."}
+        ),
+    )
+
+    result = server._invoke_chat_tool(
+        server.TOOLS_REGISTRY["start_background_task"],
+        "start_background_task",
+        {"command": "pnpm dev"},
+        "session-a",
+        "project-a",
+    )
+
+    assert calls == [("project-a", "session-a", "pnpm dev", "", "")]
+    assert "id=task-1" in result
+
+
+def test_server_lists_and_stops_background_tasks_through_the_workspace_runner(monkeypatch):
+    monkeypatch.setattr(
+        server,
+        "REMOTE_WORKSPACE_CONFIG",
+        RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
+    )
+    monkeypatch.setattr(
+        server,
+        "list_remote_tasks",
+        lambda config, workspace_id, session_id: [
+            {
+                "id": "task-1",
+                "status": "running",
+                "name": "dev server",
+                "directory": ".",
+            }
+        ],
+    )
+    stopped: list[str] = []
+    monkeypatch.setattr(
+        server,
+        "stop_remote_task",
+        lambda config, workspace_id, task_id: (
+            stopped.append(task_id) or {"id": task_id, "status": "stopped"}
+        ),
+    )
+
+    listed = server._invoke_chat_tool(
+        server.TOOLS_REGISTRY["list_background_tasks"],
+        "list_background_tasks",
+        {},
+        "session-a",
+        "project-a",
+    )
+    stopped_result = server._invoke_chat_tool(
+        server.TOOLS_REGISTRY["stop_background_task"],
+        "stop_background_task",
+        {"task_id": "task-1"},
+        "session-a",
+        "project-a",
+    )
+
+    assert "task-1" in listed and "dev server" in listed
+    assert stopped == ["task-1"]
+    assert stopped_result == "task task-1 stopped"
 
 
 def test_desktop_profile_keeps_local_tools(monkeypatch):
@@ -229,6 +312,100 @@ def test_web_profile_deletes_the_remote_workspace_with_its_project(monkeypatch, 
     assert login.status_code == 200
     assert response.json() == []
     assert deleted_workspaces == ["project-a"]
+
+
+def _workspace_session(monkeypatch, tmp_path, workspace_id: str = "project-a") -> str:
+    sessions_dir = tmp_path / "sessions"
+    monkeypatch.setattr(sessions, "SESSIONS_DIR", sessions_dir)
+    monkeypatch.setattr(server, "SESSIONS_DIR", sessions_dir)
+    monkeypatch.setattr(projects, "PROJECTS_FILE", tmp_path / "projects.json")
+    projects.create_project("Mon projet", f"workspace://{workspace_id}", workspace_id)
+    session_path = sessions.new_session_path()
+    sessions.save_session(session_path, [])
+    session_id = session_path.stem
+    sessions.save_session_project(session_id, workspace_id)
+    return session_id
+
+
+def test_web_profile_lists_background_tasks_from_the_workspace_runner(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(server, "WEB_AUTH_CONFIG", _web_auth_config())
+    monkeypatch.setattr(
+        server,
+        "REMOTE_WORKSPACE_CONFIG",
+        RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
+    )
+    session_id = _workspace_session(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        server,
+        "list_remote_tasks",
+        lambda config, workspace_id, session_id: [
+            {
+                "id": "task-1",
+                "session_id": session_id,
+                "name": "dev server",
+                "command": "pnpm dev",
+                "directory": ".",
+                "status": "running",
+                "created_at": "2026-01-01T00:00:00",
+            }
+        ],
+    )
+
+    with TestClient(server.app) as client:
+        client.post("/auth/login", json={"username": "admin", "password": "password"})
+        response = client.get("/background_tasks", params={"session_id": session_id})
+
+    assert response.status_code == 200
+    [task] = response.json()
+    assert task["id"] == "project-a:task-1"
+    assert task["exit_code"] is None
+
+
+def test_web_profile_reads_stops_and_deletes_a_remote_background_task(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(server, "WEB_AUTH_CONFIG", _web_auth_config())
+    monkeypatch.setattr(
+        server,
+        "REMOTE_WORKSPACE_CONFIG",
+        RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
+    )
+    _workspace_session(monkeypatch, tmp_path)
+    task = {
+        "id": "task-1",
+        "session_id": "session-a",
+        "name": "dev server",
+        "command": "pnpm dev",
+        "directory": ".",
+        "status": "running",
+        "created_at": "2026-01-01T00:00:00",
+        "logs": "starting up",
+    }
+    monkeypatch.setattr(server, "get_remote_task", lambda config, workspace_id, task_id: task)
+    stopped: list[str] = []
+    monkeypatch.setattr(
+        server,
+        "stop_remote_task",
+        lambda config, workspace_id, task_id: stopped.append(task_id),
+    )
+    deleted: list[str] = []
+    monkeypatch.setattr(
+        server,
+        "delete_remote_task",
+        lambda config, workspace_id, task_id: deleted.append(task_id),
+    )
+
+    with TestClient(server.app) as client:
+        client.post("/auth/login", json={"username": "admin", "password": "password"})
+        detail = client.get("/background_tasks/project-a:task-1")
+        stop_response = client.post("/background_tasks/project-a:task-1/stop")
+        delete_response = client.delete("/background_tasks/project-a:task-1")
+
+    assert detail.json()["logs"] == "starting up"
+    assert stop_response.status_code == 200
+    assert stopped == ["task-1"]
+    assert delete_response.json() == {"deleted": True}
+    assert deleted == ["task-1"]
 
 
 def test_web_profile_allows_image_generation_in_a_conversation(monkeypatch, tmp_path):
