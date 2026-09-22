@@ -6,15 +6,22 @@ write-tool safety net (tools/snapshot.py) only covers project folders,
 nothing about the harness's own state.
 
 Includes the app state stored under ROOT_DIR. OpenRouter/Tavily keys and
-MCP secrets live in the macOS Keychain and are therefore deliberately not
-exported. A legacy `.env` file can still contain credentials and is included
-as-is; keep the resulting archive as securely as that file."""
+MCP secrets live in the macOS Keychain, or in storage/keychain.py's
+FALLBACK_FILE (secrets.json under ROOT_DIR) on a platform without one -
+neither BACKUP_FILES nor BACKUP_DIRS lists that file, so it's never
+exported either way; the assertion right below is what actually
+guarantees that stays true. A legacy `.env` file can still contain
+credentials and is included as-is; keep the resulting archive as
+securely as that file - in practice this only matters for a dev
+checkout, since nothing in the Docker/web setup ever puts one under
+ROOT_DIR."""
 
 import io
 import zipfile
 from pathlib import Path
 
 from triton.paths import ROOT_DIR
+from triton.storage.keychain import FALLBACK_FILE
 
 # Every top-level file/directory this app writes under ROOT_DIR - see
 # each storage/tools module's own ROOT_DIR / "..." constant. Listed here
@@ -42,6 +49,8 @@ BACKUP_DIRS = [
     "snapshot_manifests",
     "snapshot_backups",
 ]
+
+assert FALLBACK_FILE.name not in BACKUP_FILES
 
 
 def build_backup_zip() -> bytes:

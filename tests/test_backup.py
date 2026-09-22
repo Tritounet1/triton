@@ -56,6 +56,21 @@ def test_build_backup_zip_includes_directories_recursively(tmp_path):
         assert "project_memory/proj1.md" in names
 
 
+def test_build_backup_zip_never_includes_the_keychain_fallback_file(tmp_path):
+    # secrets.json (triton.storage.keychain.FALLBACK_FILE, used on
+    # platforms without a real OS keychain) holds MCP server secrets in
+    # the clear - must never end up in an exportable zip, see the
+    # module-level assert in backup.py.
+    (tmp_path / "secrets.json").write_text('{"mcp:server:token": "sk-secret"}')
+    (tmp_path / "projects.json").write_text('[{"id": "p1"}]')
+
+    data = backup.build_backup_zip()
+
+    with zipfile.ZipFile(BytesIO(data)) as zf:
+        assert "secrets.json" not in zf.namelist()
+        assert "projects.json" in zf.namelist()
+
+
 def test_build_backup_zip_skips_missing_files_and_dirs(tmp_path):
     # nothing exists under ROOT_DIR at all - a fresh install
     data = backup.build_backup_zip()

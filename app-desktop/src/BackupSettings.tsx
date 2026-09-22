@@ -67,8 +67,8 @@ export function BackupSettings() {
 
       <Banner
         status="warning"
-        title="Contient tes clés API en clair"
-        description="Le zip inclut les réglages et les configurations MCP, mais pas les clés API ni les variables secrètes MCP : elles restent dans le trousseau système. Le fichier .env, s'il existe, reste inclus et doit être conservé en lieu sûr."
+        title="Le fichier .env reste inclus tel quel, s'il existe"
+        description="Les clés API et les secrets des serveurs MCP restent dans le trousseau système (ou dans un fichier séparé hors macOS) et ne sont jamais dans ce zip. Un fichier .env local, lui, l'est encore tel quel - à garder aussi en sécurité que lui."
         className="mb-6"
       />
 
