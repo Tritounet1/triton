@@ -54,17 +54,13 @@ docker compose up --build -d
 
 Ouvrez `http://127.0.0.1:8000`. Le port est limité à la machine hôte.
 
+Les projets distants sont démarrés avec le service principal. Définissez donc aussi une valeur longue pour `TRITON_WORKSPACE_TOKEN` avant le lancement.
+
 Pour Dokploy, déployez ce dépôt avec Docker Compose, configurez le domaine et HTTPS dans Dokploy, puis renseignez les mêmes variables d’environnement dans son interface. Gardez `TRITON_WEB_SECURE_COOKIES=true`, qui est la valeur par défaut, pour que la session ne soit transmise qu’en HTTPS.
 
 ## Workspaces distants
 
-Le profil Compose `workspaces` démarre un service isolé, sans port exposé, sans clé opérateur et sans accès au système de fichiers de l’hôte. Il possède son propre volume et ne rejoint qu’un réseau Docker interne partagé avec l’API. Il n’est pas démarré par défaut :
-
-```sh
-docker compose --profile workspaces up --build -d
-```
-
-Définissez `TRITON_WORKSPACE_TOKEN` avec une valeur aléatoire longue avant de l’activer. Cette fondation sera utilisée par les projets distants ; les routes et outils de projets ne sont pas encore exposés au profil web.
+Docker Compose démarre un service isolé, sans port exposé, sans clé opérateur et sans accès au système de fichiers de l’hôte. Il possède son propre volume et ne rejoint qu’un réseau Docker interne partagé avec l’API. Définissez `TRITON_WORKSPACE_TOKEN` avec une valeur aléatoire longue. Les projets créés dans le client web utilisent alors un workspace persistant et isolé : ils peuvent être créés, renommés, supprimés et parcourus. Les conversations de projet peuvent lire, écrire, déplacer et supprimer leurs fichiers, ainsi qu’exécuter des commandes shell dans ce workspace ; les confirmations du client restent demandées avant toute action modifiante.
 
 ## Limites et observabilité
 

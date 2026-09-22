@@ -42,6 +42,7 @@ interface ProjectFilePanelProps {
   onStopTask: (id: string) => void;
   onDeleteTask: (id: string) => void;
   onOpenFile: (file: OpenFile) => void;
+  showSnapshots?: boolean;
 }
 
 /** Icone "type de fichier" style IDE pour les extensions qu'on sait
@@ -99,6 +100,7 @@ export function ProjectFilePanel({
   onStopTask,
   onDeleteTask,
   onOpenFile,
+  showSnapshots = true,
 }: ProjectFilePanelProps) {
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [truncated, setTruncated] = useState(false);
@@ -156,7 +158,7 @@ export function ProjectFilePanel({
         onDelete={onDeleteTask}
       />
 
-      <SnapshotSection sessionId={sessionId} onOpenHistory={onOpenHistory} />
+      {showSnapshots && <SnapshotSection sessionId={sessionId} onOpenHistory={onOpenHistory} />}
 
       <div className="flex-1 overflow-y-auto px-2 py-2">
         {error && (

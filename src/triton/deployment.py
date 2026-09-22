@@ -9,6 +9,9 @@ class DeploymentProfile(StrEnum):
 
 
 WEB_TOOL_NAMES = frozenset({"fetch_url", "show_link_preview", "show_map", "web_search"})
+REMOTE_WORKSPACE_TOOL_NAMES = frozenset(
+    {"read_file", "list_files", "write_file", "edit_file", "delete_file", "move_file", "run_shell"}
+)
 
 WEB_DENIED_PATH_PREFIXES = (
     "/backup",
@@ -46,8 +49,14 @@ def load_deployment_profile(value: str | None = None) -> DeploymentProfile:
         ) from exc
 
 
-def tool_is_allowed(profile: DeploymentProfile, tool_name: str) -> bool:
-    return profile is DeploymentProfile.DESKTOP or tool_name in WEB_TOOL_NAMES
+def tool_is_allowed(
+    profile: DeploymentProfile, tool_name: str, remote_workspaces_enabled: bool = False
+) -> bool:
+    return (
+        profile is DeploymentProfile.DESKTOP
+        or tool_name in WEB_TOOL_NAMES
+        or (remote_workspaces_enabled and tool_name in REMOTE_WORKSPACE_TOOL_NAMES)
+    )
 
 
 def path_is_allowed(

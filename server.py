@@ -62,7 +62,12 @@ from triton.paths import ROOT_DIR
 from triton.remote_workspaces import (
     RemoteWorkspaceError,
     create_remote_workspace,
+    delete_remote_workspace,
+    invoke_remote_workspace_tool,
     load_remote_workspace_config,
+    normalize_remote_workspace_args,
+    remote_workspace_file,
+    remote_workspace_tree,
 )
 from triton.storage import scheduled_tasks
 from triton.storage.logs import LOGS_FILE, current_month_cost, events_for_month, log_event
@@ -123,6 +128,7 @@ from triton.tools import (
     WRITE_TOOL_NAMES,
     InvalidSnapshotPathError,
     RestoreError,
+    Tool,
     commit_diff_snapshot,
     commit_snapshot_file_content,
     diff_snapshot,
@@ -329,6 +335,7 @@ OPENAPI_TAGS = [
         "cost, export, and the write-tool safety net's snapshot/restore.",
     },
     {"name": "Projects", "description": "Project folders: CRUD, file tree, raw file contents."},
+    {"name": "Deployment", "description": "Enabled runtime capabilities."},
     {
         "name": "Orchestrator",
         "description": "Multi-agent runs (the /multi-agents command): dispatch a task, poll "
@@ -472,8 +479,22 @@ def _active_tool_schemas() -> list[ChatCompletionToolParam]:
     return [
         tool.schema
         for name, tool in TOOLS_REGISTRY.items()
-        if tool_is_allowed(DEPLOYMENT_PROFILE, name)
+        if tool_is_allowed(DEPLOYMENT_PROFILE, name, REMOTE_WORKSPACE_CONFIG is not None)
     ]
+
+
+def _invoke_chat_tool(
+    tool: Tool, name: str, args: dict[str, object], session_id: str, workspace_id: str | None
+) -> str:
+    if workspace_id is None:
+        return invoke_tool(tool, name, args, session_id)
+    config = REMOTE_WORKSPACE_CONFIG
+    if config is None:
+        return "error: remote workspaces are not configured"
+    try:
+        return invoke_remote_workspace_tool(config, workspace_id, name, args)
+    except RemoteWorkspaceError as exc:
+        return f"error: {exc}"
 
 
 def _require_profile_project_access(project_id: str | None) -> None:
@@ -856,8 +877,26 @@ def run_chat_stream(
                     except json.JSONDecodeError:
                         result = f"error: invalid arguments ({tool_call.function.arguments})"
                     else:
-                        sandbox_error = enforce_project_sandbox(name, args, project)
                         tool = TOOLS_REGISTRY.get(name)
+                        workspace_id = (
+                            project.folder_path.removeprefix("workspace://")
+                            if DEPLOYMENT_PROFILE is DeploymentProfile.WEB
+                            and project is not None
+                            and project.folder_path.startswith("workspace://")
+                            else None
+                        )
+                        if workspace_id is not None:
+                            try:
+                                args = normalize_remote_workspace_args(workspace_id, name, args)
+                            except RemoteWorkspaceError as exc:
+                                result = f"error: {exc}"
+                                sandbox_error = result
+                            else:
+                                sandbox_error = enforce_project_sandbox(
+                                    name, args, project, remote_workspace=True
+                                )
+                        else:
+                            sandbox_error = enforce_project_sandbox(name, args, project)
 
                         # snapshot before the write actually runs, not after
                         # approval below - taking it is harmless even if this
@@ -873,6 +912,7 @@ def run_chat_stream(
                             sandbox_error is None
                             and tool is not None
                             and name in WRITE_TOOL_NAMES
+                            and workspace_id is None
                             and ensure_snapshot(project, session_id, turn_index)
                         ):
                             yield emit(
@@ -884,7 +924,7 @@ def run_chat_stream(
                                 },
                             )
 
-                        if not tool_is_allowed(DEPLOYMENT_PROFILE, name):
+                        if not tool_is_allowed(DEPLOYMENT_PROFILE, name, workspace_id is not None):
                             result = f"error: {name} is unavailable in the web deployment profile"
                         elif sandbox_error is not None:
                             result = sandbox_error
@@ -898,7 +938,7 @@ def run_chat_stream(
                         ):
                             if name in WRITE_TOOL_NAMES:
                                 turn_has_write = True
-                            result = invoke_tool(tool, name, args, session_id)
+                            result = _invoke_chat_tool(tool, name, args, session_id, workspace_id)
                         else:
                             confirmation_id = str(uuid.uuid4())
                             pending = PendingConfirmation()
@@ -917,7 +957,9 @@ def run_chat_stream(
                                     allow_always(session_id, name)
                                 if name in WRITE_TOOL_NAMES:
                                     turn_has_write = True
-                                result = invoke_tool(tool, name, args, session_id)
+                                result = _invoke_chat_tool(
+                                    tool, name, args, session_id, workspace_id
+                                )
                             else:
                                 result = "action denied by the user"
                 except Exception as e:
@@ -2358,6 +2400,11 @@ def list_projects() -> list[Project]:
     return load_projects()
 
 
+@app.get("/deployment/capabilities", tags=["Deployment"])
+def deployment_capabilities() -> dict[str, bool]:
+    return {"remote_workspaces": REMOTE_WORKSPACE_CONFIG is not None}
+
+
 @app.post("/projects", tags=["Projects"])
 def add_project(body: ProjectCreate) -> list[Project]:
     if DEPLOYMENT_PROFILE is DeploymentProfile.WEB:
@@ -2387,14 +2434,19 @@ def rename_project_endpoint(project_id: str, body: ProjectRename) -> list[Projec
 
 @app.delete("/projects/{project_id}", tags=["Projects"])
 def remove_project(project_id: str) -> list[Project]:
-    if get_project(project_id) is None:
+    project = get_project(project_id)
+    if project is None:
         raise HTTPException(404, "project not found")
-    # purge every snapshot this project has (across every session that
-    # ever wrote to it) while the record - and its folder_path, needed to
-    # clean up a git-backed snapshot's ref - can still be resolved (see
-    # discard_snapshots_for_project's own docstring for why leaving these
-    # behind means dead weight forever, not just an unused record)
-    discard_snapshots_for_project(project_id)
+    if DEPLOYMENT_PROFILE is DeploymentProfile.WEB:
+        config = REMOTE_WORKSPACE_CONFIG
+        if config is None or not project.folder_path.startswith("workspace://"):
+            raise HTTPException(404, "remote workspace not found")
+        try:
+            delete_remote_workspace(config, project.folder_path.removeprefix("workspace://"))
+        except RemoteWorkspaceError as exc:
+            raise HTTPException(503, str(exc)) from exc
+    else:
+        discard_snapshots_for_project(project_id)
     delete_project(project_id)
     for session_id in (p.stem for p in SESSIONS_DIR.glob("*.json")):
         if load_session_project(session_id) == project_id:
@@ -2451,6 +2503,15 @@ def get_project_tree(project_id: str) -> dict[str, object]:
     if project is None:
         raise HTTPException(404, "project not found")
 
+    if DEPLOYMENT_PROFILE is DeploymentProfile.WEB:
+        config = REMOTE_WORKSPACE_CONFIG
+        if config is None or not project.folder_path.startswith("workspace://"):
+            raise HTTPException(404, "remote workspace not found")
+        try:
+            return remote_workspace_tree(config, project.folder_path.removeprefix("workspace://"))
+        except RemoteWorkspaceError as exc:
+            raise HTTPException(503, str(exc)) from exc
+
     root = Path(project.folder_path)
     if not root.is_dir():
         raise HTTPException(404, "project folder no longer exists")
@@ -2461,7 +2522,7 @@ def get_project_tree(project_id: str) -> dict[str, object]:
 
 
 @app.get("/projects/{project_id}/file", tags=["Projects"])
-def get_project_file(project_id: str, path: str) -> FileResponse:
+def get_project_file(project_id: str, path: str) -> Response:
     """Serves one file's raw bytes for the desktop app's in-app viewer
     (PDF/HTML/Markdown preview - see ProjectFilePanel.tsx/FileViewerPanel.tsx),
     as an alternative to opening it with the OS's default app. `path` must
@@ -2471,6 +2532,18 @@ def get_project_file(project_id: str, path: str) -> FileResponse:
     project = get_project(project_id)
     if project is None:
         raise HTTPException(404, "project not found")
+
+    if DEPLOYMENT_PROFILE is DeploymentProfile.WEB:
+        config = REMOTE_WORKSPACE_CONFIG
+        if config is None or not project.folder_path.startswith("workspace://"):
+            raise HTTPException(404, "remote workspace not found")
+        try:
+            content, media_type = remote_workspace_file(
+                config, project.folder_path.removeprefix("workspace://"), path
+            )
+        except RemoteWorkspaceError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        return Response(content=content, media_type=media_type)
 
     root = Path(project.folder_path).resolve()
     target = Path(path).resolve()
