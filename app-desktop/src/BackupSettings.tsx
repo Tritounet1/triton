@@ -4,7 +4,7 @@ import { Button } from "@astryxdesign/core/Button";
 import { Text } from "@astryxdesign/core/Text";
 import { DownloadIcon } from "./icons";
 
-const API_BASE = "http://127.0.0.1:8000";
+import { API_BASE } from "./api";
 
 /** Sauvegarde/export complet de tout ce que le harness gere sous
  * ROOT_DIR (voir PLAN.md) : conversations, projets, memoire, snapshots,

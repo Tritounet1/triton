@@ -20,7 +20,7 @@ import {
 } from "./icons";
 import { familyInfo, familyKey, isModelFamilyVisible } from "./modelFamilies";
 
-const API_BASE = "http://127.0.0.1:8000";
+import { API_BASE } from "./api";
 
 interface RoleModelInfo {
   role: string;

@@ -9,7 +9,7 @@ import { useEffect, useMemo, useState } from "react";
 import { CheckIcon, ImageIcon, SearchIcon } from "./icons";
 import { modelAvatar } from "./modelFamilies";
 
-const API_BASE = "http://127.0.0.1:8000";
+import { API_BASE } from "./api";
 
 interface ImageModel {
   id: string;

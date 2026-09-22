@@ -10,7 +10,7 @@ import { useEffect, useState } from "react";
 import { fileKind, type OpenFile } from "./fileViewer";
 import { HtmlFileIcon, MarkdownFileIcon, PdfFileIcon, XIcon } from "./icons";
 
-const API_BASE = "http://127.0.0.1:8000";
+import { API_BASE } from "./api";
 
 interface FileViewerPanelProps {
   file: OpenFile;

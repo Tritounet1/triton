@@ -11,7 +11,7 @@ import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { CheckIcon, ChevronRightIcon, CpuIcon, SearchIcon } from "./icons";
 import { familyKey, familyInfo, isModelFamilyVisible } from "./modelFamilies";
 
-const API_BASE = "http://127.0.0.1:8000";
+import { API_BASE } from "./api";
 
 interface ModelInfo {
   [key: string]: unknown;
