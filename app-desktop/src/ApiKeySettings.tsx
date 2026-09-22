@@ -5,7 +5,7 @@ import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { KeyIcon } from "./icons";
 
-const API_BASE = "http://127.0.0.1:8000";
+import { API_BASE } from "./api";
 
 interface ApiKeyFieldProps {
   title: string;

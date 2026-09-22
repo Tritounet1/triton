@@ -6,7 +6,7 @@ import { Text } from "@astryxdesign/core/Text";
 import { ArrowLeftIcon, StopIcon, TerminalIcon } from "./icons";
 import type { BackgroundTask } from "./BackgroundTasksSection";
 
-const API_BASE = "http://127.0.0.1:8000";
+import { API_BASE } from "./api";
 const POLL_INTERVAL_MS = 1500;
 
 interface TaskDetail extends BackgroundTask {

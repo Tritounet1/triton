@@ -10,7 +10,7 @@ import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { PlugIcon, PlusIcon, TerminalIcon, TrashIcon } from "./icons";
 
-const API_BASE = "http://127.0.0.1:8000";
+import { API_BASE } from "./api";
 
 interface McpServer {
   name: string;

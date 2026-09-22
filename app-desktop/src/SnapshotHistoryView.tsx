@@ -21,7 +21,7 @@ import {
   type SnapshotView,
 } from "./snapshotDiff";
 
-const API_BASE = "http://127.0.0.1:8000";
+import { API_BASE } from "./api";
 
 function changeBadgeVariant(type: SnapshotFileChangeType): "success" | "warning" | "error" {
   if (type === "created") return "success";

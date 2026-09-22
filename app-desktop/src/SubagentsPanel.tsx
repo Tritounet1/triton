@@ -3,7 +3,7 @@ import { Badge } from "@astryxdesign/core/Badge";
 import { SideNavSection, SideNavItem } from "@astryxdesign/core/SideNav";
 import { Text } from "@astryxdesign/core/Text";
 
-const API_BASE = "http://127.0.0.1:8000";
+import { API_BASE } from "./api";
 const POLL_INTERVAL_MS = 3000;
 
 interface SubagentTask {

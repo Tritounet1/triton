@@ -11,7 +11,7 @@ import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Selector } from "@astryxdesign/core/Selector";
 import { ClockIcon, PlusIcon, TrashIcon } from "./icons";
 
-const API_BASE = "http://127.0.0.1:8000";
+import { API_BASE } from "./api";
 
 type Frequency = "hourly" | "daily" | "weekly";
 
