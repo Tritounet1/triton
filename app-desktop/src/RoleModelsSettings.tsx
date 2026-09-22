@@ -93,7 +93,7 @@ function renderModelOption(
   const info = familyInfo(familyKey(option.value));
   return (
     <SelectorOption
-      icon={<Avatar name="" src={info.logo} size="sm" tooltip={false} />}
+      icon={<Avatar name="" src={info.logo} size="md" tooltip={false} />}
       label={modelDisplayName(model, option.value)}
       description={<span className="font-mono text-[11px]">{option.value}</span>}
     />

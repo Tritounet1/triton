@@ -1971,9 +1971,13 @@ function App() {
                             <Badge variant="warning" label="YOLO actif" />
                           )}
                           <select
+                            key={imageMode ? `image-${imageModel}` : `chat-${effectiveModel}`}
                             aria-label={imageMode ? "Modèle image pour cette génération" : "Modèle chat pour ce message"}
                             value={imageMode ? (oneShotImageModel ?? "") : (oneShotChatModel ?? "")}
                             className="max-w-48 rounded-md border border-border bg-surface px-2 py-1 text-xs text-primary outline-none focus:border-accent"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                            }}
                             onChange={(event) => {
                               if (imageMode) setOneShotImageModel(event.target.value || null);
                               else setOneShotChatModel(event.target.value || null);

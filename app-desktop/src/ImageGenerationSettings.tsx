@@ -122,7 +122,7 @@ export function ImageGenerationSettings({ onModelChanged }: { onModelChanged: ()
                   selected ? "border-accent bg-accent-muted" : "border-border bg-surface hover:bg-surface-raised"
                 }`}
               >
-                <Avatar name={avatar.name} src={avatar.logo} size="sm" />
+                <Avatar name={avatar.name} src={avatar.logo} size="md" />
                 <div className="min-w-0 flex-1">
                   <Text size="sm" weight="semibold" className="block truncate">{model.name}</Text>
                   <Text size="2xs" color="secondary" className="block truncate">{model.id}</Text>
