@@ -37,5 +37,7 @@ jobs:
         run: pnpm --dir app-desktop exec eslint . --max-warnings=0
       - name: TypeScript
         run: pnpm --dir app-desktop exec tsc --noEmit
+      - name: Frontend tests
+        run: pnpm --dir app-desktop test
       - name: Frontend build
         run: pnpm --dir app-desktop build
