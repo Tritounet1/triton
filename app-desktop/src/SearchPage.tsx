@@ -42,7 +42,7 @@ export function SearchPage({ onBack, onSelectSession }: SearchPageProps) {
         setSessions(data);
       })
       .catch(() => {
-        // API hors ligne : la recherche reste vide
+        // offline: search stays empty
       });
   }, []);
 
@@ -59,7 +59,7 @@ export function SearchPage({ onBack, onSelectSession }: SearchPageProps) {
           setContentMatchIds(new Set(ids));
         })
         .catch(() => {
-          // API hors ligne : la recherche par titre (instantanee) continue de fonctionner
+          // offline: title search (instant) keeps working
         });
     }, 300);
     return () => {
