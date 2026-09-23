@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import server
+from triton import mcp_client
 from triton.deployment import DeploymentProfile, WebAuthConfig
 from triton.remote_workspaces import (
     RemoteWorkspaceConfig,
@@ -337,6 +338,53 @@ def test_server_keeps_mcp_tools_local_for_the_desktop_executor(monkeypatch):
 
     assert result == "done"
     assert calls == [("mcp__example__tool", {"query": "hi"}, "session-a")]
+
+
+def test_desktop_profile_updates_an_mcp_server_without_deleting_it(monkeypatch, tmp_path):
+    monkeypatch.setattr(mcp_client, "CONFIG_PATH", tmp_path / "mcp_servers.json")
+
+    with TestClient(server.app) as client:
+        client.post(
+            "/mcp/servers",
+            json={"name": "notes", "command": "python", "args": [], "enabled": False},
+        )
+        updated = client.patch(
+            "/mcp/servers/notes",
+            json={"name": "notes", "command": "uvx", "args": ["notes-mcp"], "enabled": False},
+        )
+        missing = client.patch(
+            "/mcp/servers/ghost",
+            json={"name": "ghost", "command": "python", "enabled": False},
+        )
+
+    assert updated.status_code == 200
+    [server_status] = updated.json()
+    assert server_status["command"] == "uvx"
+    assert server_status["args"] == ["notes-mcp"]
+    assert missing.status_code == 404
+
+
+def test_web_profile_updates_an_mcp_server_through_the_workspace_runner(monkeypatch):
+    monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
+    monkeypatch.setattr(
+        server,
+        "REMOTE_WORKSPACE_CONFIG",
+        RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
+    )
+    calls: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        server,
+        "update_remote_mcp_server",
+        lambda config, name, body: calls.append((name, body)) or [{"name": body["name"]}],
+    )
+
+    result = server.update_mcp_server(
+        "notes", server.MCPServerCreate(name="notes", command="uvx", args=["notes-mcp"])
+    )
+
+    assert result == [{"name": "notes"}]
+    assert calls[0][0] == "notes"
+    assert calls[0][1]["command"] == "uvx"
 
 
 def test_web_profile_resumes_orchestrator_runs_when_remote_workspaces_are_configured(

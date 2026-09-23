@@ -8,7 +8,7 @@ import { TextInput } from "@astryxdesign/core/TextInput";
 import { TextArea } from "@astryxdesign/core/TextArea";
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
-import { PlugIcon, PlusIcon, TerminalIcon, TrashIcon } from "./icons";
+import { PencilIcon, PlugIcon, PlusIcon, TerminalIcon, TrashIcon } from "./icons";
 
 import { API_BASE } from "./api";
 
@@ -53,6 +53,7 @@ export function McpSettings() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [editingName, setEditingName] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [deletingName, setDeletingName] = useState<string | null>(null);
@@ -84,6 +85,17 @@ export function McpSettings() {
     setEnvText("");
     setFormError(null);
     setShowForm(false);
+    setEditingName(null);
+  }
+
+  function startEdit(server: McpServer) {
+    setName(server.name);
+    setCommand(server.command);
+    setArgsText(server.args.join("\n"));
+    setEnvText("");
+    setFormError(null);
+    setEditingName(server.name);
+    setShowForm(true);
   }
 
   async function submitForm() {
@@ -95,17 +107,21 @@ export function McpSettings() {
     setFormError(null);
 
     try {
-      const res = await fetch(`${API_BASE}/mcp/servers`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: name.trim(),
-          command: command.trim(),
-          args: parseLines(argsText),
-          env: parseEnv(envText),
-          enabled: true,
-        }),
-      });
+      const currentServer = servers.find((s) => s.name === editingName);
+      const res = await fetch(
+        editingName ? `${API_BASE}/mcp/servers/${editingName}` : `${API_BASE}/mcp/servers`,
+        {
+          method: editingName ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: name.trim(),
+            command: command.trim(),
+            args: parseLines(argsText),
+            env: parseEnv(envText),
+            enabled: editingName ? (currentServer?.enabled ?? true) : true,
+          }),
+        },
+      );
 
       if (!res.ok) {
         const body = (await res.json().catch(() => null)) as { detail?: string } | null;
@@ -202,14 +218,16 @@ export function McpSettings() {
         <section className="mb-4 overflow-hidden rounded-2xl border border-accent bg-surface">
           <div className="flex items-center gap-3 border-b border-border bg-accent-muted px-4 py-3">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-surface text-accent">
-              <PlusIcon className="h-5 w-5" />
+              {editingName ? <PencilIcon className="h-5 w-5" /> : <PlusIcon className="h-5 w-5" />}
             </div>
             <div>
               <Text weight="semibold" className="block">
-                Nouveau serveur MCP
+                {editingName ? `Modifier « ${editingName} »` : "Nouveau serveur MCP"}
               </Text>
               <Text size="2xs" color="secondary" className="block">
-                La configuration est enregistrée puis le serveur est connecté.
+                {editingName
+                  ? "Les champs sont pré-remplis, sauf les variables d'environnement."
+                  : "La configuration est enregistrée puis le serveur est connecté."}
               </Text>
             </div>
           </div>
@@ -243,7 +261,9 @@ export function McpSettings() {
                 value={envText}
                 onChange={setEnvText}
                 rows={4}
-                placeholder={"API_KEY=..."}
+                placeholder={
+                  editingName ? "laisser vide pour ne rien changer" : "API_KEY=..."
+                }
               />
             </div>
             {formError && (
@@ -253,8 +273,8 @@ export function McpSettings() {
             )}
             <div className="flex items-center gap-2">
               <Button
-                label="Ajouter et connecter"
-                icon={<PlugIcon />}
+                label={editingName ? "Enregistrer" : "Ajouter et connecter"}
+                icon={editingName ? <PencilIcon /> : <PlugIcon />}
                 variant="primary"
                 size="sm"
                 isLoading={submitting}
@@ -336,6 +356,14 @@ export function McpSettings() {
                     isDisabled={updatingName === s.name}
                     onChange={() => { void toggleServer(s); }}
                     size="sm"
+                  />
+                  <IconButton
+                    label="Modifier"
+                    icon={<PencilIcon />}
+                    variant="ghost"
+                    size="sm"
+                    isDisabled={updatingName === s.name}
+                    onClick={() => { startEdit(s); }}
                   />
                   <IconButton
                     label="Supprimer"

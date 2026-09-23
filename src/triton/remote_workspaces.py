@@ -204,6 +204,23 @@ def toggle_remote_mcp_server(
     return cast(list[dict[str, object]], response.json())
 
 
+def update_remote_mcp_server(
+    config: RemoteWorkspaceConfig, name: str, server: dict[str, object]
+) -> list[dict[str, object]]:
+    try:
+        response = requests.patch(
+            f"{config.base_url}/mcp/servers/{name}",
+            headers={"X-Triton-Workspace-Token": config.token},
+            json=cast(dict[str, Any], server),
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        raise RemoteWorkspaceError("workspace runner is unavailable") from exc
+    if not response.ok:
+        raise RemoteWorkspaceError("workspace runner rejected the request")
+    return cast(list[dict[str, object]], response.json())
+
+
 def delete_remote_mcp_server(config: RemoteWorkspaceConfig, name: str) -> list[dict[str, object]]:
     try:
         response = requests.delete(
