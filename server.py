@@ -107,6 +107,7 @@ from triton.storage.sessions import (
     delete_session,
     is_pinned,
     is_yolo_enabled,
+    list_session_ids,
     load_always_allowed,
     load_session,
     load_session_memory,
@@ -246,7 +247,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             if p.folder_path.startswith("workspace://")
         ]
         keep_workspace_ids.extend(
-            mcp_session_workspace_id(path.stem) for path in SESSIONS_DIR.glob("*.json")
+            mcp_session_workspace_id(session_id) for session_id in list_session_ids()
         )
         try:
             result = purge_remote_maintenance(REMOTE_WORKSPACE_CONFIG, keep_workspace_ids)
@@ -1857,7 +1858,7 @@ def cancel_chat(body: CancelRequest) -> dict[str, bool]:
 def list_sessions() -> list[dict[str, str | bool | None]]:
     if not SESSIONS_DIR.exists():
         return []
-    ids = sorted(p.stem for p in SESSIONS_DIR.glob("*.json"))
+    ids = list_session_ids()
     return [
         {
             "id": session_id,
@@ -2078,14 +2079,13 @@ def search_sessions(q: str) -> list[str]:
     only needs to cover message content. Declared before
     /sessions/{session_id} so "search" isn't swallowed as a session id."""
     query = q.strip().lower()
-    if not query or not SESSIONS_DIR.exists():
+    if not query:
         return []
 
     matches: list[str] = []
-    for path in SESSIONS_DIR.glob("*.json"):
-        session_id = path.stem
+    for session_id in list_session_ids():
         try:
-            messages = load_session(path)
+            messages = load_session(storage_session_path(session_id))
         except (OSError, ValueError):
             continue
         for message in messages:
@@ -2653,7 +2653,7 @@ def remove_project(project_id: str) -> list[Project]:
         remote=project.folder_path.startswith("workspace://"),
     )
     delete_project(project_id)
-    for session_id in (p.stem for p in SESSIONS_DIR.glob("*.json")):
+    for session_id in list_session_ids():
         if load_session_project(session_id) == project_id:
             clear_session_project(session_id)
     return load_projects()

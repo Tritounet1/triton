@@ -624,6 +624,7 @@ def test_web_profile_sweeps_orphaned_workspaces_at_startup(monkeypatch, tmp_path
         RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
     )
     monkeypatch.setattr(projects, "PROJECTS_FILE", tmp_path / "projects.json")
+    monkeypatch.setattr(sessions, "SESSIONS_DIR", tmp_path / "sessions")
     monkeypatch.setattr(server, "SESSIONS_DIR", tmp_path / "sessions")
     projects.create_project("Mon projet", "workspace://project-a", "project-a")
     calls: list[list[str]] = []
@@ -655,6 +656,7 @@ def test_web_profile_preserves_mcp_workspaces_for_existing_sessions(monkeypatch,
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir()
     (sessions_dir / "session-a.json").write_text("[]")
+    monkeypatch.setattr(sessions, "SESSIONS_DIR", sessions_dir)
     monkeypatch.setattr(server, "SESSIONS_DIR", sessions_dir)
     calls: list[list[str]] = []
     monkeypatch.setattr(

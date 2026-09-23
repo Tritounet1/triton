@@ -86,3 +86,14 @@ def test_list_sessions_reports_pinned_state(client):
     [entry] = r.json()
     assert entry["id"] == session_id
     assert entry["pinned"] is True
+
+
+def test_list_sessions_ignores_a_sessions_own_permissions_sidecar(client):
+    session_id = _new_session()
+    sessions.allow_always(session_id, "write_file")
+
+    r = client.get("/sessions")
+
+    assert r.status_code == 200
+    [entry] = r.json()
+    assert entry["id"] == session_id

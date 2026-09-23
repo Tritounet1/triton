@@ -15,6 +15,17 @@ def test_session_path_rejects_path_like_ids(tmp_path, monkeypatch):
             sessions.session_path(invalid_id)
 
 
+def test_list_session_ids_ignores_sidecar_files_that_also_end_in_json(tmp_path, monkeypatch):
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    monkeypatch.setattr(sessions, "SESSIONS_DIR", sessions_dir)
+    (sessions_dir / "session-a.json").write_text("[]")
+    (sessions_dir / "session-a.permissions.json").write_text('["write_file"]')
+    (sessions_dir / "session-a.title.txt").write_text("Titre")
+
+    assert sessions.list_session_ids() == ["session-a"]
+
+
 def test_new_sessions_are_unique_even_in_the_same_second(tmp_path, monkeypatch):
     monkeypatch.setattr(sessions, "SESSIONS_DIR", tmp_path / "sessions")
 
