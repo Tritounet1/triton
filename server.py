@@ -166,7 +166,7 @@ from triton.tools import (
     validate_snapshot_relative_path,
 )
 from triton.tools.memory import remember
-from triton.web_runtime import SlidingWindowRateLimiter, load_web_runtime_config
+from triton.web_runtime import load_web_runtime_config
 
 
 class _QuietPollingEndpoints(logging.Filter):
@@ -200,7 +200,6 @@ DEPLOYMENT_PROFILE = load_deployment_profile()
 WEB_AUTH_CONFIG = load_web_auth_config()
 WEB_RUNTIME_CONFIG = load_web_runtime_config()
 REMOTE_WORKSPACE_CONFIG = load_remote_workspace_config()
-WEB_RATE_LIMITER = SlidingWindowRateLimiter(WEB_RUNTIME_CONFIG)
 WEB_AUTH_PUBLIC_PATHS = {"/", "/auth/login", "/auth/session", "/health"}
 WEB_FRONTEND_DIR = Path(__file__).resolve().parent / "app-desktop" / "dist"
 
@@ -461,16 +460,6 @@ async def require_local_api_token(request: Request, call_next):
                     content='{"detail":"request body exceeds the configured limit"}',
                     media_type="application/json",
                     status_code=413,
-                )
-                return response
-            client_key = request.client.host if request.client else "unknown"
-            retry_after = WEB_RATE_LIMITER.retry_after_seconds(client_key)
-            if retry_after:
-                response = Response(
-                    content='{"detail":"rate limit exceeded"}',
-                    headers={"Retry-After": str(retry_after)},
-                    media_type="application/json",
-                    status_code=429,
                 )
                 return response
         if not path_is_allowed(
