@@ -28,14 +28,14 @@ interface ProjectFilePanelProps {
   projectId: string;
   projectName: string;
   folderPath: string;
-  /** Change ce numero pour forcer un rechargement de l'arbre (ex. apres un
-   * appel d'outil qui a pu creer/supprimer un fichier). */
+  /** Bump this number to force a tree reload (e.g. after a tool call that
+   * may have created/deleted a file). */
   refreshSignal: number;
-  /** Session active, pour proposer une restauration du filet de securite -
-   * null hors conversation (ex. juste apres avoir choisi le projet). */
+  /** Active session, to offer restoring the safety net - null outside a
+   * conversation (e.g. right after picking the project). */
   sessionId: string | null;
-  /** Ouvre le navigateur d'historique plein ecran (voir
-   * SnapshotHistoryView.tsx) pour la session active. */
+  /** Opens the full-screen history browser (see SnapshotHistoryView.tsx)
+   * for the active session. */
   onOpenHistory: () => void;
   tasks: BackgroundTask[];
   onOpenTask: (id: string) => void;
@@ -45,9 +45,9 @@ interface ProjectFilePanelProps {
   showSnapshots?: boolean;
 }
 
-/** Icone "type de fichier" style IDE pour les extensions qu'on sait
- * ouvrir dans l'app elle-meme (voir isViewableFile) - une icone generique
- * pour tout le reste, a etendre au fur et a mesure. */
+/** IDE-style "file type" icon for extensions the app knows how to open
+ * itself (see isViewableFile) - a generic icon for everything else, to
+ * extend over time. */
 function fileTypeIcon(name: string): React.ReactNode {
   const lower = name.toLowerCase();
   if (lower.endsWith(".pdf")) return <PdfFileIcon className="h-4 w-4" />;
@@ -81,9 +81,8 @@ function toTreeItems(
             onOpenFile({ projectId, path: node.path, name: node.name });
             return;
           }
-          // Les fichiers non visualisables ne sont pas delegues a une
-          // application externe : cela demanderait une permission Tauri
-          // d'ouverture de tout le dossier utilisateur.
+          // non-viewable files aren't handed off to an external app: that
+          // would require a Tauri permission to open the whole user folder.
         },
   }));
 }
@@ -107,9 +106,9 @@ export function ProjectFilePanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // n'appelle jamais setLoading()/setError() de facon synchrone (seulement
-  // dans les callbacks .then()/.catch()/.finally()), pour pouvoir etre
-  // utilisee telle quelle dans l'effet ci-dessous (voir LogsPage.tsx).
+  // never calls setLoading()/setError() synchronously (only inside
+  // .then()/.catch()/.finally() callbacks), so it can be used as-is in the
+  // effect below (see LogsPage.tsx).
   function loadTree() {
     fetch(`${API_BASE}/projects/${projectId}/tree`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))

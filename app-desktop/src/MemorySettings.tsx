@@ -19,9 +19,9 @@ interface SessionSummary {
   project_id: string | null;
 }
 
-/** id de session au format 2026-08-28_101500 -> "28/08/2026 10:15" - meme
- * convention que App.tsx's formatSessionLabel, dupliquee ici plutot que
- * partagee (App.tsx ne l'exporte pas pour un seul appelant de plus). */
+/** session id in the 2026-08-28_101500 format -> "28/08/2026 10:15" - same
+ * convention as App.tsx's formatSessionLabel, duplicated here rather than
+ * shared (App.tsx doesn't export it for one more caller). */
 function formatSessionLabel(id: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})$/.exec(id);
   if (!m) return id;
@@ -29,16 +29,16 @@ function formatSessionLabel(id: string): string {
   return `${d}/${mo}/${y} ${h}:${mi}`;
 }
 
-/** Une section "charger/editer/sauvegarder" du contenu brut d'un fichier
- * memoire (voir triton/storage/memory.py|projects.py|sessions.py) - les
- * trois tiers (globale, projet, session) partagent exactement ce meme
- * contrat GET/PUT (content: string), seule l'URL change. */
+/** A "load/edit/save" section for a memory file's raw content (see
+ * triton/storage/memory.py|projects.py|sessions.py) - the three tiers
+ * (global, project, session) share this exact same GET/PUT contract
+ * (content: string), only the URL changes. */
 function MemoryEditor({ url, emptyHint }: { url: string | null; emptyHint: string }) {
   const [content, setContent] = useState("");
-  // demarre a true (pas de setLoading(true) synchrone dans l'effet - voir
-  // McpSettings.tsx pour le meme garde-fou) : le parent remonte ce
-  // composant a chaque changement d'url (key={url}, voir MemorySettings),
-  // donc cet etat initial couvre deja le premier chargement de chaque url.
+  // starts at true (no synchronous setLoading(true) in the effect - same
+  // guard as McpSettings.tsx): the parent remounts this component on every
+  // url change (key={url}, see MemorySettings), so this initial state
+  // already covers the first load of each url.
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -139,13 +139,12 @@ function MemoryScopeCard({
   );
 }
 
-/** Navigateur de memoire (voir PLAN.md) : les trois tiers ecrits par le
- * tool remember (tools/memory.py) - globale, partagee par tout projet, et
- * privee a une conversation sans projet - n'etaient jusqu'ici que
- * write-only (une ligne ajoutee a chaque appel, jamais relue ni editee
- * autrement qu'en ouvrant le .md a la main). Meme structure a trois
- * sections que McpSettings.tsx : un editeur texte brut par tier, la
- * memoire de projet/session necessitant d'abord de choisir laquelle. */
+/** Memory browser (see PLAN.md): the three tiers written by the remember
+ * tool (tools/memory.py) - global, shared by every project, and private to
+ * a project-less conversation - were until now write-only (a line appended
+ * on each call, never re-read or edited other than opening the .md by
+ * hand). Same three-section structure as McpSettings.tsx: one raw text
+ * editor per tier, project/session memory requiring picking one first. */
 export function MemorySettings() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [projectId, setProjectId] = useState<string | null>(null);
@@ -165,10 +164,9 @@ export function MemorySettings() {
     fetch(`${API_BASE}/sessions`)
       .then((r) => (r.ok ? r.json() : []))
       .then((data: SessionSummary[]) => {
-        // seule une conversation sans projet a sa propre memoire - une
-        // conversation de projet partage celle du projet (voir
-        // tools/memory.py's remember), la lister ici serait juste une
-        // page toujours vide.
+        // only a project-less conversation has its own memory - a project
+        // conversation shares the project's (see tools/memory.py's
+        // remember), listing it here would just be an always-empty page.
         setSessions(data.filter((s) => s.project_id === null));
       })
       .catch(() => {
