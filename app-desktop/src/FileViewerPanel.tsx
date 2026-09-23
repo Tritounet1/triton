@@ -56,10 +56,10 @@ export function FileViewerPanel({ file, onClose }: FileViewerPanelProps) {
       .finally(() => {
         setLoading(false);
       });
-    // fileUrl est entierement derivee de file.projectId/file.path : les
-    // lister explicitement suffit, pas besoin de fileUrl elle-meme. Pas de
-    // dependance a kind non plus : il derive de file.name, constant pour la
-    // duree de vie de ce composant (remonte via key a chaque fichier).
+    // fileUrl is entirely derived from file.projectId/file.path: listing
+    // those explicitly is enough, no need for fileUrl itself. No dependency
+    // on kind either: it derives from file.name, constant for this
+    // component's lifetime (remounted via key on each file).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file.projectId, file.path]);
 

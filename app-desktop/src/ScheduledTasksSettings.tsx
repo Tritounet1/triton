@@ -77,8 +77,8 @@ export function ScheduledTasksSettings() {
   const [dayOfWeek, setDayOfWeek] = useState(0);
   const [projectId, setProjectId] = useState("");
 
-  // pas d'appel synchrone a setLoading() ici (seulement dans les callbacks) :
-  // meme garde-fou que McpSettings.tsx (react-hooks set-state-in-effect).
+  // no synchronous setLoading() call here (only inside callbacks): same
+  // guard as McpSettings.tsx (react-hooks set-state-in-effect).
   useEffect(() => {
     Promise.all([
       fetch(`${API_BASE}/scheduled_tasks`).then((r) => (r.ok ? r.json() : [])),

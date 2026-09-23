@@ -369,9 +369,9 @@ export function PinIcon({ className = base, filled = false }: IconProps & { fill
   );
 }
 
-// icones "type de fichier" (badge colore, style IDE) plutot que le FileIcon
-// generique au contour simple - voir fileTypeIcon() dans ProjectFilePanel.tsx
-// pour le mapping extension -> icone.
+// "file type" icons (colored badge, IDE-style) rather than the generic
+// plain-outline FileIcon - see fileTypeIcon() in ProjectFilePanel.tsx for
+// the extension -> icon mapping.
 function FileTypeBadge({
   className = base,
   color,

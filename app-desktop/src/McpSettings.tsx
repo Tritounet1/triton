@@ -64,9 +64,9 @@ export function McpSettings() {
   const [argsText, setArgsText] = useState("");
   const [envText, setEnvText] = useState("");
 
-  // pas d'appel synchrone a setLoading() ici (seulement dans les callbacks) :
-  // react-hooks (set-state-in-effect) interdit setState synchrone dans un
-  // effet, et loading demarre deja a true via son useState initial.
+  // no synchronous setLoading() call here (only inside callbacks):
+  // react-hooks (set-state-in-effect) forbids a synchronous setState in an
+  // effect, and loading already starts at true via its initial useState.
   useEffect(() => {
     fetch(`${API_BASE}/mcp/servers`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
