@@ -35,11 +35,10 @@ function changeBadgeLetter(type: SnapshotFileChangeType): string {
   return "M";
 }
 
-/** Meme rendu que App.tsx's EditFileDiff (tout l'ancien contenu en rouge,
- * tout le nouveau en vert - pas de diff ligne a ligne fine), applique ici
- * a un fichier entier plutot qu'a un seul hunk edit_file, et sans la
- * limite de hauteur (max-h-64) de la version confirmation puisque ce
- * panneau lui est dedie. */
+/** Same rendering as App.tsx's EditFileDiff (all old content in red, all new
+ * in green - no fine-grained line-by-line diff), applied here to a whole
+ * file rather than a single edit_file hunk, and without the confirmation
+ * version's height cap (max-h-64) since this panel is dedicated to it. */
 function SnapshotFileDiff({ content }: { content: SnapshotFileContent }) {
   const { old, new: current } = content;
   if (old === null && current === null) {
@@ -82,20 +81,19 @@ function SnapshotFileDiff({ content }: { content: SnapshotFileContent }) {
 interface SnapshotHistoryViewProps {
   sessionId: string;
   onBack: () => void;
-  /** Appelee apres une restauration reussie, pour que le parent recharge
-   * l'arbre de fichiers affiche (son contenu a pu changer sous ses pieds) -
-   * meme contrat que SnapshotSection.tsx avant elle. */
+  /** Called after a successful restore, so the parent reloads the displayed
+   * file tree (its content may have changed under it) - same contract as
+   * SnapshotSection.tsx before it. */
   onRestored: () => void;
 }
 
-/** Vue plein ecran (remplace la conversation, la SideNav reste - voir
- * App.tsx's `view`) façon GitHub Desktop pour le filet de securite : une
- * colonne de "commits" (un par tour qui a ecrit quelque chose), les
- * fichiers changes pour le tour selectionne, et le contenu avant/apres du
- * fichier selectionne - remplace les deux raccourcis "dernier message"/
- * "toute la session" de SnapshotSection.tsx par un vrai retour en arriere
- * vers n'importe quel point (deja supporte cote API - voir
- * server.py's POST .../snapshot/restore). */
+/** Full-screen view (replaces the conversation, SideNav stays - see
+ * App.tsx's `view`) GitHub Desktop-style for the safety net: a column of
+ * "commits" (one per turn that wrote something), the files changed for the
+ * selected turn, and the selected file's before/after content - replaces
+ * SnapshotSection.tsx's two "last message"/"whole session" shortcuts with a
+ * real rollback to any point (already supported API-side - see server.py's
+ * POST .../snapshot/restore). */
 export function SnapshotHistoryView({ sessionId, onBack, onRestored }: SnapshotHistoryViewProps) {
   const [points, setPoints] = useState<SnapshotPoint[]>([]);
   const [selectedTurn, setSelectedTurn] = useState<number | null>(null);
@@ -115,9 +113,8 @@ export function SnapshotHistoryView({ sessionId, onBack, onRestored }: SnapshotH
   const selectedView: SnapshotView =
     selectedPoint?.has_final_state === true ? "commit" : "rollback";
 
-  // charge la liste des points de restauration a l'ouverture, et
-  // selectionne le plus recent par defaut (comme le commit le plus recent
-  // deja selectionne dans GitHub Desktop).
+  // loads the restore-point list on open, and selects the most recent one
+  // by default (like GitHub Desktop's already-selected latest commit).
   useEffect(() => {
     const controller = new AbortController();
     void fetchSnapshotPoints(sessionId, controller.signal)
@@ -145,14 +142,13 @@ export function SnapshotHistoryView({ sessionId, onBack, onRestored }: SnapshotH
     };
   }, [sessionId]);
 
-  // recharge la liste des fichiers changes des que le tour selectionne
-  // change, et selectionne le premier fichier par defaut. Pas de reset
-  // synchrone a null ici quand selectedTurn est deja null (interdit dans
-  // un effet - voir McpSettings.tsx pour le meme garde-fou) : ce cas
-  // n'arrive que quand la session n'a aucun point de restauration, ou
-  // brievement avant le premier chargement, et le rendu plus bas ne
-  // s'appuie de toute facon que sur `diff`/`selectedPath` une fois
-  // reellement peuples.
+  // reloads the changed-files list whenever the selected turn changes, and
+  // selects the first file by default. No synchronous reset to null here
+  // when selectedTurn is already null (not allowed in an effect - same
+  // guard as McpSettings.tsx): that case only happens when the session has
+  // no restore point, or briefly before the first load, and the render
+  // below only relies on `diff`/`selectedPath` once they're actually
+  // populated anyway.
   useEffect(() => {
     const controller = new AbortController();
     if (selectedTurn === null) {
@@ -186,8 +182,8 @@ export function SnapshotHistoryView({ sessionId, onBack, onRestored }: SnapshotH
     };
   }, [sessionId, selectedTurn, selectedView]);
 
-  // recharge le contenu avant/apres des que le fichier ou le tour
-  // selectionne change - meme garde-fou que ci-dessus.
+  // reloads before/after content whenever the selected file or turn
+  // changes - same guard as above.
   useEffect(() => {
     const controller = new AbortController();
     if (selectedTurn === null || selectedPath === null) {
@@ -244,8 +240,8 @@ export function SnapshotHistoryView({ sessionId, onBack, onRestored }: SnapshotH
     }
   }
 
-  // le plus recent en tete, comme la liste de commits de GitHub Desktop -
-  // fetchSnapshotPoints renvoie le plus ancien en tete (voir sa docstring).
+  // most recent first, like GitHub Desktop's commit list -
+  // fetchSnapshotPoints returns oldest first (see its docstring).
   const orderedPoints = [...points].reverse();
   const displayedDiff = diffTurn === selectedTurn ? diff : null;
   const files: SnapshotChangedFile[] = displayedDiff ? changedFiles(displayedDiff) : [];
