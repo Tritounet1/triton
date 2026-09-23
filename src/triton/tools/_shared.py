@@ -40,10 +40,9 @@ def invoke_tool(tool: Tool, name: str, args: dict[str, object], session_id: str)
     """Calls a tool's implementation, translating any exception into an
     error string instead of letting it propagate. The model isn't actually
     bound by the JSON schema it's given - it can (and does) hallucinate an
-    argument a tool doesn't accept, e.g. calling run_shell with a
-    `directory` kwarg it only has because other tools have one. Without
-    this, that raises an uncaught TypeError deep inside run_chat_stream's
-    generator and crashes the whole SSE response, not just that one call."""
+    argument a tool doesn't accept. Without this, that raises an uncaught
+    TypeError deep inside run_chat_stream's generator and crashes the
+    whole SSE response, not just that one call."""
     try:
         if name in SESSION_AWARE_TOOLS:
             return tool.fn(session_id=session_id, **args)
@@ -57,24 +56,18 @@ def invoke_tool(tool: Tool, name: str, args: dict[str, object], session_id: str)
 
 # every tool that touches the local filesystem or spawns a process -
 # path/directory arguments to confine to the active project's folder when
-# a conversation (server.py), a subagent (agents/subagents.py), or a
-# multi-agent subtask (agents/orchestrator.py) is scoped to one, and the
-# complete set of tools enforce_project_sandbox blocks outright when
-# there's no project at all (see its own docstring). MCP-sourced tools
-# (unknown schemas) are deliberately not covered here, and remain
-# unrestricted regardless of project - a separate, pre-existing gap.
+# a conversation, subagent, or multi-agent subtask is scoped to one, and
+# the complete set of tools enforce_project_sandbox blocks outright when
+# there's no project at all. MCP-sourced tools (unknown schemas) are
+# deliberately not covered here and remain unrestricted - a separate,
+# pre-existing gap.
 #
 # run_shell/run_tests/run_code only get a `directory` check here, not a
-# command-content one: this confines their *starting* working directory
-# to the project (so a relative path in the command resolves where it
-# should, and this was actually a bug before - subprocess.run's default
-# cwd is the harness's own process directory, not the project's). A
-# command that deliberately does `cd .. && rm -rf` would still reach
-# outside the project on just this check alone - on macOS that gap is
-# closed one level down, in process.py's _run_confined (a real
-# sandbox-exec/Seatbelt confinement of filesystem writes, wrapped around
-# the subprocess itself); Linux/Windows have no equivalent primitive and
-# keep only this directory-argument check.
+# command-content one: this confines their *starting* directory to the
+# project. A command that does `cd .. && rm -rf` would still reach outside
+# on this check alone - on macOS that gap is closed one level down, in
+# process.py's _run_confined (a real sandbox-exec/Seatbelt confinement);
+# Linux/Windows have no equivalent and keep only this directory check.
 SANDBOXED_PATH_ARGS: dict[str, list[str]] = {
     "read_file": ["path"],
     "list_files": ["directory"],
@@ -130,16 +123,13 @@ def _resolve(raw_path: str, root: Path) -> Path:
 
 
 def _path_error(raw_path: str, resolved: Path, root: Path) -> str | None:
-    """None if `resolved` is a legal target for this call: inside the
-    project folder, and not inside the harness's own installation
-    directory (ROOT_DIR) even when the project happens to be scoped
-    there. The ROOT_DIR check is unconditional - not just "no project
-    selected" - because a deliberately-scoped project pointed at it would
-    otherwise still get full read/write access to this harness's own
-    settings.json (API keys, in a dev checkout also readable from .env),
-    every conversation's history (sessions/), and its snapshot backups:
-    materially more sensitive than an arbitrary project folder, so it
-    stays off-limits to tool calls even on purpose."""
+    """None if `resolved` is a legal target: inside the project folder,
+    and not inside the harness's own installation directory (ROOT_DIR)
+    even when the project happens to be scoped there. The ROOT_DIR check
+    is unconditional - a deliberately-scoped project pointed at it would
+    otherwise get full read/write access to this harness's own
+    settings.json, every conversation's history, and its snapshot
+    backups: materially more sensitive than an arbitrary project folder."""
     if resolved.is_relative_to(ROOT_DIR):
         return (
             f"error: '{raw_path}' resolves inside the harness's own installation "
@@ -178,18 +168,16 @@ def _enforce_edit_file_sandbox(args: dict[str, object], root: Path) -> str | Non
 
 # a small, non-bypassable hard denylist of catastrophic run_shell commands -
 # inspired by yc-software/qm, whose most permissive ("Dangerous") posture
-# still keeps a short hard-deny list (recursive delete, destructive DDL...)
-# that applies regardless of posture. The project-folder write confinement
-# above, plus process.py's real sandbox-exec write confinement on macOS,
-# already stop most damage - but neither covers a command's own *text* on
-# Linux/Windows, and a regex hit here gives a clear "denied outright"
-# message instead of a silent OS-level permission failure. Deliberately not
-# an attempt at full shell-semantics parsing (trivially defeated by enough
-# obfuscation) - just the handful of commands nobody has a legitimate
-# reason to run from a project-scoped task, checked in
-# enforce_project_sandbox so every call site (server.py, orchestrator.py,
-# subagents.py) gets it for free, before that site's own confirmation/yolo
-# check ever runs.
+# still keeps a short hard-deny list that applies regardless of posture.
+# The project-folder write confinement above, plus process.py's real
+# sandbox-exec confinement on macOS, already stop most damage - but neither
+# covers a command's own *text* on Linux/Windows, and a regex hit here
+# gives a clear "denied outright" message instead of a silent OS-level
+# failure. Deliberately not an attempt at full shell-semantics parsing
+# (trivially defeated by obfuscation) - just the handful of commands
+# nobody has a legitimate reason to run, checked in
+# enforce_project_sandbox so every call site gets it for free, before that
+# site's own confirmation/yolo check ever runs.
 _HARD_DENYLIST: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         re.compile(r"\brm\s+(-\w*)?[rR][fF]?\w*\s+(-\w+\s+)*(/|~|\$HOME)(\s|/|$)"),
@@ -227,18 +215,14 @@ def enforce_project_sandbox(
     it's allowed. Three things it enforces:
 
     - _check_hard_denylist's small, non-bypassable set of catastrophic
-      run_shell commands, checked first and regardless of project state -
-      see its own docstring.
-    - Every tool that touches the local filesystem or spawns a process
+      run_shell commands, checked first regardless of project state.
+    - Every tool that touches the filesystem or spawns a process
       (SANDBOXED_PATH_ARGS's keys, plus edit_file) needs a project: with
-      none scoped to this conversation, the call is blocked outright
-      rather than left free to touch anywhere on disk - what a
-      conversation with no project used to allow, unrestricted (see
-      PLAN.md's changelog before this was fixed). A tool not in that set
-      (web_search, remember, ...) is unaffected either way.
+      none scoped, the call is blocked outright rather than left free to
+      touch anywhere on disk. A tool not in that set is unaffected.
     - Once a project is confirmed, every path argument must resolve
-      inside its folder, and never inside the harness's own installation
-      directory even then - see _path_error.
+      inside its folder, never inside the harness's own installation
+      directory - see _path_error.
 
     Mutates `args` in place to default an omitted directory argument to
     the project folder for tools in DEFAULTABLE_PATH_ARGS."""
@@ -296,12 +280,10 @@ SKIP_DIR_NAMES = {
     ".ruff_cache",
     ".pytest_cache",
     # framework build/cache dirs - can hold thousands of generated files,
-    # easily exhausting the project file panel's MAX_TREE_ENTRIES budget
-    # before it ever reaches real source files (found via a real Next.js
-    # project where .next/.pnpm-store alone consumed the whole budget,
-    # leaving src/, package.json etc. missing from the panel entirely -
-    # see server.py's _build_tree, depth-first and dot-prefixed dirs sort
-    # first, so these were always walked before anything else)
+    # easily exhausting the file panel's MAX_TREE_ENTRIES budget before
+    # reaching real source (found via a Next.js project where
+    # .next/.pnpm-store alone consumed the whole budget, since _build_tree
+    # walks depth-first and dot-prefixed dirs sort first)
     ".next",
     ".nuxt",
     ".svelte-kit",
