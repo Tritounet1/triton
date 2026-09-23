@@ -171,14 +171,10 @@ from triton.web_runtime import load_web_runtime_config
 
 
 class _QuietPollingEndpoints(logging.Filter):
-    """The desktop app polls a handful of endpoints every 1.5-3s
-    (background tasks, subagents, an in-flight multi-agent run) for as
-    long as it's open - uvicorn's access log otherwise fills up with
-    almost nothing else, drowning out anything worth actually noticing.
-    Drops just those access log lines; POSTs, errors, and every other
-    route still log normally. Uvicorn's h11 protocol logs each request as
-    access_logger.info('%s - "%s %s HTTP/%s" %d', client_addr, method,
-    path, http_version, status) - record.args[2] is the path."""
+    """Drops access-log lines for endpoints the desktop app polls every
+    1.5-3s (background tasks, subagents, an in-flight multi-agent run),
+    which would otherwise drown out everything else. record.args[2] is the
+    request path (uvicorn's h11 access log format)."""
 
     _quiet_prefixes = ("/background_tasks", "/subagents", "/orchestrator/")
 
@@ -192,9 +188,9 @@ class _QuietPollingEndpoints(logging.Filter):
 logging.getLogger("uvicorn.access").addFilter(_QuietPollingEndpoints())
 
 # A packaged Tauri app gives its bundled sidecar a fresh token over stdin at
-# launch. It protects the loopback API from a different local process that
-# happens to bind port 8000 first. It stays optional for the CLI and Vite
-# development workflow, which deliberately start server.py separately.
+# launch, protecting the loopback API from another local process binding
+# port 8000 first. Optional for the CLI/Vite dev workflow, which starts
+# server.py separately.
 LOCAL_API_TOKEN: str | None = None
 LOCAL_API_TOKEN_HEADER = "X-Triton-Local-Token"
 DEPLOYMENT_PROFILE = load_deployment_profile()
@@ -218,11 +214,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     if DEPLOYMENT_PROFILE is DeploymentProfile.DESKTOP:
         mcp_client.manager.connect_all_enabled()
     # orchestrator runs and scheduled tasks both work against a remote
-    # workspace now too (see agents/orchestrator.py's resolve_workspace),
-    # so resuming/polling for them shouldn't stay desktop-only - unlike
-    # purge_expired_snapshots below, which only ever cleans up the local
-    # desktop snapshot store and is a no-op (not just harmless, genuinely
-    # nothing to do) for a web profile that never wrote to it.
+    # workspace now too (see agents/orchestrator.py's resolve_workspace), so
+    # resuming/polling shouldn't stay desktop-only - unlike
+    # purge_expired_snapshots below, which only cleans the local desktop
+    # snapshot store and is a genuine no-op for a web profile.
     agentic_background_work_enabled = (
         DEPLOYMENT_PROFILE is DeploymentProfile.DESKTOP or REMOTE_WORKSPACE_CONFIG is not None
     )
@@ -277,10 +272,9 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 # checked only while the backend happens to be running (no OS-level cron) -
-# a few minutes' slack on exactly when a task fires is an acceptable
-# tradeoff for not needing a real scheduler process. See
-# storage/scheduled_tasks.py's own module docstring for the "no catch-up"
-# design this poll loop relies on.
+# a few minutes' slack on when a task fires is an acceptable tradeoff for
+# not needing a real scheduler process. See scheduled_tasks.py's docstring
+# for the "no catch-up" design this poll loop relies on.
 SCHEDULED_TASKS_POLL_INTERVAL_SECONDS = 60
 SCHEDULED_TASKS_MAX_CONCURRENT = 2
 _scheduler_stop_event = threading.Event()
@@ -289,11 +283,10 @@ _scheduled_task_slots = threading.BoundedSemaphore(SCHEDULED_TASKS_MAX_CONCURREN
 
 def _run_scheduled_task(task: scheduled_tasks.ScheduledTask) -> None:
     """Resends a scheduled task's prompt into its own dedicated session
-    (created once when the task was set up - see POST /scheduled_tasks)
-    and drains run_chat_stream to completion. force_yolo=True: nobody is
-    watching to answer a confirmation prompt for an unattended run, so
-    without it every write/run_shell call would just sit until
-    PENDING_CONFIRMATIONS' 300s timeout denies it by default."""
+    (created once at setup - see POST /scheduled_tasks) and drains
+    run_chat_stream to completion. force_yolo=True: nobody is watching to
+    answer a confirmation prompt for an unattended run, so without it every
+    write/run_shell call would just sit until the 300s timeout denies it."""
     try:
         session_path = storage_session_path(task.session_id)
     except ValueError:
@@ -332,14 +325,11 @@ def _run_scheduled_task_worker(task: scheduled_tasks.ScheduledTask) -> None:
 
 
 def _dispatch_due_scheduled_tasks(now: datetime) -> None:
-    """Starts due tasks independently, with a small concurrency ceiling.
-
-    A task may wait on the model or its stream timeout for a while. It must
-    not hold up the poll loop (and therefore unrelated schedules), but an
-    unbounded thread per due task would create a different availability
-    problem. Tasks left due because both slots are occupied are retried on
-    the next poll; they are intentionally not marked fired until dispatched.
-    """
+    """Starts due tasks independently, with a small concurrency ceiling. A
+    task may wait on the model for a while and must not hold up the poll
+    loop, but an unbounded thread per task would be its own availability
+    problem. Tasks left due because both slots are busy are retried next
+    poll - not marked fired until actually dispatched."""
     for task in scheduled_tasks.due_tasks(now):
         if not _scheduled_task_slots.acquire(blocking=False):
             logging.getLogger("uvicorn").warning(
@@ -363,11 +353,9 @@ def _dispatch_due_scheduled_tasks(now: datetime) -> None:
 
 def _scheduled_tasks_poll_loop() -> None:
     """Runs in its own daemon thread (started from lifespan), never as an
-    asyncio task on the main event loop: run_chat_stream is a plain
-    blocking generator (real network calls) - driving it directly on the
-    event loop would stall every other request for as long as a task
-    takes to run. Same threading.Thread pattern agents/subagents.py and
-    agents/orchestrator.py already use for background agentic work."""
+    asyncio task: run_chat_stream is a blocking generator, so driving it on
+    the event loop would stall every other request. Same threading.Thread
+    pattern as agents/subagents.py and agents/orchestrator.py."""
     while not _scheduler_stop_event.is_set():
         try:
             _dispatch_due_scheduled_tasks(datetime.now(UTC))
@@ -376,11 +364,9 @@ def _scheduled_tasks_poll_loop() -> None:
         _scheduler_stop_event.wait(SCHEDULED_TASKS_POLL_INTERVAL_SECONDS)
 
 
-# route-grouping metadata for /docs (Swagger UI) and /redoc - purely
-# cosmetic (FastAPI already serves both by default, docs_url/redoc_url
-# aren't overridden anywhere), this just gives the desktop/CLI-free API
-# consumer a readable grouped view instead of one flat list of 40+ routes.
-# Order here is the order tags render in the UI.
+# route-grouping metadata for /docs and /redoc - purely cosmetic, gives a
+# readable grouped view instead of one flat list of 40+ routes. Order here
+# is the render order.
 OPENAPI_TAGS = [
     {"name": "Chat", "description": "Send a message, confirm/deny a tool call, cancel a reply."},
     {
@@ -472,9 +458,9 @@ async def require_local_api_token(request: Request, call_next):
                 status_code=403,
             )
             return response
-        # Let CORS answer preflight requests; the real request still needs the
-        # token. Without this exception every browser request with our header
-        # would be rejected before it could be sent.
+        # let CORS answer preflight requests; the real request still needs
+        # the token, or every browser request with our header would be
+        # rejected before it could even be sent.
         if LOCAL_API_TOKEN is not None and request.method != "OPTIONS":
             supplied_token = request.headers.get(LOCAL_API_TOKEN_HEADER, "")
             if not secrets.compare_digest(supplied_token, LOCAL_API_TOKEN):
@@ -639,16 +625,14 @@ class ChatRequest(BaseModel):
     message: str
     project_id: str | None = None
     attachments: list[Attachment] = []
-    # Only for this request: unlike /model, this is never persisted as the
+    # this request only: unlike /model, never persisted as the
     # conversation-wide override.
     model: str | None = None
     # 1-based turn index (same convention as turn_index_of/ensure_snapshot):
-    # when set, the turn it points to and everything after it is dropped
-    # before appending `message` as a fresh user turn - see
-    # truncate_before_turn. Used for both editing an earlier message (the
-    # client resends its new text) and regenerating the last response (the
-    # client resends the same text unchanged): from the server's
-    # perspective these are the same operation.
+    # when set, that turn and everything after it is dropped before
+    # appending `message` as a fresh user turn (see truncate_before_turn).
+    # Covers both editing an earlier message and regenerating the last
+    # response - same operation from the server's perspective.
     edit_turn_index: int | None = None
 
 
@@ -715,12 +699,11 @@ def resolve_session(
     session_id: str | None,
     project_id: str | None = None,
 ) -> tuple[Path, list[ChatCompletionMessageParam], bool]:
-    """Loads the requested session if it exists, otherwise creates a new
-    one. Unlike the CLI, the API never silently resumes "the last session":
-    it's up to the client to remember its session_id. The boolean indicates
-    whether the session was just created (useful to know whether a title
-    needs generating). `project_id`, when given, only applies to a newly
-    created session: it binds the conversation to that project's folder."""
+    """Loads the requested session if it exists, otherwise creates a new one.
+    Unlike the CLI, the API never silently resumes "the last session" - it's
+    up to the client to remember its session_id. The boolean indicates
+    whether it was just created (a title needs generating). `project_id`
+    only applies to a newly created session, binding it to that project."""
     if session_id:
         path = _session_file_path(session_id)
         if path.exists():
@@ -738,12 +721,10 @@ def sse(event: str, data: dict[str, object]) -> str:
 
 
 def _is_tool_error(result: str) -> bool:
-    """Same convention the frontend already infers a failed tool call
-    from, with no separate structured status field (see App.tsx's
-    toolCallStatus) - plus "unknown tool: ...", not in that convention
-    (App.tsx never sees it happen live: the model hallucinating a tool
-    name that isn't in TOOLS is exactly the kind of stuck-in-a-loop
-    behavior MAX_CONSECUTIVE_TOOL_ERRORS exists to catch)."""
+    """Same convention the frontend infers a failed tool call from, with no
+    separate status field (see App.tsx's toolCallStatus) - plus "unknown
+    tool: ...", which the frontend never sees live: that's exactly the
+    stuck-in-a-loop case MAX_CONSECUTIVE_TOOL_ERRORS exists to catch."""
     return (
         result.startswith("error")
         or result.startswith("unknown tool:")
@@ -752,29 +733,26 @@ def _is_tool_error(result: str) -> bool:
 
 
 # stops the agentic loop once this many tool calls in a row have failed -
-# the model repeating the same broken call is a much stronger "genuinely
-# stuck" signal than a plain iteration count, and catches it long before
-# MAX_ITERATIONS (deliberately generous - see chat_loop.py) would. Not
-# reset per iteration: a failure streak spanning several separate model
-# calls is exactly the case this exists to catch.
+# a stronger "genuinely stuck" signal than a plain iteration count, catching
+# it well before MAX_ITERATIONS (deliberately generous - see chat_loop.py).
+# Not reset per iteration: a streak spanning several model calls is exactly
+# the case this exists to catch.
 MAX_CONSECUTIVE_TOOL_ERRORS = 6
 
-# same idea, for a reply with neither content nor a tool call (run_chat_stream's
-# own "if reply.content is None" branch) - kept lower than
+# same idea, for a reply with neither content nor a tool call
+# (run_chat_stream's "if reply.content is None" branch) - kept lower than
 # MAX_CONSECUTIVE_TOOL_ERRORS since each attempt here is a full model
-# round-trip (occasionally a slow one - a real one took 74s), not a cheap
-# local check.
+# round-trip (occasionally slow - a real one took 74s), not a cheap check.
 MAX_CONSECUTIVE_EMPTY_REPLIES = 4
 
 
 def turn_index_of(messages: list[ChatCompletionMessageParam]) -> int:
     """Which turn `messages` is currently on (the nth "user" message,
-    1-based) - the write-tool safety net's snapshot key (tools/snapshot.py's
-    ensure_snapshot), so a restore point exists per turn instead of only
-    once per session. Must be called on the full, uncompressed history:
-    compress_history_if_needed can collapse several old turns into one
-    system message, so counting *after* it runs would undercount real
-    turns and collide two different turns onto the same snapshot."""
+    1-based) - the write-tool safety net's snapshot key
+    (tools/snapshot.py's ensure_snapshot), so a restore point exists per
+    turn. Must be called on the full, uncompressed history:
+    compress_history_if_needed can collapse old turns into one system
+    message, undercounting turns if called after it runs."""
     return sum(1 for m in messages if m.get("role") == "user")
 
 
@@ -782,13 +760,11 @@ MAX_TITLE_CHARS = 60
 
 
 def generate_conversation_title(first_message: str) -> str:
-    """Very short title generated from a conversation's very first message,
-    for client-side display only (never sent back to the model afterwards).
-
-    The message is presented as a quote to summarize, not sent as-is in a
-    "user" turn: otherwise the model tends to answer it directly (e.g. a
-    question like "explain X to me" gets treated as an actual question)
-    instead of producing a title."""
+    """Very short title generated from a conversation's first message, for
+    client-side display only (never sent back to the model afterwards). The
+    message is presented as a quote to summarize, not sent as-is in a
+    "user" turn - otherwise the model tends to answer it directly instead
+    of producing a title."""
     request: list[ChatCompletionMessageParam] = [
         {
             "role": "system",
@@ -819,12 +795,10 @@ def run_chat_stream(
     session_id = session_path.stem
 
     def emit(event: str, data: dict[str, object]) -> str:
-        # every event tagged with the session it belongs to, so a client
-        # that's switched away to a different conversation mid-stream can
-        # tell this apart from whatever it's currently displaying instead
-        # of blindly applying it (see App.tsx's sendMessage) - this is
-        # what actually makes switching conversations while a response is
-        # still streaming safe.
+        # every event tagged with its session, so a client that's switched
+        # to a different conversation mid-stream can tell it apart from
+        # what it's currently displaying (see App.tsx's sendMessage) - this
+        # is what makes switching conversations mid-stream safe.
         return sse(event, {**data, "session_id": session_id})
 
     yield emit("session", {"session_id": session_id})
@@ -878,10 +852,10 @@ def run_chat_stream(
     iteration = 0
     done = False
     cancelled = False
-    # Le point "avant" est pris juste avant la premiere ecriture. Une fois
-    # le tour termine, ce drapeau permet de capturer son etat final afin que
-    # l'historique affiche un commit interne immuable, pas un diff du disque
-    # courant qui change au fil du temps.
+    # the "before" point is taken right before the first write. Once the
+    # turn ends, this flag lets us capture its final state too, so history
+    # shows an immutable internal commit rather than a diff against the
+    # ever-changing current disk state.
     turn_has_write = False
     consecutive_tool_errors = 0
     consecutive_empty_replies = 0
@@ -908,22 +882,15 @@ def run_chat_stream(
                 else:
                     reply = event
         except APIError as exc:
-            # llm/api.py's own retrying (_with_retry, and stream_chat's
-            # own retry-if-nothing-produced-yet loop) already retried a
-            # manifestly transient failure (network error, rate limit,
-            # 5xx) a few times with backoff before giving up - this is
-            # what reaches here: either that retry budget is exhausted, or
-            # the failure happened after real content had already started
-            # streaming out (unsafe to silently retry - see stream_chat's
-            # own docstring), or it was never transient to begin with (bad
-            # model name, invalid key...). Either way, surface it as a
-            # normal chat error instead of letting it crash the SSE
-            # response uncaught (which the client would just see as a
-            # dropped connection, same as a genuine network failure on its
-            # own end). The exception's own type name is included since
-            # "l'appel au modèle a échoué" alone gives no way to tell a
-            # one-off transient blip apart from a real, actionable one
-            # (bad key, wrong model...) - logged too, for the same reason.
+            # llm/api.py's own retrying already retried a transient failure
+            # (network error, rate limit, 5xx) with backoff before giving
+            # up - what reaches here is either that budget exhausted, a
+            # failure after content had already started streaming (unsafe
+            # to silently retry - see stream_chat's docstring), or a
+            # non-transient error (bad key, wrong model...). Surfaced as a
+            # normal chat error rather than crashing the SSE response
+            # uncaught. The exception type is included/logged so a
+            # transient blip is distinguishable from an actionable one.
             log_event(
                 type="model_call_error",
                 error_type=type(exc).__name__,
@@ -994,15 +961,13 @@ def run_chat_stream(
                             sandbox_error = enforce_project_sandbox(name, args, project)
 
                         # snapshot before the write actually runs, not after
-                        # approval below - taking it is harmless even if this
-                        # particular call ends up denied, and it guarantees the
-                        # safety net is in place before any write from this
-                        # turn could have landed (see tools/snapshot.py).
-                        # ensure_snapshot's own return is only true the one time
-                        # this specific turn's snapshot actually gets taken -
-                        # surfaced here instead of only in the project file
-                        # panel (SnapshotSection.tsx), which needed knowing the
-                        # feature existed at all to go find.
+                        # approval below - harmless even if this call ends up
+                        # denied, and it guarantees the safety net is in place
+                        # before any write from this turn could land (see
+                        # tools/snapshot.py). ensure_snapshot only returns true
+                        # the one time this turn's snapshot is actually taken -
+                        # surfaced here rather than only in the project file
+                        # panel, which required knowing the feature existed.
                         if (
                             sandbox_error is None
                             and tool is not None
@@ -1076,15 +1041,13 @@ def run_chat_stream(
                             else:
                                 result = "action denied by the user"
                 except Exception as e:
-                    # a bug anywhere else in this per-call handling (the
-                    # sandbox check, the snapshot safety net, the
-                    # confirmation wait...) must not silently kill the whole
-                    # SSE stream - invoke_tool (_shared.py) already guards a
-                    # tool's own fn(), same reasoning covers the plumbing
-                    # around it: surface one failed tool call instead of the
-                    # client just seeing a dropped connection with no
-                    # feedback (found via a real report: a message sent,
-                    # nothing comes back, not even an error).
+                    # a bug anywhere else in this per-call handling (sandbox
+                    # check, snapshot safety net, confirmation wait...) must
+                    # not silently kill the whole SSE stream - invoke_tool
+                    # already guards a tool's own fn(), same reasoning
+                    # covers the plumbing around it: surface one failed
+                    # tool call instead of a dropped connection with no
+                    # feedback (found via a real report of exactly that).
                     result = f"error: unexpected failure handling {name} ({type(e).__name__}: {e})"
 
                 yield emit(
@@ -1122,19 +1085,16 @@ def run_chat_stream(
             continue
 
         if reply.content is None:
-            # a reasoning model can burn its whole output-token budget on
-            # hidden reasoning and hit finish_reason == "length" with
-            # nothing visible to show for it - but a provider can also
-            # just return a genuinely empty completion (no content, no
-            # tool call, often finish_reason == "stop", zero usage
-            # reported) with no exception raised at all, so llm/api.py's
-            # own retrying never sees it - found via a real conversation,
-            # google/gemini-3.7-flash, twice in one session. Both are
-            # recoverable the same way (nudge and let the loop retry) -
-            # bounded by MAX_CONSECUTIVE_EMPTY_REPLIES so a model that's
-            # genuinely stuck returning nothing doesn't retry silently
-            # forever, each attempt a full (sometimes slow - one observed
-            # case took 74s) round-trip.
+            # a reasoning model can burn its whole token budget on hidden
+            # reasoning and hit finish_reason == "length" with nothing
+            # visible - but a provider can also return a genuinely empty
+            # completion with no exception raised at all (llm/api.py's
+            # retrying never sees it - observed twice with
+            # google/gemini-3.7-flash in one session). Both are recovered
+            # the same way (nudge and retry), bounded by
+            # MAX_CONSECUTIVE_EMPTY_REPLIES so a genuinely stuck model
+            # doesn't retry forever - each attempt a full, sometimes slow
+            # (one case took 74s) round-trip.
             consecutive_empty_replies += 1
             if consecutive_empty_replies > MAX_CONSECUTIVE_EMPTY_REPLIES:
                 yield emit(
@@ -1232,12 +1192,10 @@ def root() -> Response:
 
 @app.get("/docs", include_in_schema=False)
 def scalar_docs() -> HTMLResponse:
-    """Scalar instead of FastAPI's default Swagger UI at /docs (disabled
-    via docs_url=None above) - same OpenAPI schema (/openapi.json,
-    unaffected), a nicer-looking, more legible page around it. Loads its
-    JS from a CDN (jsdelivr) by default, same as Swagger UI's own assets
-    normally would - both need network access to render, this isn't a new
-    requirement. /redoc (FastAPI's own, untouched) stays as a lighter,
+    """Scalar instead of FastAPI's default Swagger UI at /docs (disabled via
+    docs_url=None above) - same OpenAPI schema, a nicer page around it.
+    Loads its JS from a CDN (jsdelivr), same as Swagger UI's own assets
+    normally would. /redoc (FastAPI's own, untouched) stays as a lighter
     read-only alternative."""
     return get_scalar_api_reference(
         openapi_url=app.openapi_url,
@@ -1497,11 +1455,9 @@ def _roles_status() -> list[MultiAgentRoleModel]:
 @app.get("/settings/multi_agent_roles", tags=["Settings"])
 def get_multi_agent_roles() -> list[MultiAgentRoleModel]:
     """The multi-agent orchestrator's configured role set - DEFAULT_ROLES
-    (code/research/vision/conversational) unless the Settings UI has saved
-    a custom list. Each role's `id` also keys its entry in
-    /settings/role_models (which model runs it) - see orchestrator.py's
-    MultiAgentRole docstring for what changing an id in place vs.
-    removing/adding one means for anything already referencing it."""
+    unless the Settings UI saved a custom list. Each role's `id` also keys
+    its /settings/role_models entry - see orchestrator.py's MultiAgentRole
+    docstring for what renaming vs. removing/adding an id means."""
     return _roles_status()
 
 
@@ -1529,12 +1485,10 @@ def reset_multi_agent_roles() -> list[MultiAgentRoleModel]:
     return _roles_status()
 
 
-# short-lived: the catalog itself barely changes minute to minute, but a
-# short TTL still means the desktop app's own startup (modelsCatalog in
-# App.tsx) and every time Settings > Modele is opened don't each cost a
-# fresh round-trip to OpenRouter - see pricing.py's get_price() for the
-# same cache-with-TTL shape, kept separate since that one only needs
-# prompt/completion price per model, not this endpoint's fuller shape.
+# short-lived: the catalog barely changes minute to minute, but a short TTL
+# still saves a fresh OpenRouter round-trip on every app startup or Settings
+# open - see pricing.py's get_price() for the same shape, kept separate
+# since that one only needs price, not this endpoint's fuller data.
 _MODELS_CACHE_TTL_SECONDS = 300
 _models_cache: list[ModelInfo] | None = None
 _models_cache_time = 0.0
@@ -1545,12 +1499,10 @@ _image_models_cache_time = 0.0
 @app.get("/openrouter/models", tags=["Models"])
 def list_openrouter_models() -> list[ModelInfo]:
     """Proxies OpenRouter's public model catalog (no API key required),
-    trimmed to what the desktop app's model picker needs: id/name, context
-    size, price per million tokens (OpenRouter reports per-token), whether
-    the model supports function calling at all (this harness is unusable
-    with the tool-calling loop otherwise), and whether it accepts image
-    and/or PDF input (used to enable/disable the composer's attach
-    button)."""
+    trimmed to what the desktop model picker needs: id/name, context size,
+    price per million tokens, whether it supports function calling (this
+    harness is unusable without it), and image/PDF input support (drives
+    the composer's attach button)."""
     global _models_cache, _models_cache_time
 
     cache_age = time.monotonic() - _models_cache_time
@@ -1569,11 +1521,9 @@ def list_openrouter_models() -> list[ModelInfo]:
 
     models: list[ModelInfo] = []
     for m in resp.json().get("data", []):
-        # ":batch" variants (e.g. "openai/gpt-6-astra:batch") are OpenRouter's
-        # async, delayed-response tier - meant for bulk offline processing,
+        # ":batch" variants are OpenRouter's async, delayed-response tier -
         # not a fit for this harness's synchronous chat loop. Filtered here
-        # (the single source every model picker in the desktop app reads
-        # from) rather than in each picker separately.
+        # (the single source every picker reads from) rather than per picker.
         if m["id"].endswith(":batch"):
             continue
         pricing = m.get("pricing") or {}
@@ -1707,11 +1657,10 @@ def truncate_before_turn(
 ) -> list[ChatCompletionMessageParam]:
     """Drops the user message that starts `turn_index` (1-based, same
     convention as turn_index_of/ensure_snapshot) and everything after it -
-    used by POST /chat's edit_turn_index (edit/regenerate) to discard a
-    turn before resending it. Snapshots already taken for that turn_index
-    (tools/snapshot.py's ensure_snapshot) are left as-is: they still
-    describe the project's state right before this turn, which stays
-    correct no matter how many times the turn itself gets redone."""
+    used by POST /chat's edit_turn_index (edit/regenerate). Snapshots
+    already taken for that turn_index are left as-is: they still describe
+    the project's state right before this turn, correct regardless of how
+    many times it gets redone."""
     starts = turn_start_indices(messages)
     if turn_index < 1 or turn_index > len(starts):
         raise HTTPException(400, f"invalid edit_turn_index: {turn_index}")
@@ -1887,13 +1836,11 @@ def get_session_yolo(session_id: str) -> dict[str, bool]:
 
 @app.post("/sessions/{session_id}/yolo", tags=["Sessions"])
 def toggle_session_yolo(session_id: str) -> dict[str, bool]:
-    """The /yolo command's backend: toggles whether this conversation
-    skips the confirmation prompt for every non-read-only tool call (see
-    run_chat_stream's own check) - running /yolo again turns it back off,
-    no separate command for that. Doesn't touch enforce_project_sandbox
-    at all: a project-less conversation, a path outside the project,
-    ROOT_DIR... all stay blocked exactly as before, this only ever
-    removes the confirmation step itself."""
+    """The /yolo command's backend: toggles whether this conversation skips
+    the confirmation prompt for every non-read-only tool call (see
+    run_chat_stream's check) - running /yolo again turns it back off.
+    Doesn't touch enforce_project_sandbox at all: it only ever removes the
+    confirmation step, nothing sandbox-related changes."""
     path = _session_file_path(session_id)
     if not path.exists():
         raise HTTPException(404, "session not found")
@@ -2275,22 +2222,20 @@ class SnapshotPoint(BaseModel):
     kind: str
     created_at: str
     message_preview: str | None
-    # Les nouveaux points ont un etat "apres" scelle a la fin du tour et
-    # peuvent donc etre presentes comme des commits internes fiables.
+    # new points have an "after" state sealed at the end of the turn, so
+    # they can be presented as reliable internal commits.
     has_final_state: bool
 
 
 @app.get("/sessions/{session_id}/snapshots", tags=["Sessions"])
 def list_session_snapshots(session_id: str) -> list[SnapshotPoint]:
     """Every restore point this session has - one per turn whose first
-    write triggered a snapshot (see tools/snapshot.py's ensure_snapshot),
-    oldest first. Empty rather than a 404 when there are none: the
-    desktop app uses an empty list the same way it used to use a 404, to
-    decide whether to offer a restore action at all. For a remote
-    (workspace://) session, only a restore-to-before-this-turn point
-    exists - no per-file diff/content preview, so `kind` is "remote" and
-    `has_final_state` always false (GET .../snapshot/diff and .../file
-    stay local-only, gracefully 404 for these)."""
+    write triggered a snapshot, oldest first. Empty rather than 404 when
+    there are none: the desktop app uses that to decide whether to offer a
+    restore action at all. For a remote (workspace://) session, only a
+    restore-to-before-this-turn point exists - `kind` is "remote" and
+    `has_final_state` always false (.../snapshot/diff and .../file stay
+    local-only)."""
     _session_file_path(session_id)
     remote = _remote_workspace_for_session(session_id)
     if remote is not None:
@@ -2333,15 +2278,12 @@ def get_session_snapshot_diff(
     turn_index: int,
     view: Literal["rollback", "commit"] = "rollback",
 ) -> SnapshotDiffResponse:
-    """A preview of what restoring to this specific turn's snapshot would
-    actually change - which files it created (restore deletes them),
-    deleted (restore recreates them), or modified (restore reverts them).
-    The desktop app fetches this when a restore confirmation dialog
-    opens for that turn, not eagerly for every restore point on session
-    load - it's real work (hashing every file currently in the project
-    to compare against the snapshot's manifest - see
-    triton/tools/snapshot.py) that only matters right before the user is
-    about to commit to it."""
+    """A preview of what restoring to this turn's snapshot would change -
+    files created (restore deletes them), deleted (restore recreates them),
+    or modified (restore reverts them). Fetched only when a restore
+    confirmation dialog opens, not eagerly for every point on session load
+    - it's real work (hashing every project file against the snapshot's
+    manifest)."""
     _session_file_path(session_id)
     snapshot = get_snapshot(session_id, turn_index)
     if snapshot is None:
@@ -2404,24 +2346,21 @@ def get_session_snapshot_file(
 
 class SnapshotRestoreRequest(BaseModel):
     turn_index: int
-    # L'ancien contrat continue de restaurer l'etat avant le tour. La
-    # nouvelle timeline demande explicitement "after" pour recharger le
-    # commit selectionne.
+    # the old contract keeps restoring to the state before the turn. The
+    # new timeline explicitly asks for "after" to reload the selected
+    # commit.
     state: Literal["before", "after"] = "before"
 
 
 @app.post("/sessions/{session_id}/snapshot/restore", tags=["Sessions"])
 def restore_session_snapshot(session_id: str, body: SnapshotRestoreRequest) -> dict[str, bool]:
     """Undoes every write this session's tools made to its project folder
-    from the given turn onward, bringing it back to the state
-    ensure_snapshot captured just before that turn's first write - pass
-    the oldest restore point (see GET .../snapshots) to undo the whole
+    from the given turn onward, back to the state captured just before that
+    turn's first write - pass the oldest restore point to undo the whole
     session, or a more recent one to only undo back to a specific turn.
-    Destructive (see tools/snapshot.py's restore_snapshot) - the desktop
-    app is expected to confirm with the user before calling this, the
-    same way it does for any other irreversible action. For a remote
-    (workspace://) session, only "before" semantics exist - `state` is
-    ignored, matching the only value /undo ever actually sends."""
+    Destructive - the desktop app is expected to confirm with the user
+    first, like any other irreversible action. For a remote (workspace://)
+    session, only "before" semantics exist - `state` is ignored."""
     _session_file_path(session_id)
     remote = _remote_workspace_for_session(session_id)
     if remote is not None:
@@ -2690,12 +2629,11 @@ def _build_tree(directory: Path, budget: list[int]) -> list[dict[str, object]]:
             break
         if is_skipped(child):
             continue
-        # Never follow links while walking the project tree. `Path.is_dir()`
+        # never follow links while walking the project tree. `Path.is_dir()`
         # follows them, so a link to an external directory used to reveal
-        # its names (and recurse through it) despite the project boundary.
-        # Hiding every symlink is intentional: an internal directory link
-        # can form a cycle too, and the file endpoint already validates the
-        # resolved target before serving a requested file.
+        # its names despite the project boundary. Hiding every symlink is
+        # intentional: an internal one can form a cycle too, and the file
+        # endpoint already validates the resolved target on request.
         if child.is_symlink():
             continue
         budget[0] -= 1
@@ -2788,12 +2726,11 @@ class OrchestratorDispatch(BaseModel):
 @app.post("/orchestrator", tags=["Orchestrator"])
 def dispatch_orchestrator(body: OrchestratorDispatch) -> dict[str, str]:
     """Entry point for the /multi-agents slash command: resolves/creates a
-    session exactly like /chat does (same title generation, same project
-    attachment for a new session), saves the task as a normal user
-    message, then dispatches the multi-agent run against that session -
-    once it finishes, its own exchange is appended there too (see
+    session exactly like /chat does, saves the task as a normal user
+    message, then dispatches the multi-agent run against it - once it
+    finishes, its result is appended there too (see
     orchestrator._append_result_to_session), so the conversation reads
-    seamlessly afterward instead of needing a separate view."""
+    seamlessly afterward."""
     budget = load_monthly_budget()
     if budget is not None and current_month_cost() > budget:
         raise HTTPException(
@@ -2987,17 +2924,15 @@ class _CostBucket(TypedDict):
 def get_cost_summary() -> CostSummary:
     """Aggregated view of the current calendar month's spend across every
     conversation, subagent, and multi-agent run - by model, project, and
-    day. GET /sessions/{id}/cost (the /cost command) stays scoped to
-    one conversation; this is the "how much have I spent this month, and
-    on what" view that was missing.
+    day. GET /sessions/{id}/cost (the /cost command) stays scoped to one
+    conversation; this is the "how much have I spent this month, and on
+    what" view.
 
-    Project is resolved from the event's own `project_id` when it has one
-    (orchestrator/subagent calls log it directly - see agents/
-    orchestrator.py, agents/subagents.py), otherwise from its
-    `session_id` via load_session_project (older normal chat model_call
-    events). An event with neither is bucketed under "Sans projet"; an
-    explicit project id that no longer exists is shown as "Projet supprimé".
-    Neither case is dropped, since both still represent real spend."""
+    Project comes from the event's own `project_id` when present
+    (orchestrator/subagent calls log it directly), otherwise from its
+    `session_id` via load_session_project. An event with neither is
+    bucketed under "Sans projet"; a deleted project shows as "Projet
+    supprimé" - neither is dropped, both are still real spend."""
     month = datetime.now().strftime("%Y-%m")
     events = events_for_month(month)
 
@@ -3013,11 +2948,10 @@ def get_cost_summary() -> CostSummary:
     for event in events:
         raw_model = event.get("model")
         raw_cost = event.get("cost_usd")
-        # A model call with unknown pricing still belongs in the call/token
-        # totals. Conversely, current_month_cost() intentionally counts any
-        # future event carrying cost_usd even if it forgot a model field, so
-        # keep this summary aligned with the budget source of truth by giving
-        # that rare legacy/future case an explicit fallback bucket.
+        # a model call with unknown pricing still belongs in the call/token
+        # totals. current_month_cost() also counts a future event carrying
+        # cost_usd even without a model field, so give that rare case an
+        # explicit fallback bucket to stay aligned with it.
         if not isinstance(raw_model, str) and not isinstance(raw_cost, int | float):
             continue  # a tool_call, an error event, etc.
         model = raw_model if isinstance(raw_model, str) else "Modèle inconnu"
