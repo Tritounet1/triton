@@ -100,9 +100,9 @@ function renderModelOption(
   );
 }
 
-/** Un modèle par rôle du mode multi-agent (/multi-agents), persisté dans
- * settings.json (voir model_roles.py). Les choix viennent du catalogue
- * OpenRouter et restent limités aux modèles capables d'appeler des outils. */
+/** One model per multi-agent-mode role (/multi-agents), persisted in
+ * settings.json (see model_roles.py). Choices come from the OpenRouter
+ * catalog and stay limited to models capable of tool calling. */
 export function RoleModelsSettings() {
   const [roles, setRoles] = useState<RoleModelInfo[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -127,8 +127,8 @@ export function RoleModelsSettings() {
       });
   }, []);
 
-  // Une valeur enregistrée reste visible même si OpenRouter la retire ensuite
-  // du catalogue ou si elle ne déclare plus le support des outils.
+  // A saved value stays visible even if OpenRouter later removes it from the
+  // catalog or it stops declaring tool support.
   const selectableModels = useMemo(() => {
     const byId = new Map(
       models
@@ -171,8 +171,8 @@ export function RoleModelsSettings() {
         title: familyInfo(key).label,
         options: list.map((model) => ({
           value: model.id,
-          // Le filtre du Selector ne recherche que label : nom + id gardent
-          // donc les deux façons habituelles de retrouver un modèle.
+          // the Selector's filter only searches label: name + id keeps the
+          // two usual ways of finding a model.
           label: `${modelDisplayName(model, model.id)} ${model.id}`,
         })),
       })),

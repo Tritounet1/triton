@@ -104,18 +104,17 @@ interface SettingsModalProps {
   onClose: () => void;
   isWebDeployment?: boolean;
   remoteWorkspacesEnabled?: boolean;
-  // le modele courant est tenu par App.tsx (apiModel) pour l'utiliser
-  // ailleurs (composer, avatar...) - propage jusqu'a ModelSettings pour
-  // qu'un changement se reflete tout de suite, sans attendre la fermeture
-  // de la modale.
+  // the current model is held by App.tsx (apiModel) for use elsewhere
+  // (composer, avatar...) - propagated down to ModelSettings so a change
+  // reflects right away, without waiting for the modal to close.
   onModelChanged: () => void;
   onImageModelChanged: () => void;
 }
 
-/** Modale de reglages a deux volets (recherche + categories a gauche,
- * contenu de la categorie a droite), style Claude Desktop/ChatGPT plutot
- * que des pages a part entiere : ferme au clic en dehors ou sur Echap
- * (Dialog purpose="info"), remplace SettingsPage/LogsPage/McpServersPage/
+/** Two-pane settings modal (search + categories on the left, category
+ * content on the right), Claude Desktop/ChatGPT-style rather than
+ * standalone pages: closes on outside click or Escape (Dialog
+ * purpose="info"), replaces SettingsPage/LogsPage/McpServersPage/
  * ModelPage. */
 export function SettingsModal({
   isOpen,
