@@ -1,11 +1,10 @@
-// Regroupement des modeles OpenRouter par fournisseur, partage entre
-// ModelPage.tsx (liste groupee) et App.tsx (avatar du modele actif dans le
-// chat) : la famille est deduite du prefixe avant le "/" de l'id OpenRouter
-// (ex. "anthropic/claude-..."), deja donne par l'API, pas besoin de le
-// deviner autrement. Logo reel pour les familles qui en ont un (public/*.png)
-// - voir PLAN.md pour la liste de celles qui restent a faire - toute autre
-// famille (connue ou non) retombe sur public/default-logo.png, pas les
-// initiales.
+// Groups OpenRouter models by provider, shared between ModelPage.tsx
+// (grouped list) and App.tsx (active model's avatar in chat): the family is
+// derived from the prefix before the "/" in the OpenRouter id (e.g.
+// "anthropic/claude-..."), already given by the API, no need to guess it
+// otherwise. Real logo for families that have one (public/*.png) - see
+// PLAN.md for the list of ones still to do - any other family (known or
+// not) falls back to public/default-logo.png, not initials.
 
 export interface FamilyInfo {
   label: string;
@@ -14,9 +13,9 @@ export interface FamilyInfo {
 
 const DEFAULT_LOGO = "/default-logo.png";
 
-// Familles volontairement absentes des sélecteurs de modèles : elles restent
-// connues ici pour afficher correctement un éventuel modèle déjà enregistré
-// (avatar, logs, etc.), mais ne sont pas proposées dans l'interface.
+// Families deliberately absent from model selectors: still known here to
+// correctly display a model already saved (avatar, logs, etc.), but not
+// offered in the picker UI.
 const HIDDEN_MODEL_FAMILIES = new Set([
   "cohere",
   "amazon",
@@ -47,10 +46,10 @@ export const FAMILIES: Record<string, FamilyInfo> = {
   xiaomi: { label: "Xiaomi (MiMo)", logo: "/xiaomi-logo.png" },
 };
 
-// prefixes OpenRouter differents pour une meme famille (ex. "meta" et
-// "meta-llama" designent tous les deux Meta) : normalises vers une seule
-// cle canonique avant recherche, sinon "meta" ne retrouverait pas l'entree
-// enregistree sous "meta-llama"
+// different OpenRouter prefixes for the same family (e.g. "meta" and
+// "meta-llama" both mean Meta): normalized to a single canonical key before
+// lookup, otherwise "meta" wouldn't find the entry stored under
+// "meta-llama"
 const FAMILY_ALIASES: Record<string, string> = {
   meta: "meta-llama",
 };
@@ -66,16 +65,16 @@ export function familyInfo(key: string): FamilyInfo {
   return { ...info, logo: info.logo ?? DEFAULT_LOGO };
 }
 
-/** Indique si la famille d'un modèle fait partie de la sélection volontairement
- * exposée dans les réglages. Partagé par le modèle principal et les rôles pour
- * que leurs catalogues restent strictement cohérents. */
+/** Whether a model's family is part of the selection deliberately exposed in
+ * settings. Shared by the main model and roles so their catalogs stay
+ * strictly consistent. */
 export function isModelFamilyVisible(modelId: string): boolean {
   return !HIDDEN_MODEL_FAMILIES.has(familyKey(modelId));
 }
 
-/** Nom + logo a passer a un composant Avatar pour representer le modele
- * actuellement selectionne (toujours un logo - default-logo.png si la
- * famille n'en a pas de propre, ou si aucun modele n'est encore connu). */
+/** Name + logo to pass to an Avatar component to represent the currently
+ * selected model (always a logo - default-logo.png if the family has none
+ * of its own, or if no model is known yet). */
 export function modelAvatar(modelId: string | null): {
   name: string;
   logo?: string;
