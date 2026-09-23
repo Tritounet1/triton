@@ -6,24 +6,22 @@ import { DownloadIcon } from "./icons";
 
 import { API_BASE } from "./api";
 
-/** Sauvegarde/export complet de tout ce que le harness gere sous
- * ROOT_DIR (voir PLAN.md) : conversations, projets, memoire, snapshots,
- * config des serveurs MCP, reglages - en un seul zip, pour migrer de
- * machine ou se premunir avant une manip risquee. Le filet de securite
- * habituel (tools/snapshot.py) ne couvre que les dossiers de projet, pas
- * les donnees propres du harness. */
+/** Full backup/export of everything the harness manages under ROOT_DIR (see
+ * PLAN.md): conversations, projects, memory, snapshots, MCP server config,
+ * settings - as a single zip, for migrating machines or as a precaution
+ * before a risky operation. The usual safety net (tools/snapshot.py) only
+ * covers project folders, not the harness's own data. */
 export function BackupSettings() {
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // fetch() + blob local plutot qu'un <a href="http://127.0.0.1:8000/...">
-  // + click() direct (l'approche utilisee ailleurs, ex. App.tsx's
-  // exportSession) : cette derniere navigue vers une origine differente
-  // de celle de la webview Tauri, que Tauri peut bloquer silencieusement
-  // sans le moindre message d'erreur - fetch() n'a pas ce probleme (deja
-  // utilise partout ailleurs dans l'app sans souci), et le blob:// obtenu
-  // est lui bien de la meme origine que la page, donc le download qui
-  // suit est fiable.
+  // fetch() + local blob rather than a direct <a href="http://127.0.0.1:8000/...">
+  // + click() (the approach used elsewhere, e.g. App.tsx's exportSession):
+  // the latter navigates to a different origin than the Tauri webview's
+  // own, which Tauri can silently block with no error message at all -
+  // fetch() doesn't have this problem (already used everywhere else in the
+  // app without issue), and the resulting blob:// is same-origin as the
+  // page, so the download that follows is reliable.
   async function downloadBackup() {
     setDownloading(true);
     setError(null);
