@@ -119,22 +119,17 @@ import { SubagentsPanel } from "./SubagentsPanel";
 import { TaskView } from "./TaskView";
 import { useDeploymentCapabilities } from "./useDeploymentCapabilities";
 
-// au dela de ce delai sans le moindre evenement SSE, on considere qu'on
-// est dans un "silence" (ex. un outil qui tourne cote serveur) plutot que
-// dans un flux de tokens actif - voir awaitingSseEvent. Assez court pour
-// rester reactif, assez long pour ne jamais se declencher entre deux
-// tokens d'un flux de texte normal (qui arrivent bien plus vite que ca).
+// past this idle gap with no SSE event, treat it as a server-side lull
+// rather than active token streaming - see awaitingSseEvent.
 const SSE_IDLE_MS = 500;
-// distance (px) par rapport au bas du fil de discussion au-dela de laquelle
-// le bouton "revenir en bas" s'affiche - voir showScrollButton.
+// distance (px) from the bottom past which the scroll-to-bottom button
+// shows - see showScrollButton.
 const SCROLL_BUTTON_THRESHOLD_PX = 100;
-// doit rester alignee avec MAX_ATTACHMENT_BYTES cote serveur (server.py) :
-// une image plus grande est rejetee ici avant meme d'etre envoyee.
+// must match MAX_ATTACHMENT_BYTES on the server (server.py).
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
-// un fichier texte n'est jamais envoye comme piece jointe binaire (voir
-// PendingTextAttachment plus bas) : son contenu est colle tel quel dans le
-// texte du message a l'envoi, donc dans le contexte du modele - une limite
-// bien plus basse que celle des images/PDF est necessaire.
+// text files are inlined into the message text (not sent as a binary
+// attachment, see PendingTextAttachment below), so a much lower limit
+// than images/PDFs applies.
 const MAX_TEXT_ATTACHMENT_BYTES = 200 * 1024;
 const TEXT_ATTACHMENT_EXTENSIONS = [
   ".txt",
@@ -146,8 +141,8 @@ const TEXT_ATTACHMENT_EXTENSIONS = [
   ".yaml",
   ".yml",
 ];
-// menu declenche par "/" dans le composer (style Notion/Discord), via le
-// mecanisme de trigger deja fourni par ChatComposerInput.
+// slash-triggered menu (Notion/Discord style), via ChatComposerInput's
+// own trigger mechanism.
 const SLASH_COMMANDS: SearchableItem<{ description: string }>[] = [
   {
     id: "multi-agents",
@@ -222,11 +217,10 @@ const composerTriggers: ChatComposerTrigger[] = [
     searchSource: slashCommandSource,
     menuLabel: "Commandes",
     emptySearchResultsText: "Aucune commande",
-    // un jeton (puce) plutot qu'un texte brut : la commande se distingue
-    // visuellement de ce qui suit (le texte tape ensuite reste normal,
-    // hors du jeton) - `value` est ce qui finit dans le message envoye,
-    // identique a l'ancien texte brut inséré, donc le parsing de
-    // sendMessage (prefixes /model, /remember session, etc.) ne change pas.
+    // a token (pill), not plain text, so the command reads visually
+    // distinct - `value` is what ends up in the sent message, same as the
+    // old plain-text insert, so sendMessage's own prefix parsing is
+    // unaffected.
     onSelect: (item): ChatComposerToken => ({
       value: `/${item.label} `,
       label: `/${item.label}`,
@@ -256,11 +250,10 @@ interface PendingAttachment {
   dataUrl: string;
 }
 
-/** Fichier texte (txt/md/csv/json/...) en attente d'envoi : contrairement a
- * PendingAttachment (image/PDF), jamais transmis en piece jointe binaire au
- * serveur - son contenu est colle directement dans le texte du message a
- * l'envoi (voir sendMessage), donc lisible par n'importe quel modele sans
- * exiger de modalite "vision"/"file". */
+/** Text file pending send - unlike PendingAttachment (image/PDF), never
+ * sent as a binary attachment: its content is inlined into the message
+ * text at send time (see sendMessage), so any model can read it without
+ * needing vision/file support. */
 interface PendingTextAttachment {
   name: string;
   content: string;
@@ -279,11 +272,10 @@ interface Project {
   folder_path: string;
 }
 
-/** Avant/apres pour un edit_file : construit a partir des arguments de
- * l'appel (old_string/new_string), pas du resultat (juste un message de
- * confirmation) - pas de diff ligne a ligne fine, juste tout l'ancien bloc
- * en rouge puis tout le nouveau en vert, largement suffisant pour voir ce
- * qui a change d'un coup d'oeil. */
+/** Before/after for an edit_file call, built from its own
+ * old_string/new_string arguments (not the result) - one solid red block
+ * then one solid green block, no line-level diff, enough to see what
+ * changed at a glance. */
 function EditFileDiff({
   oldString,
   newString,
@@ -317,12 +309,10 @@ function EditFileDiff({
   );
 }
 
-/** Meme rendu que EditFileDiff (tout l'ancien bloc en rouge, tout le
- * nouveau en vert), mais pour un write_file : "l'ancien" n'est pas dans
- * les arguments de l'appel (juste `content`, le nouveau contenu), donc on
- * va chercher l'etat actuel du fichier via l'endpoint deja utilise par le
- * visualiseur de fichiers (voir FileViewerPanel.tsx) - un fichier
- * inexistant (404, nouvelle creation) n'affiche alors que le bloc vert. */
+/** Same rendering as EditFileDiff, but for a write_file call: there's no
+ * "before" in its arguments (just the new `content`), so this fetches
+ * the file's current state via the same endpoint FileViewerPanel.tsx
+ * uses - a 404 (new file) just shows the green block alone. */
 function WriteFileDiff({
   projectId,
   path,
@@ -335,11 +325,9 @@ function WriteFileDiff({
   const [oldContent, setOldContent] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
 
-  // pas de reset synchrone de `loaded` ici (interdit dans un effet - voir
-  // McpSettings.tsx pour le meme garde-fou) : chaque confirmation write_file
-  // est sequentielle (pendingConfirmation repasse par null entre deux),
-  // donc ce composant remonte a chaque fois plutot que de reutiliser son
-  // etat entre deux appels differents.
+  // no synchronous `loaded` reset here (forbidden in an effect, see
+  // McpSettings.tsx) - each write_file confirmation is sequential, so
+  // this component remounts each time rather than reusing state.
   useEffect(() => {
     fetch(
       `${API_BASE}/projects/${projectId}/file?path=${encodeURIComponent(path)}`,
@@ -369,10 +357,9 @@ function WriteFileDiff({
   return <EditFileDiff oldString={oldContent ?? ""} newString={newContent} />;
 }
 
-/** Un EditFileDiff par hunk, groupes par fichier (avec le chemin en
- * en-tete des qu'il y en a plus d'un) - le rendu "detail" complet d'un
- * appel edit_file, que ce soit pour la preview de confirmation ou pour
- * l'historique deja execute. */
+/** One EditFileDiff per hunk, grouped by file (path header once there's
+ * more than one) - the full detail view for an edit_file call, both for
+ * the confirmation preview and for history. */
 function EditFileEdits({ edits }: { edits: EditFileEdit[] }) {
   const byPath = new Map<string, EditFileEdit[]>();
   for (const e of edits) {
@@ -409,12 +396,10 @@ function toolResultDetail(t: ToolCallLike): ReactNode {
   }
   const { content } = t.args;
   if (t.tool === "write_file" && typeof content === "string") {
-    // pas d'"avant" fiable a afficher ici (contrairement a la preview de
-    // confirmation - voir WriteFileDiff plus haut, qui va chercher l'etat
-    // *actuel* du fichier) : cet appel appartient a l'historique, un
-    // fetch "maintenant" ne refleterait son etat juste avant CET appel que
-    // si rien ne l'a modifie depuis - pas garanti. Le nouveau contenu
-    // ecrit, lui, est un fait connu avec certitude (l'argument de l'appel).
+    // no reliable "before" to show here (unlike the confirmation preview
+    // above, which fetches the file's *current* state) - this is history,
+    // and fetching "now" would only match the pre-call state if nothing
+    // changed since, not guaranteed. The written content is a known fact.
     return <EditFileDiff oldString="" newString={content} />;
   }
   const result =
@@ -426,9 +411,9 @@ function toolResultDetail(t: ToolCallLike): ReactNode {
   );
 }
 
-/** Detail d'une sous-tache multi-agent : sa description, puis ses propres
- * appels d'outils (meme composant ChatToolCalls, imbrique) mis a jour en
- * direct pendant qu'elle tourne, et enfin son resultat une fois conclue. */
+/** A multi-agent subtask's detail: its description, then its own tool
+ * calls (same ChatToolCalls component, nested) live-updated while it
+ * runs, then its result once done. */
 function multiAgentSubtaskDetail(t: ToolMsg): ReactNode {
   const calls = t.subtaskToolCalls ?? [];
   return (
@@ -464,64 +449,57 @@ function multiAgentSubtaskDetail(t: ToolMsg): ReactNode {
 
 function App() {
   const capabilities = useDeploymentCapabilities();
-  // Sous macOS/Tauri, la fenetre utilise une titlebar « Overlay ». Ce test
-  // conserve la barre native habituelle dans le navigateur de developpement
-  // et sur les autres plateformes, tout en laissant de la place aux boutons
-  // rouge/jaune/vert dans l'application desktop.
+  // on macOS/Tauri the window uses an overlay titlebar. Keeps the native
+  // bar in the dev browser and other platforms, while leaving room for
+  // the traffic-light buttons on desktop.
   const usesMacTitlebarOverlay =
     typeof window !== "undefined" &&
     "__TAURI_INTERNALS__" in window &&
     navigator.userAgent.includes("Mac");
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
-  // ids des conversations avec un envoi en cours ("" pour une toute
-  // nouvelle conversation pas encore identifiee par le serveur - voir
-  // sendMessage) - permet de changer de conversation pendant qu'une
-  // reponse arrive en streaming (comme ChatGPT/Claude) sans que ca la
-  // bloque : chaque sendMessage() suit son propre envoi independamment de
-  // celle affichee a l'ecran. `sending` (defini plus bas, une fois
-  // sessionId disponible ; utilise partout ailleurs dans l'UI) ne reflete
-  // que celui de la conversation actuellement affichee.
+  // IDs of conversations with a send in flight ("" for a brand-new one
+  // the server hasn't named yet, see sendMessage) - lets switching
+  // conversations mid-stream (like ChatGPT/Claude) not block it: each
+  // sendMessage tracks its own send independently of what's on screen.
+  // `sending` (defined below, used everywhere else in the UI) only
+  // reflects the currently displayed conversation.
   const [sendingSessionIds, setSendingSessionIds] = useState<Set<string>>(
     () => new Set(),
   );
-  // Modele associe a une requete encore en cours. Il peut differer du
-  // modele de chat par defaut, par exemple pour une image Gemini ponctuelle.
+  // model tied to a request still in flight - can differ from the
+  // default chat model, e.g. a one-off Gemini image.
   const [inFlightModels, setInFlightModels] = useState<Record<string, string>>(
     {},
   );
-  // vrai des qu'aucun evenement SSE n'est arrive depuis SSE_IDLE_MS pour la
-  // conversation affichee - couvre le "silence" pendant qu'un outil tourne
-  // cote serveur juste apres un morceau de texte assistant (ex. "Je vais
-  // ecrire le fichier X." suivi d'un write_file qui prend plusieurs
-  // secondes) : showTypingPlaceholder masquait le loader des qu'un texte
-  // assistant etait deja affiche, meme si plus rien n'arrivait ensuite -
-  // voir sendMessage's noteSseEvent, appele a chaque evenement recu.
+  // true once no SSE event has arrived for SSE_IDLE_MS on the displayed
+  // conversation - covers the lull while a server-side tool runs right
+  // after some assistant text (e.g. "Writing file X." followed by a slow
+  // write_file): showTypingPlaceholder used to hide the loader as soon as
+  // assistant text showed, even with nothing following - see sendMessage's
+  // noteSseEvent, called on every event.
   const [awaitingSseEvent, setAwaitingSseEvent] = useState(false);
   const [apiModel, setApiModel] = useState<string | null>(null);
-  // Equivalent du modele de chat par defaut, mais specifique a l'endpoint
-  // Images. Les deux reglages restent totalement independants.
+  // same idea as the default chat model, but for the Images endpoint -
+  // the two settings stay fully independent.
   const [imageModel, setImageModel] = useState<string | null>(null);
   const [oneShotChatModel, setOneShotChatModel] = useState<string | null>(null);
   const [oneShotImageModel, setOneShotImageModel] = useState<string | null>(null);
   const [imageMode, setImageMode] = useState(false);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
-  // modele propre a la conversation en cours, mis via la commande /model
-  // (PUT /sessions/{id}/model) - prend le pas sur apiModel (le defaut
-  // global) tant qu'il est defini. null = pas de surcharge, la conversation
-  // suit le modele global comme avant l'existence de cette commande.
+  // model specific to the current conversation, set via /model (PUT
+  // /sessions/{id}/model) - overrides apiModel (the global default) while
+  // set. null = no override, follows the global model.
   const [sessionModelOverride, setSessionModelOverride] = useState<
     string | null
   >(null);
-  // /yolo pour CETTE conversation (voir GET/POST /sessions/{id}/yolo) :
-  // affiche un bandeau persistant tant qu'actif (pas juste un toast au
-  // moment du bascule), puisque ca change silencieusement ce que fait
-  // chaque message suivant.
+  // /yolo for THIS conversation (see GET/POST /sessions/{id}/yolo) - shows
+  // a persistent banner while active, not just a toggle toast, since it
+  // silently changes what every following message does.
   const [yoloEnabled, setYoloEnabled] = useState(false);
-  // catalogue OpenRouter (id + capacites), recupere une fois au demarrage,
-  // pour savoir si le modele actuel accepte des images et/ou des PDF
-  // (active/desactive et filtre le bouton "joindre" du composer) sans
-  // dupliquer cette logique cote serveur.
+  // OpenRouter catalog (id + capabilities), fetched once at startup, to
+  // know if the current model supports images/PDFs (enables/filters the
+  // composer's attach button) without duplicating that logic server-side.
   const [modelsCatalog, setModelsCatalog] = useState<
     {
       id: string;
@@ -562,29 +540,27 @@ function App() {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [showProjectForm, setShowProjectForm] = useState(false);
   const [deletingProject, setDeletingProject] = useState<Project | null>(null);
-  // confirmation pour la commande /undo (voir handleUndoCommand) - meme
-  // AlertDialog que les suppressions ci-dessus, action destructrice donc
-  // pas de raccourci sans confirmation meme depuis le composer. /undo
-  // cible toujours le point de restauration le plus recent (annuler le
-  // dernier message) - "annuler toute la session" reste une action du
-  // panneau fichiers (SnapshotSection.tsx), pas de la commande texte.
+  // confirmation for /undo (see handleUndoCommand) - same AlertDialog as
+  // the deletions above, a destructive action so no shortcut without
+  // confirmation even from the composer. /undo always targets the most
+  // recent restore point (undo the last message) - "undo the whole
+  // session" is a file panel action (SnapshotSection.tsx), not this
+  // text command.
   const [undoTarget, setUndoTarget] = useState<SnapshotPoint | null>(null);
   const [undoing, setUndoing] = useState(false);
-  // meme diff que SnapshotSection.tsx pour la meme confirmation - chargee
-  // des l'ouverture, pas au montage (voir snapshotDiff.ts).
+  // same diff as SnapshotSection.tsx for the same confirmation - loaded
+  // on open, not on mount (see snapshotDiff.ts).
   const [undoDiff, setUndoDiff] = useState<SnapshotDiff | null>(null);
   const [collapsedProjectIds, setCollapsedProjectIds] = useState<Set<string>>(
     () => new Set(),
   );
   const [fileRefreshTick, setFileRefreshTick] = useState(0);
-  // fichier ouvert dans le visualiseur (PDF/HTML/Markdown) : remplace
-  // ProjectFilePanel dans le meme emplacement tant qu'il est ouvert (voir
-  // FileViewerPanel.tsx).
+  // file open in the viewer (PDF/HTML/Markdown) - replaces
+  // ProjectFilePanel in the same slot while open (see FileViewerPanel.tsx).
   const [openFile, setOpenFile] = useState<OpenFile | null>(null);
-  // sidebar repliable a la Claude desktop : repliee, elle disparait
-  // entierement (pas un simple rail d'icones) ; passer la souris sur le
-  // bord gauche la montre en survol temporaire (sidebarPeeking), il faut
-  // cliquer le bouton pour l'epingler ouverte pour de bon.
+  // Claude-desktop-style collapsible sidebar: collapsed, it disappears
+  // entirely (not just an icon rail) - hovering the left edge shows it
+  // temporarily (sidebarPeeking), the button pins it open for good.
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => localStorage.getItem("triton_sidebar_collapsed") === "1",
   );
@@ -596,22 +572,22 @@ function App() {
     localStorage.setItem("triton_sidebar_collapsed", next ? "1" : "0");
   };
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
-  // turnIndex (1-based, voir groupMessages) du message utilisateur en cours
-  // d'edition, null si aucun - un seul a la fois, edite en place dans sa
-  // propre bulle (voir le rendu du groupe "user" plus bas).
+  // turnIndex (1-based, see groupMessages) of the user message being
+  // edited, null if none - only one at a time, edited in place in its
+  // own bubble (see the "user" group render below).
   const [editingTurnIndex, setEditingTurnIndex] = useState<number | null>(null);
   const [editingText, setEditingText] = useState("");
   const [pendingConfirmation, setPendingConfirmation] =
     useState<PendingConfirmation | null>(null);
-  // repliee par defaut (style Claude Desktop) - args/diff caches jusqu'a
-  // ce qu'on clique pour les voir.
+  // collapsed by default (Claude Desktop style) - args/diff hidden until
+  // clicked.
   const [confirmationDetailsExpanded, setConfirmationDetailsExpanded] =
     useState(false);
-  // remise a false a chaque nouvelle confirmation (id different - y
-  // compris en revenant sur une conversation qui en avait une en attente,
-  // voir switchSession) : ajustement synchrone pendant le rendu (pattern
-  // React officiel "adjusting state when a prop changes"), pas dans un
-  // effet - react-hooks/set-state-in-effect l'interdirait sinon.
+  // reset to false on each new confirmation (different id, including
+  // returning to a conversation with one pending, see switchSession): a
+  // synchronous adjustment during render (the official React "adjust
+  // state when a prop changes" pattern), not in an effect -
+  // react-hooks/set-state-in-effect forbids that.
   const [lastConfirmationId, setLastConfirmationId] = useState<string | null>(
     null,
   );
@@ -619,29 +595,27 @@ function App() {
     setLastConfirmationId(pendingConfirmation?.id ?? null);
     setConfirmationDetailsExpanded(false);
   }
-  // un AbortController/une confirmation en attente par conversation (cle :
-  // sessionId, ou "" pour une toute nouvelle pas encore identifiee - meme
-  // convention que sendingSessionIds) plutot qu'une seule valeur globale :
-  // sendMessage() pour une conversation qui n'est plus affichee doit
-  // rester annulable/repondable une fois qu'on y revient, sans se faire
-  // ecraser par l'envoi d'une autre conversation entre-temps. Des refs
-  // (pas du state) : rien ici n'a besoin de re-rendu tant que la
-  // conversation en question n'est pas celle affichee - voir sendMessage/
-  // cancelMessage/respondToConfirmation.
+  // one AbortController/pending confirmation per conversation (key:
+  // sessionId, or "" for a brand-new one, same convention as
+  // sendingSessionIds) rather than a single global value: sendMessage()
+  // for a conversation no longer displayed must stay cancelable/answerable
+  // once we return to it, without being overwritten by another
+  // conversation's send meanwhile. Refs, not state: nothing here needs a
+  // re-render while its conversation isn't the displayed one - see
+  // sendMessage/cancelMessage/respondToConfirmation.
   const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
   const pendingConfirmationsRef = useRef<Map<string, PendingConfirmation>>(
     new Map(),
   );
-  // minuteur du "silence SSE" (voir awaitingSseEvent) - une seule
-  // conversation affichee a la fois, donc pas besoin d'une Map par session
-  // comme les refs juste au-dessus.
+  // SSE-idle timer (see awaitingSseEvent) - only one conversation is
+  // displayed at a time, so no per-session Map needed unlike the refs
+  // just above.
   const sseIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // bouton "revenir en bas" du fil de discussion - remplace celui fourni
-  // par defaut par ChatLayout (scrollButton), dont le "nouveaux messages"
-  // reste affiche tant qu'on ne clique pas dessus meme apres etre revenu
-  // en bas au trackpad/molette (sa propre logique ne le reinitialise que
-  // via un dismiss() explicite). Ici, visible/label ne dependent que de la
-  // position de scroll actuelle - plus aucun etat "bloque".
+  // scroll-to-bottom button, replacing ChatLayout's own default
+  // (scrollButton), whose "new messages" state stays shown until clicked
+  // even after scrolling back down (its own logic only resets via an
+  // explicit dismiss()). Here, visible/label depend only on the current
+  // scroll position - no "stuck" state.
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [hasNewMessage, setHasNewMessage] = useState(false);
@@ -663,41 +637,37 @@ function App() {
     };
   }, [sessionId]);
 
-  // signale "nouveaux messages" uniquement si un message vient de
-  // s'ajouter (pas juste du texte qui continue de s'accumuler dans le
-  // dernier, voir scheduleFlush dans sendMessage) pendant qu'on est deja
-  // scrolle plus haut - inutile de le signaler si on est deja en bas, le
-  // scroll-suiveur de ChatLayout nous y garde de toute facon. Ajustement
-  // pendant le rendu (pas dans un effet - interdit d'y appeler setState
-  // synchrone, voir McpSettings.tsx pour le meme garde-fou) : compare a
-  // la derniere longueur vue, meme mecanisme que lastConfirmationId plus
-  // haut pour confirmationDetailsExpanded.
+  // only flags "new messages" when a message was actually added (not
+  // just text accumulating into the last one, see scheduleFlush in
+  // sendMessage) while already scrolled up - no point flagging it at the
+  // bottom, ChatLayout's follow-scroll keeps us there anyway. Adjusted
+  // during render (not in an effect, see McpSettings.tsx), same mechanism
+  // as lastConfirmationId above.
   const [lastMessagesLength, setLastMessagesLength] = useState(messages.length);
   if (messages.length !== lastMessagesLength) {
     setLastMessagesLength(messages.length);
     if (showScrollButton) setHasNewMessage(true);
   }
-  // ids des sous-agents dispatches dans la conversation ACTIVE (remis a
-  // zero au changement de conversation) : permet de relancer le modele
-  // automatiquement une fois l'un d'eux termine, plutot que de rester en
-  // attente indefiniment d'un nouveau message de l'utilisateur.
+  // IDs of subagents dispatched in the ACTIVE conversation (reset on
+  // conversation change) - lets the model auto-resume once one finishes,
+  // instead of waiting indefinitely for a new user message.
   const pendingSubagentIdsRef = useRef<Set<string>>(new Set());
-  // tenues a jour apres chaque rendu (effet sans tableau de dependances),
-  // lues depuis un minuteur autonome (setInterval) plutot qu'une fermeture
-  // figee sur le rendu ou l'effet a demarre : evite de redemarrer ce
-  // minuteur a chaque frappe/changement d'etat, cf. cancelMessage/
-  // useCallback plus haut pour le meme probleme. Mutation directe pendant
-  // le rendu interdite par react-hooks/refs, d'ou l'effet.
+  // kept up to date after each render (effect with no dependency array),
+  // read from a standalone timer (setInterval) rather than a closure
+  // frozen at render/effect start - avoids restarting that timer on every
+  // keystroke/state change (see cancelMessage/useCallback above for the
+  // same issue). Direct mutation during render is forbidden by
+  // react-hooks/refs, hence the effect.
   const sendingRef = useRef(sending);
   const inputRef = useRef(input);
-  // conversation actuellement affichee, lue par un sendMessage() en cours
-  // (potentiellement pour une AUTRE conversation, lancee avant qu'on s'en
-  // eloigne) pour savoir a chaque evenement SSE recu si son propre
-  // session_id correspond encore a ce qui est affiche - sinon il continue
-  // de tourner en fond, sans toucher `messages` (voir sendMessage). Une
-  // ref plutot qu'un simple acces a `sessionId` : la fermeture d'un
-  // sendMessage deja lance a capture sa propre valeur figee de sessionId,
-  // celle-ci reste a jour meme apres qu'on ait navigue ailleurs.
+  // currently displayed conversation, read by an in-flight sendMessage()
+  // (possibly for ANOTHER conversation, started before navigating away)
+  // to check on each SSE event whether its own session_id still matches
+  // what's displayed - otherwise it keeps running in the background
+  // without touching `messages` (see sendMessage). A ref rather than
+  // reading `sessionId` directly: an already-running sendMessage's
+  // closure captured its own frozen sessionId, this stays current even
+  // after navigating away.
   const displayedSessionIdRef = useRef(sessionId);
   const sendMessageRef = useRef((_text: string): void => undefined);
   useEffect(() => {
@@ -745,11 +715,9 @@ function App() {
       });
   }
 
-  // renvoie la liste chargee (en plus de mettre a jour l'etat) pour que le
-  // montage initial puisse en retirer le project_id de la session restauree
-  // depuis localStorage (voir l'effet ci-dessous) - un simple `setSessions`
-  // ne suffit pas la, cet etat ne serait pas encore visible dans la meme
-  // passe de useEffect.
+  // returns the loaded list (in addition to updating state) so the initial
+  // mount can read the restored session's project_id off it - `setSessions`
+  // alone wouldn't be visible yet within the same effect pass.
   function loadSessions(): Promise<Session[]> {
     return fetch(`${API_BASE}/sessions`)
       .then((r) => (r.ok ? r.json() : []))
@@ -759,7 +727,7 @@ function App() {
         return reversed;
       })
       .catch(() => {
-        // API hors ligne ou requete echouee : la sidebar reste vide, sans casser l'app
+        // API unreachable: sidebar stays empty, app doesn't crash
         return [];
       });
   }
@@ -771,7 +739,7 @@ function App() {
         setProjects(list);
       })
       .catch(() => {
-        // API hors ligne ou requete echouee : la liste de projets reste vide
+        // API unreachable: project list stays empty
       });
   }
 
@@ -808,8 +776,8 @@ function App() {
 
   async function togglePin(session: Session) {
     const pinned = !session.pinned;
-    // optimiste : la sidebar re-trie immediatement, pas d'attente du
-    // round-trip pour un simple booleen peu risque de rater
+    // optimistic: sidebar re-sorts immediately, no waiting on the
+    // round-trip for a low-risk boolean toggle
     setSessions((prev) =>
       prev.map((s) => (s.id === session.id ? { ...s, pinned } : s)),
     );
@@ -863,7 +831,7 @@ function App() {
         if (raw) setMessages(historyToMessages(raw));
       })
       .catch(() => {
-        // session introuvable cote serveur : on garde l'historique local tel quel
+        // session not found server-side: keep local history as-is
       });
   }
 
@@ -886,7 +854,7 @@ function App() {
         },
       )
       .catch(() => {
-        // API OpenRouter injoignable : le bouton "joindre" reste desactive
+        // OpenRouter API unreachable: the "attach" button stays disabled
       });
 
     fetch(`${API_BASE}/openrouter/image-models`)
@@ -895,21 +863,20 @@ function App() {
         setImageModelsCatalog(data);
       })
       .catch(() => {
-        // Le mode image reste present, mais le selecteur conserve alors le
-        // modele par defaut configure plutot qu'une liste obsolète.
+        // image mode stays available, selector just keeps the configured
+        // default model instead of a fresh list
       });
 
-    // uniquement au demarrage, pour une session deja connue (localStorage) ;
-    // ne doit pas se redeclencher quand sendMessage() fixe sessionId lui-meme,
-    // sinon ca part en course avec le streaming en cours.
+    // only on startup, for an already-known session (localStorage) - must
+    // not re-trigger when sendMessage() sets sessionId itself, or it races
+    // the ongoing stream.
     const stored = localStorage.getItem("triton_session_id");
     if (stored) loadHistory(stored);
 
-    // switchSession() derive normalement activeProjectId de la liste des
-    // sessions deja chargee en memoire, mais au demarrage la session
-    // restauree ne passe pas par switchSession - sans ceci, le panneau du
-    // dossier du projet reste invisible tant qu'on n'a pas change de
-    // conversation puis qu'on n'y revient (bug signale par l'utilisateur).
+    // switchSession() normally derives activeProjectId from the in-memory
+    // session list, but the restored session at startup doesn't go through
+    // switchSession - without this the project folder panel stays hidden
+    // until the user switches conversations and back (user-reported bug).
     void loadSessions().then((list) => {
       if (stored)
         setActiveProjectId(
@@ -921,13 +888,12 @@ function App() {
     }
   }, [capabilities.projects]);
 
-  // relance automatiquement le modele une fois qu'un sous-agent dispatche
-  // dans la conversation active se termine : sans ca, le tour se termine
-  // des que le modele repond en texte (pas d'appel d'outil) et plus rien ne
-  // le fait revenir verifier le resultat tant que l'utilisateur n'envoie
-  // pas un nouveau message. Lit sending/input via des refs (tenues a jour
-  // a chaque rendu plus haut) plutot que de redemarrer ce minuteur a chaque
-  // frappe/etat.
+  // auto-nudges the model once a subagent dispatched from the active
+  // conversation finishes: otherwise the turn ends as soon as the model
+  // replies in text (no tool call) and nothing brings it back to check the
+  // result until the user sends a new message. Reads sending/input via refs
+  // (kept current on each render above) rather than restarting this timer
+  // on every keystroke/state change.
   useEffect(() => {
     const interval = setInterval(() => {
       if (pendingSubagentIdsRef.current.size === 0) return;
@@ -949,7 +915,7 @@ function App() {
           );
         })
         .catch(() => {
-          // API hors ligne : nouvelle tentative au prochain intervalle
+          // offline: retried on the next interval
         });
     }, 4000);
     return () => {
@@ -957,10 +923,9 @@ function App() {
     };
   }, []);
 
-  // taches en arriere-plan (start_background_task) de la conversation
-  // active : affichees dans le panneau lateral droit (BackgroundTasksPanel /
-  // ProjectFilePanel), quel que soit le view courant, pour rester "vite
-  // accessibles" pendant que le modele travaille dans la conversation.
+  // background tasks (start_background_task) for the active conversation:
+  // shown in the right-side panel (BackgroundTasksPanel / ProjectFilePanel)
+  // regardless of the current view, to stay reachable while the model works.
   useEffect(() => {
     if (!capabilities.background_tasks || !sessionId) return;
     let cancelled = false;
@@ -971,7 +936,7 @@ function App() {
           if (!cancelled) setBackgroundTasks(data);
         })
         .catch(() => {
-          // API hors ligne : nouvelle tentative au prochain intervalle
+          // offline: retried on the next interval
         });
     }
     load();
@@ -982,14 +947,13 @@ function App() {
     };
   }, [capabilities.background_tasks, sessionId]);
 
-  // surcharge de modele de la conversation en cours (voir /model) : pas de
-  // reset synchrone a null ici (interdit dans un effet - voir
-  // McpSettings.tsx pour le meme garde-fou), donc au changement de
-  // sessionId un ancien override peut brievement rester affiche le temps
-  // que la requete reponde - meme compromis deja accepte par
-  // SnapshotSection.tsx. Le reset explicite a lieu dans switchSession/
-  // startNewSession/startProjectSession (des gestionnaires d'evenements,
-  // pas un effet, donc un setState synchrone y est sans probleme).
+  // model override for the current conversation (see /model): no synchronous
+  // reset to null here (not allowed in an effect - same guard as
+  // McpSettings.tsx), so on sessionId change a stale override can briefly
+  // stay shown until the request answers - same tradeoff already accepted in
+  // SnapshotSection.tsx. Explicit reset happens in switchSession/
+  // startNewSession/startProjectSession (event handlers, not an effect, so a
+  // synchronous setState there is fine).
   useEffect(() => {
     if (!sessionId) return;
     fetch(`${API_BASE}/sessions/${sessionId}/model`)
@@ -1002,9 +966,9 @@ function App() {
       });
   }, [sessionId]);
 
-  // meme principe que l'effet ci-dessus pour sessionModelOverride (pas de
-  // reset synchrone ici, fait dans switchSession/startNewSession/
-  // startProjectSession a la place).
+  // same principle as the sessionModelOverride effect above (no synchronous
+  // reset here, done in switchSession/startNewSession/startProjectSession
+  // instead).
   useEffect(() => {
     if (!sessionId) return;
     fetch(`${API_BASE}/sessions/${sessionId}/yolo`)
@@ -1025,7 +989,7 @@ function App() {
   function stopTask(id: string) {
     fetch(`${API_BASE}/background_tasks/${id}/stop`, { method: "POST" }).catch(
       () => {
-        // API hors ligne : le prochain polling reflete quand meme l'etat reel
+        // offline: the next poll reflects real state anyway
       },
     );
   }
@@ -1034,17 +998,16 @@ function App() {
     setBackgroundTasks((prev) => prev.filter((t) => t.id !== id));
     fetch(`${API_BASE}/background_tasks/${id}`, { method: "DELETE" }).catch(
       () => {
-        // API hors ligne : le prochain polling la fera reapparaitre si la
-        // suppression n'a en fait pas eu lieu cote serveur
+        // offline: the next poll brings it back if the delete didn't
+        // actually happen server-side
       },
     );
   }
 
-  // `sending` n'est plus une raison de bloquer le changement de
-  // conversation (voir sendMessage) : une reponse en cours pour la
-  // conversation qu'on quitte continue de tourner en fond, filtree par
-  // son propre session_id plutot que d'ecrire dans `messages` de celle
-  // qu'on affiche desormais.
+  // `sending` is no longer a reason to block switching conversations (see
+  // sendMessage): an in-flight response for the conversation being left
+  // keeps running in the background, filtered by its own session_id rather
+  // than writing into the `messages` of whichever one is now displayed.
   function switchSession(id: string) {
     setView("chat");
     if (id === sessionId) return;
@@ -1058,10 +1021,9 @@ function App() {
     setSessionModelOverride(null);
     setYoloEnabled(false);
     setAwaitingSseEvent(false);
-    // restaure une confirmation d'outil laissee en attente si cette
-    // conversation en a une (voir pendingConfirmationsRef dans sendMessage) -
-    // null sinon, pour ne pas garder affichee celle de la conversation
-    // qu'on quitte.
+    // restores a pending tool confirmation if this conversation has one
+    // (see pendingConfirmationsRef in sendMessage) - null otherwise, so the
+    // conversation being left doesn't keep its confirmation shown.
     setPendingConfirmation(pendingConfirmationsRef.current.get(id) ?? null);
     loadHistory(id);
   }
@@ -1182,12 +1144,11 @@ function App() {
     }
   }
 
-  /** Coller une image (ex. capture d'ecran) depuis le presse-papier :
-   * e.clipboardData.files est deja une FileList native, exactement ce que
-   * handleFilesSelected attend (meme chemin que le selecteur de fichiers
-   * et le glisser-deposer) - rien de plus a faire que la lui passer. Ne
-   * touche pas au comportement par defaut quand rien de collable n'est un
-   * fichier (coller du texte normal dans le composer doit rester intact). */
+  /** Paste an image (e.g. a screenshot) from the clipboard: e.clipboardData.files
+   * is already a native FileList, exactly what handleFilesSelected expects
+   * (same path as the file picker and drag-and-drop) - just pass it through.
+   * Leaves default behavior alone when nothing pasted is a file (pasting
+   * plain text into the composer must stay intact). */
   function handlePaste(e: React.ClipboardEvent) {
     if (e.clipboardData.files.length === 0) return;
     e.preventDefault();
@@ -1229,9 +1190,9 @@ function App() {
     await sendMessage(text, turnIndex);
   }
 
-  /** Renvoie exactement le meme tour (meme texte, memes pieces jointes) -
-   * turnIndex/msg viennent du groupe "user" precedant la reponse a
-   * regenerer (voir precedingTurnIndex dans groupMessages). */
+  /** Resends the exact same turn (same text, same attachments) - turnIndex/msg
+   * come from the "user" group preceding the response being regenerated
+   * (see precedingTurnIndex in groupMessages). */
   async function regenerateResponse(
     turnIndex: number,
     msg: Extract<ChatMsg, { kind: "user" }>,
@@ -1363,10 +1324,10 @@ function App() {
       .map((a) => a.dataUrl);
     const sentFiles = attachments.filter((a) => isPdfDataUrl(a.dataUrl));
 
-    // les fichiers texte n'existent pas comme piece jointe pour le serveur
-    // (voir PendingTextAttachment) : leur contenu est colle tel quel dans le
-    // texte du message, avant meme d'etre affiche - donc identique a la
-    // relecture depuis l'historique, pas de reconstruction speciale requise.
+    // text files don't exist as an attachment for the server (see
+    // PendingTextAttachment): their content is pasted straight into the
+    // message text before it's even displayed - so it's identical when
+    // re-read from history, no special reconstruction needed.
     const outgoingText = [
       text,
       ...textAttachments.map(
@@ -1459,8 +1420,8 @@ function App() {
     };
   });
 
-  // memoisee (useCallback) : referencee par cancelMessage ci-dessous, elle
-  // meme dans les dependances de l'effet echap.
+  // memoized (useCallback): referenced by cancelMessage below, itself in
+  // the escape-key effect's dependencies.
   const respondToConfirmation = useCallback(
     async (approved: boolean, remember = false) => {
       if (!pendingConfirmation) return;
@@ -1477,12 +1438,11 @@ function App() {
     [pendingConfirmation],
   );
 
-  /** Interrompt la conversation en cours (celle affichee) : ferme le flux
-   * SSE cote client, signale au serveur d'arreter la boucle agentique
-   * avant sa prochaine iteration, et refuse une confirmation d'outil
-   * eventuellement en attente pour ne pas laisser le serveur bloque
-   * dessus jusqu'au timeout. Memoisee (useCallback) car referencee dans
-   * les dependances de l'effet echap ci-dessous. */
+  /** Cancels the current (displayed) conversation: closes the client-side SSE
+   * stream, tells the server to stop the agentic loop before its next
+   * iteration, and rejects any pending tool confirmation so the server
+   * isn't left blocked on it until timeout. Memoized (useCallback) since
+   * it's referenced in the escape-key effect's dependencies below. */
   const cancelMessage = useCallback(() => {
     if (!sending) return;
     if (pendingConfirmation) {
@@ -1498,11 +1458,11 @@ function App() {
     abortControllersRef.current.get(sessionId ?? "")?.abort();
   }, [sending, pendingConfirmation, sessionId, respondToConfirmation]);
 
-  // touche echap pour interrompre la reponse en cours, tant qu'une reponse
-  // est effectivement en cours (sending) ; reattache a chaque changement de
-  // sessionId pour que cancelMessage() cible toujours la bonne conversation
-  // (utile pour une toute nouvelle conversation : sessionId passe de null a
-  // son id reel des le premier evenement SSE, pendant que sending est deja true).
+  // escape key cancels the in-flight response, only while one is actually
+  // in flight (sending); re-attached on every sessionId change so
+  // cancelMessage() always targets the right conversation (matters for a
+  // brand-new conversation: sessionId goes from null to its real id on the
+  // first SSE event, while sending is already true).
   useEffect(() => {
     if (!sending) return;
     function handleKeyDown(e: KeyboardEvent) {
@@ -1514,10 +1474,10 @@ function App() {
     };
   }, [sending, cancelMessage]);
 
-  // cmd/ctrl+entree pour "autoriser une fois", cmd/ctrl+maj+entree pour
-  // "toujours autoriser" - memes raccourcis que la demande d'autorisation
-  // de Claude Desktop (echap = refuser vient deja de l'effet ci-dessus,
-  // cancelMessage refusant toute confirmation en attente).
+  // cmd/ctrl+enter for "allow once", cmd/ctrl+shift+enter for "always
+  // allow" - same shortcuts as Claude Desktop's own permission prompt
+  // (escape = deny already comes from the effect above, cancelMessage
+  // rejecting any pending confirmation).
   useEffect(() => {
     if (!pendingConfirmation) return;
     function handleKeyDown(e: KeyboardEvent) {
@@ -1531,9 +1491,9 @@ function App() {
     };
   }, [pendingConfirmation, respondToConfirmation]);
 
-  // raccourcis globaux, actifs partout dans l'app (pas seulement pendant une
-  // reponse en cours, contrairement a echap ci-dessus) : cmd/ctrl+K pour la
-  // recherche, cmd/ctrl+N pour une nouvelle conversation.
+  // global shortcuts, active everywhere in the app (not just during an
+  // in-flight response, unlike escape above): cmd/ctrl+K for search,
+  // cmd/ctrl+N for a new conversation.
   useEffect(() => {
     function handleGlobalShortcuts(e: KeyboardEvent) {
       if (!(e.metaKey || e.ctrlKey)) return;
@@ -1551,45 +1511,44 @@ function App() {
     };
   }, [startNewSession]);
 
-  // liste des conversations hors projet, telle qu'affichee dans la sidebar
-  // (la recherche par titre/contenu est sa propre page - voir SearchPage.tsx)
-  // - epinglees d'abord, tri stable donc l'ordre naturel (le plus recent en
-  // tete, deja garanti par loadSessions) est preserve au sein de chaque groupe.
+  // top-level (out-of-project) conversation list as shown in the sidebar
+  // (title/content search is its own page - see SearchPage.tsx) - pinned
+  // first, stable sort so the natural order (most recent first, already
+  // guaranteed by loadSessions) is preserved within each group.
   const topLevelSessions = sessions.filter((s) => s.project_id === null);
 
-  // affiche un message assistant "vide" avec un loader tant qu'aucun texte
-  // n'est en train d'arriver pour ce tour. Volontairement PAS exclu quand
-  // le dernier message est "tool" (contrairement a une version precedente
-  // qui le cachait des le premier appel d'outil) : un tour a plusieurs
-  // outils d'affilee a un vrai temps mort entre la fin d'un appel et le
-  // debut du suivant (le modele "reflechit" a nouveau), pendant lequel
-  // plus aucun indicateur ne s'affichait - voir la conversation "Triton
-  // Folder" pour un exemple ou 20 appels d'outils s'enchainent sans loader
-  // entre chacun. Le meme trou existe quand le dernier message est du
-  // texte assistant suivi d'un appel d'outil (ex. "Je vais ecrire X."
-  // avant un write_file qui prend plusieurs secondes) : le texte fini de
-  // s'afficher, plus aucun evenement SSE n'arrive tant que l'outil tourne,
-  // mais lastMessage reste "assistant" - awaitingSseEvent (minuteur de
-  // silence, voir sendMessage's noteSseEvent) couvre ce cas-la aussi, sans
-  // faire clignoter le loader pendant un flux de texte actif (les tokens
-  // arrivent bien plus vite que SSE_IDLE_MS).
+  // shows an "empty" assistant message with a loader while no text is
+  // arriving yet for this turn. Deliberately NOT excluded when the last
+  // message is "tool" (unlike an earlier version that hid it as soon as
+  // the first tool call happened): a turn with several tool calls in a row
+  // has a real gap between one call ending and the next starting (the
+  // model "thinks" again), during which no indicator showed at all - see
+  // the "Triton Folder" conversation for an example with 20 back-to-back
+  // tool calls and no loader between them. The same gap exists when the
+  // last message is assistant text followed by a tool call (e.g. "I'll
+  // write X." before a write_file that takes several seconds): the text
+  // finishes displaying, no more SSE events arrive while the tool runs,
+  // but lastMessage stays "assistant" - awaitingSseEvent (the silence
+  // timer, see sendMessage's noteSseEvent) covers this case too, without
+  // flickering the loader during an active text stream (tokens arrive much
+  // faster than SSE_IDLE_MS).
   const lastMessage = messages[messages.length - 1];
   const showTypingPlaceholder =
     sending &&
     !pendingConfirmation &&
     (lastMessage?.kind !== "assistant" || awaitingSseEvent);
-  // le modele de CETTE conversation, une fois la surcharge /model prise en
-  // compte - c'est celui-ci qui doit determiner l'affichage (badge, avatar,
-  // capacites de piece jointe), pas le defaut global apiModel seul.
+  // THIS conversation's model, once the /model override is factored in -
+  // this is what should drive display (badge, avatar, attachment
+  // capabilities), not just the global apiModel default.
   const effectiveModel = sessionModelOverride ?? apiModel;
   const displayedInFlightModel = inFlightModels[sessionId ?? ""] ?? effectiveModel;
   const currentModelInfo = modelsCatalog.find((m) => m.id === effectiveModel);
   const supportsImages = currentModelInfo?.supports_images ?? false;
   const supportsFiles = currentModelInfo?.supports_files ?? false;
-  // les fichiers texte (accept toujours inclus) sont colles dans le texte
-  // du message plutot qu'envoyes comme piece jointe binaire (voir
-  // PendingTextAttachment) - n'importe quel modele les comprend, donc pas
-  // besoin de verifier supportsImages/supportsFiles pour eux.
+  // text files (always included in accept) get pasted into the message
+  // text rather than sent as a binary attachment (see PendingTextAttachment)
+  // - any model understands them, so no need to check
+  // supportsImages/supportsFiles for them.
   const attachAccept = [
     supportsImages ? "image/*" : null,
     supportsFiles ? "application/pdf" : null,
@@ -2092,7 +2051,7 @@ function App() {
                                           cancelEditingMessage();
                                         }
                                       }}
-                                      // ouvert par un clic explicite de l'utilisateur (pas au chargement de la page)
+                                      // opened by an explicit user click (not on page load)
                                       autoFocus
                                       rows={Math.min(
                                         8,
@@ -2148,17 +2107,17 @@ function App() {
                           item.kind === "assistant" ? item.images ?? [] : [],
                         );
                         const lastItem = group.items[group.items.length - 1];
-                        // groupMessages() ne cree jamais un groupe "assistant" avec un
-                        // tableau items vide (toujours au moins un push initial) : ceci
-                        // n'est qu'un garde-fou pour TypeScript (noUncheckedIndexedAccess).
+                        // groupMessages() never creates an "assistant" group with an
+                        // empty items array (always at least one initial push) - this
+                        // is just a TypeScript guard (noUncheckedIndexedAccess).
                         if (!lastItem)
                           throw new Error("groupe assistant sans element");
                         const lastIsText = lastItem.kind === "assistant";
-                        // le modele qui a effectivement repondu dans ce groupe (pas
-                        // forcement celui actuellement selectionne dans les parametres,
-                        // qui a pu changer depuis) ; undefined pour un historique
-                        // enregistre avant l'ajout de ce champ, l'avatar retombe alors
-                        // sur les initiales.
+                        // the model that actually answered in this group (not
+                        // necessarily the one currently selected in settings, which
+                        // may have changed since) - undefined for history saved before
+                        // this field was added, the avatar then falls back
+                        // to initials.
                         // A response may contain several assistant fragments
                         // around tool calls. Older saved conversations did
                         // not record `model` on those intermediate fragments,
@@ -2179,14 +2138,14 @@ function App() {
                                 name={messageAvatar.name}
                                 src={messageAvatar.logo}
                                 size={72}
-                                // ceinture-bretelles en plus de `size` : la derniere
-                                // fois, l'image (1024x1024 a la source) a fini par
-                                // s'afficher a sa taille native au lieu d'etre
-                                // contrainte a la taille demandee, debordant tout
-                                // le fil de discussion horizontalement (plus moyen
-                                // de scroller). w-/h- fixes + overflow-hidden sur
-                                // ce meme element forcent un plafond quoi qu'il
-                                // arrive cote taille interne du composant Avatar.
+                                // belt-and-suspenders on top of `size`: last time,
+                                // the image (1024x1024 at the source) ended up
+                                // rendering at its native size instead of being
+                                // constrained to the requested one, overflowing the
+                                // whole thread horizontally (no way to scroll it
+                                // back). Fixed w-/h- + overflow-hidden on this same
+                                // element force a hard cap regardless of the
+                                // Avatar component's internal sizing.
                                 className="h-[72px] w-[72px] shrink-0 overflow-hidden"
                               />
                             }
@@ -2214,13 +2173,12 @@ function App() {
                               </div>
                             )}
                             {blocks.map((block, bi) => {
-                              // un show_map/show_link_preview isole (pas
-                              // regroupe avec d'autres appels d'outils,
-                              // voir toBlocks) se rend en carte plutot
-                              // qu'en ligne de tool-call repliable - tout
-                              // le reste (y compris ces deux outils
-                              // regroupes avec d'autres) garde le rendu
-                              // generique ci-dessous.
+                              // a standalone show_map/show_link_preview (not
+                              // grouped with other tool calls, see toBlocks)
+                              // renders as a card rather than a collapsible
+                              // tool-call line - everything else (including
+                              // these two tools when grouped with others)
+                              // keeps the generic rendering below.
                               const soleToolCall =
                                 block.kind === "tools" &&
                                 block.items.length === 1
@@ -2310,10 +2268,10 @@ function App() {
                                         <CopyIcon className="h-3.5 w-3.5" />
                                       )}
                                     </button>
-                                    {/* regenerer n'a de sens que sur la toute
-                                  derniere reponse - regenerer une reponse
-                                  plus ancienne ecraserait tout ce qui suit,
-                                  pas juste elle */}
+                                    {/* regenerating only makes sense on the very
+                                  last response - regenerating an older one
+                                  would overwrite everything after it, not
+                                  just that response */}
                                     {gi === groups.length - 1 && !sending && (
                                       <button
                                         onClick={() => {
