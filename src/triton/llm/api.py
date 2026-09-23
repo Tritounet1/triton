@@ -46,25 +46,20 @@ def is_api_key_configured() -> bool:
 def _client() -> OpenAI:
     # built fresh on every call (like get_model()) rather than once at
     # import time, so a key entered through the Settings UI takes effect
-    # on the very next call. The OpenAI SDK raises at construction time if
-    # api_key is None - the placeholder defers that failure to the actual
-    # request instead, which already surfaces as a normal error through
-    # the existing chat error handling (is_api_key_configured() is what
-    # run_chat_stream checks upfront to show a clearer message before ever
-    # getting here).
+    # on the next call. The SDK raises at construction time if api_key is
+    # None - the placeholder defers that failure to the actual request,
+    # which already surfaces through the existing chat error handling.
     return OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=_effective_api_key() or "not-configured",
-        # the SDK's own default (2, silent, not logged) is disabled in
-        # favor of the single explicit retry layer below (_with_retry) -
-        # two uncoordinated retry loops stacked on top of each other would
-        # make the real number of attempts, and the total wait time before
-        # a failure actually surfaces, unpredictable.
+        # the SDK's own default (2, silent) is disabled in favor of the
+        # single explicit retry layer below (_with_retry) - two
+        # uncoordinated retry loops would make the real attempt count and
+        # total wait time unpredictable.
         max_retries=0,
-        # Without an explicit SDK timeout, an unresponsive upstream could
-        # keep an SSE/chat request (or a scheduled task draining it) stuck
-        # for the HTTP client's much longer default. `_with_retry` handles
-        # the resulting APITimeoutError with the one retry policy below.
+        # without an explicit timeout, an unresponsive upstream could keep
+        # a request stuck for the HTTP client's much longer default.
+        # `_with_retry` handles the resulting APITimeoutError.
         timeout=OPENROUTER_REQUEST_TIMEOUT_SECONDS,
     )
 
@@ -85,26 +80,20 @@ OPENROUTER_REQUEST_TIMEOUT_SECONDS = 60.0
 
 def is_transient_error(exc: Exception) -> bool:
     """A connection failure, timeout, or rate limit is always worth
-    retrying; a 5xx from the provider usually is too (its own problem, not
-    this request's). Anything else - a bad request, an unknown model, an
-    invalid API key - retrying would just get the exact same rejection
-    again, so it's left to raise immediately instead of wasting the retry
-    budget and the wait. Not private (no leading underscore): reused by
-    stream_chat's own retry-if-nothing-produced-yet loop below, and by
-    server.py's run_chat_stream to decide whether an error that reached it
-    uncaught was even worth retrying in the first place, for its own
-    diagnostics.
+    retrying; a 5xx from the provider usually is too. Anything else - a
+    bad request, an unknown model, an invalid key - would just get the
+    exact same rejection again, so it's left to raise immediately instead
+    of wasting the retry budget. Not private: reused by stream_chat's own
+    retry-if-nothing-produced-yet loop, and by server.py's run_chat_stream
+    for its own diagnostics.
 
-    A bare APIError (exact type, not one of the subclasses checked below)
-    is also treated as transient: found via a real, repeated case -
-    message "The operation was aborted", no HTTP status at all. The SDK
-    raises this exact class (openai._streaming.Stream.__stream__) only
-    when it finds an inline {"error": ...} object embedded inside an
-    otherwise-200 SSE stream - the provider aborting generation
-    mid-response with no HTTP-level status to signal it, distinct from
-    every named failure mode (bad request, auth, not found...), which all
-    arrive as a more specific subclass via the normal HTTP-status path
-    instead and are correctly left alone below."""
+    A bare APIError (exact type, not a subclass) is also treated as
+    transient: found via a real, repeated case - message "The operation
+    was aborted", no HTTP status at all. The SDK raises this exact class
+    only when it finds an inline {"error": ...} object embedded inside an
+    otherwise-200 SSE stream - the provider aborting mid-response with no
+    HTTP-level status, distinct from every named failure mode, which
+    arrives as a more specific subclass instead."""
     if isinstance(exc, APIConnectionError | APITimeoutError | RateLimitError):
         return True
     if isinstance(exc, APIStatusError) and exc.status_code >= 500:
@@ -116,10 +105,9 @@ def _with_retry[T](make_request: Callable[[], T]) -> T:
     """Calls make_request(), retrying with exponential backoff on a
     manifestly transient error - see is_transient_error. Used for both
     call_chat and the call that establishes stream_chat's stream: in both
-    cases nothing has reached the caller yet at the point this runs, so a
-    retry from scratch is always safe. NOT used directly once a streamed
-    response has actually started yielding content - see stream_chat's own
-    retry loop below for that finer-grained case."""
+    cases nothing has reached the caller yet, so a retry from scratch is
+    always safe. NOT used once a streamed response has actually started
+    yielding content - see stream_chat's own retry loop for that."""
     attempt = 0
     while True:
         try:
@@ -132,14 +120,11 @@ def _with_retry[T](make_request: Callable[[], T]) -> T:
 
 
 # 1024 was too low for tool calls carrying a full file as their "content"
-# argument (e.g. write_file on an HTML page with inline CSS): the completion
-# got truncated mid-JSON, the tool call became unparseable, and the model
-# burned iterations retrying increasingly convoluted workarounds instead.
-# 8192 later proved too low too, for a different reason: reasoning models
-# (e.g. gemini-3.7-flash) count hidden "reasoning" tokens against the same
-# budget, and can burn through all of it before producing any visible
-# content or tool call at all (see run_chat_stream's handling of
-# finish_reason == "length" for what happens when that still occurs).
+# argument: the completion got truncated mid-JSON, the tool call became
+# unparseable. 8192 later proved too low too: reasoning models count
+# hidden "reasoning" tokens against the same budget, and can burn through
+# it before producing any visible output (see run_chat_stream's handling
+# of finish_reason == "length" for what happens when that still occurs).
 MAX_TOKENS = 16384
 
 
@@ -317,24 +302,21 @@ def stream_chat(
     model: str | None = None,
 ) -> Iterator[str | ChatResult]:
     """Calls the model with streaming: yields each chunk of text as it
-    arrives, then the full ChatResult once the response is complete (tool
-    calls are never streamed chunk by chunk, just reconstructed silently,
-    there's no point displaying them partially). `model` overrides the
-    currently selected model for this call only - same convention as
-    call_chat, used by server.py for a conversation with a per-session
-    override set via the /model command.
+    arrives, then the full ChatResult once complete (tool calls are never
+    streamed chunk by chunk, just reconstructed silently). `model`
+    overrides the currently selected model for this call only - same
+    convention as call_chat, used by server.py for a per-session override
+    set via /model.
 
-    Found via a real conversation: a stream can die (observed message:
-    "The operation was aborted") right after opening, before a single
-    chunk carrying real content/tool-call data ever arrives - past
-    _with_retry's scope (that only covers the .create() call that opens
-    the stream, not reading its body) and past the point call sites like
-    run_chat_stream could safely retry themselves, since by their level
-    tokens may already be relayed to the client as SSE. Handled here
-    instead: retried from scratch, same as _with_retry, but the boundary
-    is "has this attempt produced any real output yet" rather than "has
-    the request been sent yet" - once true, a failure is left to raise
-    as-is, same reasoning _with_retry documents for why it stops there."""
+    Found via a real conversation: a stream can die ("The operation was
+    aborted") right after opening, before any real content/tool-call data
+    arrives - past _with_retry's scope (only covers opening the stream,
+    not reading its body) and past the point call sites like
+    run_chat_stream could safely retry, since tokens may already be
+    relayed to the client as SSE. Handled here instead: retried from
+    scratch, but the boundary is "has this attempt produced any real
+    output yet" rather than "has the request been sent yet" - once true, a
+    failure is left to raise as-is."""
     model = model or get_model()
     provider_messages = _provider_messages(messages)
 
