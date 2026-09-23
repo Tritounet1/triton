@@ -24,15 +24,15 @@ interface ModelInfo {
 }
 
 interface ModelSettingsProps {
-  // le modele affiche ailleurs dans l'app (composer, avatar...) est tenu a
-  // jour via son propre etat (apiModel dans App.tsx) - appele des qu'un
-  // changement est enregistre pour que ces autres endroits reagissent tout
-  // de suite, sans attendre que la modale se ferme.
+  // the model shown elsewhere in the app (composer, avatar...) is kept
+  // current via its own state (apiModel in App.tsx) - called as soon as a
+  // change is saved so those other places react right away, without
+  // waiting for the modal to close.
   onModelChanged: () => void;
 }
 
-// grandes familles en premier (dans cet ordre), puis le reste des familles
-// nommees par ordre alphabetique, "Autres" toujours en dernier
+// big families first (in this order), then the rest of the named families
+// alphabetically, "Other" always last
 const FAMILY_PRIORITY = ["anthropic", "openai", "google", "qwen"];
 
 function formatContextLength(n: number): string {
@@ -47,9 +47,9 @@ function formatPrice(price: number): string {
   return `$${price < 1 ? price.toFixed(3) : price.toFixed(2)}`;
 }
 
-/* Fond du Tooltip toujours sombre quel que soit le theme de l'appli (voir
- * LogsSettings.tsx's DayTooltipContent) - text-on-dark plutot que <Text>
- * pour rester lisible dans les deux themes clair/sombre. */
+/* Tooltip background is always dark regardless of the app's theme (see
+ * LogsSettings.tsx's DayTooltipContent) - text-on-dark rather than <Text>
+ * to stay readable in both light/dark themes. */
 function ModelNameTooltipContent({ model }: { model: ModelInfo }) {
   return (
     <div className="flex max-w-xs flex-col gap-0.5 px-1 py-0.5 text-on-dark">
@@ -67,13 +67,13 @@ export function ModelSettings({ onModelChanged }: ModelSettingsProps) {
   const [search, setSearch] = useState("");
   const [toolsOnly, setToolsOnly] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
-  // ferme par defaut : aucune famille n'est ouverte tant que l'utilisateur
-  // n'a pas clique dessus (ou tape une recherche, qui ignore cet etat).
+  // collapsed by default: no family is open until the user clicks it (or
+  // types a search, which ignores this state).
   const [expandedFamilies, setExpandedFamilies] = useState<Set<string>>(() => new Set());
 
-  // pas d'appel synchrone a setLoading()/setError() ici (seulement dans les
-  // callbacks), pour pouvoir etre utilisee telle quelle dans l'effet de
-  // montage (voir LogsSettings.tsx / ProjectFilePanel.tsx).
+  // no synchronous setLoading()/setError() call here (only inside
+  // callbacks), so it can be used as-is in the mount effect (see
+  // LogsSettings.tsx / ProjectFilePanel.tsx).
   useEffect(() => {
     Promise.all([
       fetch(`${API_BASE}/openrouter/models`).then(
@@ -158,11 +158,11 @@ export function ModelSettings({ onModelChanged }: ModelSettingsProps) {
     {
       key: "name",
       header: "Modèle",
-      // seule colonne proportionnelle : absorbe tout l'espace restant une
-      // fois les colonnes a largeur fixe soustraites - resserrees ci-dessous
-      // pour lui en laisser davantage, la description longue d'un modele
-      // (ex. "DeepSeek: DeepSeek V4 Flash Preview (free)") ne rentrant
-      // souvent pas meme avec cette marge, d'ou le Tooltip au survol.
+      // sole proportional column: absorbs all remaining space once the
+      // fixed-width columns are subtracted - narrowed below to leave it
+      // more room, since a model's long description (e.g. "DeepSeek:
+      // DeepSeek V4 Flash Preview (free)") often doesn't fit even with
+      // that margin, hence the hover Tooltip.
       width: proportional(3),
       renderCell: (m) => (
         <div className="flex min-w-0 items-center gap-2">
