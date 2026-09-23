@@ -12,7 +12,7 @@ from triton.remote_workspaces import (
     normalize_remote_workspace_args,
 )
 from triton.storage import projects, sessions
-from triton.web_runtime import SlidingWindowRateLimiter, WebRuntimeConfig
+from triton.web_runtime import WebRuntimeConfig
 
 
 def _web_auth_config() -> WebAuthConfig:
@@ -864,38 +864,10 @@ def test_web_profile_requires_a_configured_authenticated_session(monkeypatch):
     assert accepted.status_code == 200
 
 
-def test_web_profile_limits_request_rate(monkeypatch):
-    monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
-    monkeypatch.setattr(server, "WEB_AUTH_CONFIG", _web_auth_config())
-    monkeypatch.setattr(
-        server,
-        "WEB_RATE_LIMITER",
-        SlidingWindowRateLimiter(
-            WebRuntimeConfig(
-                max_request_bytes=1024, rate_limit_requests=1, rate_limit_window_seconds=60
-            )
-        ),
-    )
-
-    with TestClient(server.app) as client:
-        accepted = client.get("/health")
-        limited = client.get("/health")
-
-    assert accepted.status_code == 200
-    assert limited.status_code == 429
-    assert limited.headers["retry-after"] == "59"
-
-
 def test_web_profile_rejects_an_oversized_request(monkeypatch):
     monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
     monkeypatch.setattr(server, "WEB_AUTH_CONFIG", _web_auth_config())
-    monkeypatch.setattr(
-        server,
-        "WEB_RUNTIME_CONFIG",
-        WebRuntimeConfig(
-            max_request_bytes=1, rate_limit_requests=120, rate_limit_window_seconds=60
-        ),
-    )
+    monkeypatch.setattr(server, "WEB_RUNTIME_CONFIG", WebRuntimeConfig(max_request_bytes=1))
 
     with TestClient(server.app) as client:
         response = client.post("/auth/login", content=b"{}")
@@ -906,15 +878,6 @@ def test_web_profile_rejects_an_oversized_request(monkeypatch):
 def test_web_profile_logs_request_metadata(monkeypatch, caplog):
     monkeypatch.setattr(server, "DEPLOYMENT_PROFILE", DeploymentProfile.WEB)
     monkeypatch.setattr(server, "WEB_AUTH_CONFIG", _web_auth_config())
-    monkeypatch.setattr(
-        server,
-        "WEB_RATE_LIMITER",
-        SlidingWindowRateLimiter(
-            WebRuntimeConfig(
-                max_request_bytes=1024, rate_limit_requests=120, rate_limit_window_seconds=60
-            )
-        ),
-    )
     caplog.set_level(logging.INFO, logger="uvicorn.error")
 
     with TestClient(server.app) as client:
