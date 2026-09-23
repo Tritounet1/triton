@@ -5,7 +5,7 @@ then synthesizes their results into one final answer.
 
 Triggered from an ordinary conversation via the /multi-agents <task> slash
 command (see server.py's /orchestrator endpoint) rather than a separate
-page/mode: once a run finishes, its exchange is folded into that same
+page/mode: once a run finishes, its exchange is folded into that
 conversation's session file (sessions.py) so it reads like a normal
 assistant turn from then on - each subtask becomes a fake tool call
 (role name, model + description as its "arguments", result as the tool
@@ -14,31 +14,29 @@ knows how to display, live or from history, with no dedicated UI of its
 own. Runs live in memory (RUNS) while in flight, mirrored to disk
 (storage/orchestrator_runs.py) so a harness restart doesn't lose one -
 resume_incomplete_runs(), called once at startup, picks a crashed run
-back up, keeping the results of any subtask that had already finished
-and re-running the rest. Once a run reaches a terminal state and is
-folded into its session, its persisted file is deleted - from then on
-the session file is the only copy that matters.
+back up, keeping already-finished subtask results and re-running the
+rest. Once a run reaches a terminal state and is folded into its session,
+its persisted file is deleted - the session file is the only copy left.
 
 A subtask can depend on another one in the same run via "depends_on"
 (planner-assigned indices, translated to subtask ids once created) - see
-_schedule_waves, which groups the run's subtasks into dependency-respecting
-waves instead of firing every thread at once, so "research this, then
-write code based on it" is possible within a single run while unrelated
-subtasks still run in parallel as before.
+_schedule_waves, which groups subtasks into dependency-respecting waves
+instead of firing every thread at once, so "research this, then write
+code based on it" is possible within a single run while unrelated
+subtasks still run in parallel.
 
 Read-only for every role except one deliberate exception: a "code"
 subtask gets write access (write_file/edit_file/delete_file/move_file,
 plus run_tests) when - and only when - the run is scoped to a Project,
-so those writes are always confined to that project's folder via the
-same enforce_project_sandbox every conversation gets. With no project
-selected, "code" stays exactly as read-only as every other role. This is
-still unsupervised: nothing here goes through the confirmation flow a
-live conversation has, so a code subtask can write/edit/delete files with
-no human review in the loop - the project scope is the only safety net,
-not a substitute for one. run_shell, run_code, and git_commit are
-withheld from every role regardless: arbitrary command/code execution
-and committing autonomously are a different order of blast radius than
-file edits.
+confined to that project's folder via the same enforce_project_sandbox
+every conversation gets. With no project selected, "code" stays exactly
+as read-only as every other role. This is still unsupervised: nothing
+here goes through the confirmation flow a live conversation has, so a
+code subtask can write/edit/delete files with no human review - the
+project scope is the only safety net, not a substitute for one.
+run_shell, run_code, and git_commit are withheld from every role
+regardless: arbitrary command/code execution and committing autonomously
+are a different order of blast radius than file edits.
 """
 
 import json
@@ -89,15 +87,14 @@ MAX_SUBTASK_ITERATIONS = 10
 @dataclass
 class MultiAgentRole:
     """A role the planner can tag a subtask with. The default set (code/
-    research/vision/conversational) below matches what used to be hardcoded
-    directly into the planner prompt; storage/settings.py's
+    research/vision/conversational) below matches what used to be
+    hardcoded into the planner prompt; storage/settings.py's
     multi_agent_roles override (Settings UI) replaces the whole set when
-    present - see load_roles(). `id` is also the key model_roles.py's
-    per-role model override (Settings > Rôles multi-agent) and
-    orchestrator_runs.py's persisted subtasks reference, so renaming an
-    existing role's id orphans any in-flight run/override still using the
-    old one - changing `label`/`description`/`can_write`/`system_prompt`
-    in place is always safe, adding or removing a role is too."""
+    present - see load_roles(). `id` also keys model_roles.py's per-role
+    model override and orchestrator_runs.py's persisted subtasks, so
+    renaming an existing id orphans any in-flight run/override still
+    using the old one - changing the other fields in place, or
+    adding/removing a role, is always safe."""
 
     id: str
     label: str
@@ -177,12 +174,10 @@ def load_roles() -> list[MultiAgentRole]:
 def _resolve_role(role_id: str, roles: list[MultiAgentRole]) -> MultiAgentRole:
     """A subtask's role always names one of the roles the planner was
     given - but the model isn't bound by that any more than it's bound by
-    a tool's JSON schema (see _shared.py's invoke_tool docstring), and a
-    role can also be deleted from the config between planning and running
-    an in-flight run's subtasks. Either way, falls back to a synthetic
-    read-only role rather than crashing - matches what already happened
-    implicitly before roles were configurable (any role name other than
-    "code" was already read-only)."""
+    a tool's JSON schema, and a role can also be deleted from the config
+    between planning and running. Either way, falls back to a synthetic
+    read-only role rather than crashing - matching what already happened
+    implicitly before roles were configurable."""
     for role in roles:
         if role.id == role_id:
             return role
@@ -333,11 +328,9 @@ def _append_result_to_session(run: OrchestratorRun) -> None:
     """Folds a finished run into its conversation's history. Each subtask
     becomes a fake tool call (its role as the "tool" name, model+task as
     its arguments, its result as the tool response) - the exact shape a
-    real tool call/response pair has, so the desktop app's existing
-    reconstruction of tool calls from session history renders it with no
-    changes needed there, the same way it would for a real tool. The
-    synthesis (or the error, if the run failed) is the final assistant
-    message, same as any other reply."""
+    real tool call/response pair has, so the desktop app renders it with
+    no changes needed there. The synthesis (or the error, if the run
+    failed) is the final assistant message, same as any other reply."""
     assert run.session_id is not None
     path = session_path(run.session_id)
     try:
@@ -417,15 +410,12 @@ def _parse_plan(raw: str, max_subtasks: int) -> list[dict[str, object]]:
 
 def _schedule_waves(subtasks: list[Subtask]) -> list[list[Subtask]]:
     """Groups subtasks into dependency-respecting waves (Kahn's algorithm):
-    every subtask in a wave only depends on subtasks in earlier waves, so
-    within one wave they can all run in parallel exactly like before -
-    a plan with no depends_on at all produces a single wave, identical to
-    the old fully-parallel behavior. A cycle in the plan (which the
-    planner shouldn't produce, but nothing stops a bad one) can never
-    resolve into a wave on its own, so whatever's left over when no
-    further progress is possible is dumped into one final wave with its
-    dependencies effectively ignored - better than deadlocking forever on
-    subtasks that could never become ready."""
+    every subtask in a wave only depends on earlier waves, so within one
+    wave they all run in parallel - a plan with no depends_on produces a
+    single wave, identical to the old fully-parallel behavior. A cycle in
+    the plan can never resolve into a wave on its own, so whatever's left
+    when no further progress is possible is dumped into one final wave
+    with its dependencies ignored - better than deadlocking forever."""
     by_id = {s.id: s for s in subtasks}
     remaining = {s.id: {d for d in s.depends_on if d in by_id} for s in subtasks}
     waves: list[list[Subtask]] = []
@@ -548,11 +538,9 @@ def _run_subtask(
                 messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": result})
 
         # ran out of iterations without a plain-text conclusion: force one
-        # more call with no tools, so partial work (searches/reads that did
-        # succeed, a file already written) gets synthesized into an answer
-        # instead of silently discarded - same recovery subagents.py already
-        # has, missing here until a real research subtask hit exactly this
-        # (10 tool-call iterations in a row, never once concluding).
+        # more call with no tools, so partial work gets synthesized into an
+        # answer instead of silently discarded - same recovery subagents.py
+        # already has, missing here until a real subtask hit exactly this.
         messages.append(
             {
                 "role": "user",
@@ -682,9 +670,9 @@ def _execute_subtasks(
             t.join()
         _persist(run)
 
-    # Toutes les sous-taches ecrivent dans le meme tour de conversation :
-    # une fois les vagues terminees, on scelle leur etat commun pour que la
-    # timeline interne puisse afficher et restaurer ce commit complet.
+    # every subtask writes into the same conversation turn - once all waves
+    # are done, seal their shared state so the internal timeline can show
+    # and restore this whole commit.
     if run.session_id is not None:
         finalize_snapshot(project, run.session_id, run.turn_index)
 
@@ -799,11 +787,10 @@ def dispatch(
 ) -> str:
     """Starts a multi-agent run in a background thread and returns its id
     immediately, without waiting for it to finish. `turn_index` (the nth
-    user message in the session, 1-based - server.py's dispatch_orchestrator
-    computes it the same way run_chat_stream does for a normal turn) is
-    what a write-capable subtask's own snapshot uses (see _run_subtask),
-    so this run's changes get their own restore point rather than being
-    silently folded into whatever turn_index happened to default to."""
+    user message in the session, 1-based) is what a write-capable
+    subtask's own snapshot uses, so this run's changes get their own
+    restore point rather than folding into whatever it happened to
+    default to."""
     run = OrchestratorRun(
         id=uuid.uuid4().hex[:8],
         task=task,
@@ -833,16 +820,13 @@ def _resume_one(run: OrchestratorRun) -> None:
 
 
 def resume_incomplete_runs() -> list[str]:
-    """Called once at harness startup (see server.py's lifespan): reloads
-    every run that was still "planning" or "running" when the process
-    last stopped, and picks each one back up in a background thread -
-    subtasks already "done" keep their results, everything else
-    (including one that was "running" mid-thread when the process died,
-    which gets no partial credit) is re-executed. A persisted file whose
-    run had actually already reached a terminal state (a crash between
-    that and _forget() removing the file) is just stale - dropped here
-    rather than resumed. Returns the resumed run ids, for the startup
-    log."""
+    """Called once at harness startup: reloads every run that was still
+    "planning" or "running" when the process last stopped, and picks each
+    one back up in a background thread - subtasks already "done" keep
+    their results, everything else (including one mid-thread when the
+    process died, no partial credit) is re-executed. A persisted file
+    whose run had already reached a terminal state is just stale -
+    dropped here rather than resumed. Returns the resumed run ids."""
     resumed: list[str] = []
     for data in load_all_runs():
         try:
