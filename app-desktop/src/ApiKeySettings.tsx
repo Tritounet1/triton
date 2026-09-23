@@ -34,7 +34,7 @@ export function ApiKeyField({ title, description, endpoint, placeholder, isRequi
         setConfigured(data.configured);
       })
       .catch(() => {
-        // API hors ligne : le statut reste inconnu
+        // offline: status stays unknown
       });
   }, [endpoint]);
 

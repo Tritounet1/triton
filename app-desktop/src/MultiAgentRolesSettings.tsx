@@ -68,7 +68,7 @@ export function MultiAgentRolesSettings() {
         setMaxMaxSubtasks(maxData.max);
       })
       .catch(() => {
-        // API hors ligne : les listes restent vides
+        // offline: lists stay empty
       })
       .finally(() => {
         setLoading(false);

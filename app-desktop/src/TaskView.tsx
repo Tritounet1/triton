@@ -64,7 +64,7 @@ export function TaskView({ taskId, onBack }: TaskViewProps) {
       .then((r) => (r.ok ? r.json() : null))
       .then((data: TaskDetail | null) => { if (data) setTask(data); })
       .catch(() => {
-        // API hors ligne : le prochain polling reflete quand meme l'etat reel
+        // offline: the next poll reflects real state anyway
       });
   }
 

@@ -11,8 +11,8 @@ export interface SnapshotPoint {
   kind: string;
   created_at: string;
   message_preview: string | null;
-  // absent dans les fixtures et les anciens serveurs ; false signifie un
-  // ancien point "avant ecriture", true un commit interne avant/apres.
+  // absent in fixtures and older servers; false means an old "before write"
+  // point, true an internal before/after commit.
   has_final_state?: boolean;
 }
 
