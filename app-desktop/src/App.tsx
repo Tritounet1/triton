@@ -518,12 +518,11 @@ function App() {
     PendingTextAttachment[]
   >([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // compteur plutot qu'un booleen simple : dragenter/dragleave se
-  // declenchent aussi en survolant les enfants (la liste de messages, le
-  // composer...), donc un simple "entree = true / sortie = false" clignote
-  // des qu'on traverse une frontiere d'enfant a l'interieur meme de la
-  // zone de drop. Le compteur ne retombe a 0 (masque l'overlay) qu'une
-  // fois vraiment sorti de tous les enfants imbriques.
+  // counter rather than a plain boolean: dragenter/dragleave also fire when
+  // hovering children (the message list, the composer...), so a plain
+  // "enter = true / leave = false" flickers every time a child boundary is
+  // crossed within the drop zone itself. The counter only drops back to 0
+  // (hides the overlay) once truly out of all nested children.
   const [dragDepth, setDragDepth] = useState(0);
   const [sessionId, setSessionId] = useState<string | null>(() =>
     localStorage.getItem("triton_session_id"),

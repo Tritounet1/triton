@@ -38,7 +38,7 @@ export function SubagentsPanel() {
       .then((r) => (r.ok ? r.json() : []))
       .then((data: SubagentTask[]) => { setTasks(data); })
       .catch(() => {
-        // API hors ligne : la liste reste telle quelle
+        // offline: list stays as-is
       });
   }
 
