@@ -1,9 +1,8 @@
-// Types et fonctions pures pour transformer l'historique brut d'une session
-// (RawSessionMessage[], tel que renvoye par le serveur) en messages de chat
-// prets a rendre (ChatMsg[]) - extrait de App.tsx pour que ce fichier
-// n'exporte que des non-composants (voir react-refresh/only-export-
-// components) et pour pouvoir les tester unitairement sans monter tout
-// App.tsx (voir chatMessages.test.ts).
+// Pure types/functions turning a session's raw history (RawSessionMessage[],
+// as returned by the server) into render-ready chat messages (ChatMsg[]) -
+// extracted from App.tsx so this file only exports non-components (see
+// react-refresh/only-export-components) and so they can be unit-tested
+// without mounting all of App.tsx (see chatMessages.test.ts).
 import { formatArgs } from "./format";
 
 export interface SentFile {
@@ -22,25 +21,23 @@ export type ChatMsg =
   | { kind: "assistant"; text: string; time: number; model?: string; images?: string[] }
   | {
       kind: "tool";
-      // presente seulement pour une sous-tache multi-agent en direct
-      // (voir dispatchMultiAgent) : permet de mettre a jour la meme entree
-      // au lieu d'en empiler une nouvelle a chaque sondage.
+      // only present for a live multi-agent subtask (see dispatchMultiAgent):
+      // lets us update the same entry instead of stacking a new one per poll.
       id?: string;
       tool: string;
       args: Record<string, unknown>;
       result: string;
       time: number;
-      // modele qui a demande cet appel d'outil ; utile lorsqu'un tour se
-      // termine avant d'avoir produit une reponse textuelle finale.
+      // model that requested this tool call; useful when a turn ends before
+      // producing a final text response.
       model?: string;
-      // statut explicite pour une sous-tache multi-agent en direct (connu
-      // sans avoir a l'inferer du texte, contrairement a un vrai appel
-      // d'outil deja termine - voir toolCallStatus).
+      // explicit status for a live multi-agent subtask (known without having
+      // to infer it from text, unlike an already-finished real tool call -
+      // see toolCallStatus).
       status?: "pending" | "running" | "complete" | "error";
-      // presents seulement pour une sous-tache multi-agent : sa description
-      // (le "target" de sa propre ligne) et les outils qu'elle a deja
-      // appeles, mis a jour en direct pendant qu'elle tourne (voir
-      // pollMultiAgentRun / multiAgentSubtaskDetail).
+      // only present for a multi-agent subtask: its description (its own
+      // line's "target") and the tools it has already called, updated live
+      // while it runs (see pollMultiAgentRun / multiAgentSubtaskDetail).
       subtaskDescription?: string;
       subtaskToolCalls?: MultiAgentSubtaskToolCall[];
     }
@@ -63,9 +60,9 @@ export interface RawSessionMessage {
   generated_images?: string[];
 }
 
-/** Un message utilisateur enregistre peut etre soit une simple chaine, soit
- * une liste de parts (texte + images/fichiers) des qu'une piece jointe a ete
- * envoyee (voir build_user_content cote serveur). */
+/** A stored user message can be either a plain string or a list of parts
+ * (text + images/files) as soon as an attachment was sent (see
+ * build_user_content server-side). */
 export function extractUserContent(content: string | ContentPart[]): {
   text: string;
   images: string[];
@@ -89,12 +86,11 @@ export function isPdfDataUrl(dataUrl: string): boolean {
   return dataUrl.startsWith("data:application/pdf");
 }
 
-/** Meme convention que server.py's truncate_before_turn : coupe `msgs` juste
- * avant le message utilisateur qui demarre `turnIndex` (1-based), pour que
- * l'affichage local reflete immediatement ce que edit_turn_index va faire
- * cote serveur (pas d'attente du prochain evenement SSE pour voir
- * disparaitre les anciens tours). turnIndex introuvable (deja hors bornes) :
- * no-op, retourne msgs tel quel. */
+/** Same convention as server.py's truncate_before_turn: cuts `msgs` right
+ * before the user message that starts `turnIndex` (1-based), so the local
+ * display immediately reflects what edit_turn_index will do server-side (no
+ * waiting on the next SSE event to see old turns disappear). turnIndex not
+ * found (out of bounds): no-op, returns msgs as-is. */
 export function truncateBeforeTurn(msgs: ChatMsg[], turnIndex: number): ChatMsg[] {
   let count = 0;
   for (let i = 0; i < msgs.length; i++) {
@@ -106,9 +102,8 @@ export function truncateBeforeTurn(msgs: ChatMsg[], turnIndex: number): ChatMsg[
   return msgs;
 }
 
-/** Le message utilisateur qui demarre `turnIndex` (1-based) - utilise par
- * "regenerer" pour retrouver le texte/pieces jointes du tour a renvoyer
- * tel quel. */
+/** The user message that starts `turnIndex` (1-based) - used by "regenerate"
+ * to find the text/attachments of the turn to resend as-is. */
 export function userMessageAtTurn(
   msgs: ChatMsg[],
   turnIndex: number,
@@ -123,7 +118,7 @@ export function userMessageAtTurn(
   return undefined;
 }
 
-/** id de session au format 2026-08-28_101500 -> "28/08/2026 10:15" */
+/** session id in the 2026-08-28_101500 format -> "28/08/2026 10:15" */
 export function formatSessionLabel(id: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})(?:-[a-f0-9]{10})?$/.exec(id);
   if (!m) return id;
@@ -158,11 +153,10 @@ export function historyToMessages(raw: RawSessionMessage[]): ChatMsg[] {
           kind: "tool",
           tool: toolCall.function.name,
           args,
-          // le contenu d'un message "tool" (resultat d'un appel d'outil)
-          // est toujours une chaine simple - seul un message "user" peut
-          // contenir une liste de parts (texte + images, voir
-          // extractUserContent), d'ou la garde meme si le type partage est
-          // plus large.
+          // a "tool" message's content (a tool call's result) is always a
+          // plain string - only a "user" message can hold a list of parts
+          // (text + images, see extractUserContent), hence the guard even
+          // though the shared type is wider.
           result: typeof toolResult?.content === "string" ? toolResult.content : "",
           time: now,
           model: m.model,
@@ -187,20 +181,18 @@ export type AssistantMsg = Extract<ChatMsg, { kind: "assistant" }>;
 export type ToolMsg = Extract<ChatMsg, { kind: "tool" }>;
 
 export type RenderGroup =
-  // turnIndex : le meme "1-based nth user message" que turn_index_of cote
-  // serveur (voir server.py) - c'est ce qu'edit_turn_index attend, donc
-  // calcule ici une bonne fois plutot que recompte a chaque clic sur
-  // "modifier".
+  // turnIndex: the same "1-based nth user message" as server-side
+  // turn_index_of (see server.py) - what edit_turn_index expects, so it's
+  // computed once here rather than recounted on every "edit" click.
   | { type: "user"; msg: Extract<ChatMsg, { kind: "user" }>; turnIndex: number }
   | { type: "system"; msg: Extract<ChatMsg, { kind: "info" | "error" }> }
-  // precedingTurnIndex : le tour utilisateur qui a produit ce groupe -
-  // c'est ce que "regenerer" renvoie comme edit_turn_index pour redemander
-  // exactement la meme reponse.
+  // precedingTurnIndex: the user turn that produced this group - what
+  // "regenerate" sends back as edit_turn_index to re-request the exact same
+  // response.
   | { type: "assistant"; items: (AssistantMsg | ToolMsg)[]; precedingTurnIndex: number };
 
-/** Regroupe les messages consécutifs d'assistant/outil sous un seul avatar
- * (comme un vrai fil de discussion), plutôt qu'un avatar répété à chaque
- * morceau de la réponse. */
+/** Groups consecutive assistant/tool messages under a single avatar (like a
+ * real thread), instead of a repeated avatar per response fragment. */
 export function groupMessages(msgs: ChatMsg[]): RenderGroup[] {
   const groups: RenderGroup[] = [];
   let turnIndex = 0;
@@ -215,11 +207,11 @@ export function groupMessages(msgs: ChatMsg[]): RenderGroup[] {
       if (last?.type === "assistant") {
         last.items.push(m);
       } else if (
-        // Un message d'information peut arriver entre deux etapes d'un
-        // meme tour (par exemple le point de restauration cree juste avant
-        // une ecriture). Il ne doit pas faire reapparaitre un deuxieme
-        // avatar pour la meme reponse ; on le conserve visuellement apres
-        // le groupe, mais rattache la suite a l'assistant precedent.
+        // An info message can arrive between two steps of the same turn
+        // (e.g. the restore point created right before a write). It must
+        // not bring back a second avatar for the same response; keep it
+        // visually after the group but attach what follows to the
+        // previous assistant.
         last?.type === "system" &&
         last.msg.kind === "info" &&
         groups[groups.length - 2]?.type === "assistant"
@@ -234,10 +226,9 @@ export function groupMessages(msgs: ChatMsg[]): RenderGroup[] {
   return groups;
 }
 
-/** Le modele connu le plus recent d'une reponse groupee. Les anciens
- * historiques pouvaient ne pas enregistrer le modele sur les fragments
- * intermediaires autour d'un appel d'outil, alors que sa reponse finale le
- * contient bien. */
+/** The most recent known model for a grouped response. Older histories could
+ * omit the model on intermediate fragments around a tool call, even though
+ * the final response does have it. */
 export function assistantGroupModel(items: (AssistantMsg | ToolMsg)[]): string | undefined {
   return [...items].reverse().find((item) => Boolean(item.model))?.model;
 }
@@ -245,8 +236,8 @@ export function assistantGroupModel(items: (AssistantMsg | ToolMsg)[]): string |
 export type Block =
   { kind: "tools"; items: ToolMsg[] } | { kind: "text"; msg: AssistantMsg };
 
-/** Dans un groupe assistant, fusionne les appels d'outils consécutifs en un
- * seul ChatToolCalls (résumé repliable natif si plusieurs), sépare le texte. */
+/** Within an assistant group, merges consecutive tool calls into a single
+ * ChatToolCalls (natively collapsible when several), separates out text. */
 export function toBlocks(items: (AssistantMsg | ToolMsg)[]): Block[] {
   const blocks: Block[] = [];
   for (const item of items) {
@@ -265,10 +256,9 @@ export function toBlocks(items: (AssistantMsg | ToolMsg)[]): Block[] {
 }
 
 /** "mcp__server-name__tool_name" -> { label: "tool_name", server:
- * "server-name" } (voir mcp_client.py's tool_key/MCP_PREFIX cote serveur) ;
- * un outil natif (write_file, run_shell...) n'a pas ce prefixe -> pas de
- * serveur. Utilise pour le style "Claude souhaite utiliser X de Y" de la
- * demande d'autorisation. */
+ * "server-name" } (see mcp_client.py's tool_key/MCP_PREFIX server-side); a
+ * native tool (write_file, run_shell...) has no such prefix -> no server.
+ * Used for the "Claude wants to use X from Y" permission-prompt style. */
 export function parseToolDisplay(toolName: string): { label: string; server: string | null } {
   if (!toolName.startsWith("mcp__")) return { label: toolName, server: null };
   const rest = toolName.slice("mcp__".length);
@@ -289,12 +279,12 @@ export interface EditFileEdit {
   new_string: string;
 }
 
-/** edit_file accepte desormais plusieurs hunks/fichiers en un seul appel
- * (voir filesystem.py) : ses arguments sont `{edits: [{path, old_string,
- * new_string, replace_all?}, ...]}` plutot que old_string/new_string a
- * plat. Le modele n'est pas force de respecter le schema (voir
- * invoke_tool dans _shared.py) - filtre defensivement tout element qui ne
- * ressemble pas a un edit valide plutot que de planter sur un rendu. */
+/** edit_file now accepts several hunks/files in a single call (see
+ * filesystem.py): its arguments are `{edits: [{path, old_string,
+ * new_string, replace_all?}, ...]}` rather than flat old_string/new_string.
+ * The model isn't forced to follow the schema (see invoke_tool in
+ * _shared.py) - defensively filters out anything that doesn't look like a
+ * valid edit rather than crashing on render. */
 export function parseEditFileEdits(args: Record<string, unknown>): EditFileEdit[] {
   if (!Array.isArray(args.edits)) return [];
   const edits: EditFileEdit[] = [];
@@ -317,9 +307,10 @@ export function parseEditFileEdits(args: Record<string, unknown>): EditFileEdit[
   return edits;
 }
 
-/** Resume compact d'un appel edit_file pour la ligne "target" (visible
- * sans deplier) - le JSON brut de `edits` (via formatArgs) serait illisible
- * une fois tronque a une ligne, surtout avec plusieurs hunks/fichiers. */
+/** Compact summary of an edit_file call for the "target" line (visible
+ * without expanding) - `edits`'s raw JSON (via formatArgs) would be
+ * unreadable once truncated to one line, especially with several
+ * hunks/files. */
 export function editFileTarget(args: Record<string, unknown>): string {
   const edits = parseEditFileEdits(args);
   if (edits.length === 0) return formatArgs(args);
@@ -330,12 +321,11 @@ export function editFileTarget(args: Record<string, unknown>): string {
   return `${edits.length} edits across ${paths.length} files`;
 }
 
-// web_search prefixe son resultat d'un marqueur "[source: ...]" (voir
-// tools/web.py) pour que l'app puisse afficher quelle API a repondu sans
-// que l'utilisateur ait a deplier l'appel - jamais montre tel quel dans
-// le detail du resultat, extrait puis retire par les deux fonctions
-// ci-dessous (reutilisees pour les appels normaux et ceux d'une
-// sous-tache multi-agent, voir multiAgentSubtaskDetail dans App.tsx).
+// web_search prefixes its result with a "[source: ...]" marker (see
+// tools/web.py) so the app can show which API answered without the user
+// expanding the call - never shown as-is in the result detail, extracted
+// then stripped by the two functions below (reused for regular calls and
+// multi-agent subtask ones, see multiAgentSubtaskDetail in App.tsx).
 const WEB_SEARCH_SOURCE_RE = /^\[source: (Tavily|DuckDuckGo)\]\n\n?/;
 
 export function webSearchSource(result: string): string | undefined {
@@ -346,21 +336,20 @@ export function stripWebSearchSource(result: string): string {
   return result.replace(WEB_SEARCH_SOURCE_RE, "");
 }
 
-/** Shape commune a un vrai appel d'outil (ToolMsg) et a celui d'une
- * sous-tache multi-agent (MultiAgentSubtaskToolCall) - les deux seuls
- * appelants de toolResultDetail/toolDiffStats, qui n'utilisent rien de
- * plus specifique que ces trois champs. */
+/** Shape shared by a real tool call (ToolMsg) and a multi-agent subtask one
+ * (MultiAgentSubtaskToolCall) - the only two callers of
+ * toolResultDetail/toolDiffStats, which use nothing more specific than
+ * these three fields. */
 export interface ToolCallLike {
   tool: string;
   args: Record<string, unknown>;
   result: string;
 }
 
-/** Nombre de lignes ajoutees/retirees pour un appel d'ecriture - affiche
- * en permanence dans la ligne (+N/-N, voir ChatToolCallItem.additions/
- * deletions), donc visible sans avoir a deplier le detail complet du
- * resultat (qui reste, lui, derriere un clic - voir toolResultDetail dans
- * App.tsx). */
+/** Lines added/removed for a write call - shown permanently in the line
+ * (+N/-N, see ChatToolCallItem.additions/deletions), so visible without
+ * expanding the full result detail (which stays behind a click - see
+ * toolResultDetail in App.tsx). */
 export function toolDiffStats(t: ToolCallLike): { additions?: number; deletions?: number } {
   const countLines = (s: string) => (s === "" ? 0 : s.split("\n").length);
   if (t.tool === "edit_file") {
