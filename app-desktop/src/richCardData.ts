@@ -1,9 +1,9 @@
-// Type + fonction pure pour RichCard.tsx - extrait dans son propre fichier
-// (nom volontairement different de RichCard.tsx au-dela de la casse : sur
-// un systeme de fichiers insensible a la casse (macOS/APFS par defaut),
-// richCard.ts et RichCard.tsx designent le meme fichier) pour que
-// RichCard.tsx n'exporte qu'un composant (voir react-refresh/
-// only-export-components), meme raison que chatMessages.ts.
+// Type + pure function for RichCard.tsx - extracted into its own file
+// (deliberately named differently from RichCard.tsx beyond case: on a
+// case-insensitive filesystem (macOS/APFS by default), richCard.ts and
+// RichCard.tsx would refer to the same file) so RichCard.tsx only exports a
+// component (see react-refresh/only-export-components), same reason as
+// chatMessages.ts.
 
 export interface RichCardData {
   kind: "map" | "link";
@@ -12,14 +12,13 @@ export interface RichCardData {
   url: string;
 }
 
-/** Reconnait un appel a show_map/show_link_preview (voir
- * triton/tools/cards.py) et construit ce qu'il faut pour rendre une carte
- * a la place de la ligne de tool-call habituelle - retourne null pour
- * tout autre outil (y compris un show_map/show_link_preview aux
- * arguments incomplets), pour que l'appelant retombe alors sur le rendu
- * generique (ChatToolCalls). L'URL est reconstruite ici plutot que lue
- * dans le resultat texte de l'outil : les arguments sont deja structures,
- * pas besoin de re-parser une chaine. */
+/** Recognizes a show_map/show_link_preview call (see triton/tools/cards.py)
+ * and builds what's needed to render a card instead of the usual tool-call
+ * line - returns null for any other tool (including a show_map/
+ * show_link_preview with incomplete arguments), so the caller falls back to
+ * the generic rendering (ChatToolCalls). The URL is rebuilt here rather
+ * than read from the tool's text result: the arguments are already
+ * structured, no need to re-parse a string. */
 export function richCardFromToolCall(
   tool: string,
   args: Record<string, unknown>,
