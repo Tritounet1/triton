@@ -20,8 +20,8 @@ interface ModelCallEvent {
   model: string;
   prompt_tokens: number;
   completion_tokens: number;
-  // absent sur certains logs anciens (le champ a ete ajoute apres coup) -
-  // toujours traite comme 0 plutot que NaN dans les sommes ci-dessous.
+  // absent on some older logs (the field was added later) - always
+  // treated as 0 rather than NaN in the sums below.
   total_tokens?: number;
   tool_calls: number;
   duration_seconds: number;
@@ -156,10 +156,9 @@ function formatDayLabel(dayKey: string): string {
     : d.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" });
 }
 
-/** Agrège tokens + coût par jour en un seul passage (appels principaux et
- * sous-agents confondus, cf. costEvents plus bas) : "un suivi des coûts
- * réels" doit compter tout ce qui coûte vraiment de l'argent, pas juste la
- * boucle principale. */
+/** Aggregates tokens + cost per day in one pass (main calls and subagents
+ * combined, see costEvents below): real cost tracking must count everything
+ * that actually costs money, not just the main loop. */
 function useDailyStats(events: CostEvent[]): DayStats[] {
   return useMemo(() => {
     if (events.length === 0) return [];
@@ -179,10 +178,10 @@ function useDailyStats(events: CostEvent[]): DayStats[] {
   }, [events]);
 }
 
-/** Comble les jours sans appel pour conserver un axe continu. Le résumé
- * mensuel du serveur et le repli sur les logs récents passent par la même
- * normalisation, donc le graphique ne change pas de forme si l'endpoint de
- * synthèse est momentanément indisponible. */
+/** Fills in days without a call to keep a continuous axis. The server's
+ * monthly summary and the fallback on recent logs go through the same
+ * normalization, so the chart doesn't change shape if the summary endpoint
+ * is briefly unavailable. */
 function completeDailyStats(observed: DayStats[]): DayStats[] {
   if (observed.length === 0) return [];
   const byDay = new Map(observed.map((day) => [day.date, day]));
@@ -203,16 +202,15 @@ interface DailyBarChartProps {
   getValue: (d: DayStats) => number;
 }
 
-/** Contenu du survol d'une barre : tokens ET coût ensemble, quel que soit
- * le graphique survolé (celui des tokens ou celui du coût) - une seule
- * des deux valeurs ne suffit pas a repondre a "qu'est-ce qui a coute cher
- * ce jour-la", il faut les deux d'un coup d'oeil.
+/** A bar's hover content: tokens AND cost together, whichever chart is
+ * hovered (tokens or cost) - either value alone doesn't answer "what cost a
+ * lot that day", both are needed at a glance.
  *
- * Du HTML brut plutot que <Text> ici : le fond du Tooltip est sombre par
- * design (couleurs inversees pour le contraste, cf. sa propre doc), mais
- * <Text color="secondary"> est calibree pour un fond clair - un gris sur
- * fond deja sombre devenait illisible. text-on-dark force un blanc fixe,
- * correct quel que soit le theme clair/sombre de l'appli elle-meme. */
+ * Raw HTML rather than <Text> here: the Tooltip's background is dark by
+ * design (inverted colors for contrast, see its own docs), but
+ * <Text color="secondary"> is calibrated for a light background - gray on
+ * an already-dark background became unreadable. text-on-dark forces a
+ * fixed white, correct regardless of the app's own light/dark theme. */
 function DayTooltipContent({ d }: { d: DayStats }) {
   return (
     <div className="flex flex-col gap-0.5 px-1 py-0.5 text-on-dark">
@@ -238,10 +236,10 @@ function DailyBarChart({ days, title, getValue }: DailyBarChartProps) {
           return (
             <Tooltip key={d.date} content={<DayTooltipContent d={d} />}>
               <div
-                // bg-accent (quasi-noir dans ce theme neutre) rendait les
-                // barres et la tooltip presque indissociables, tout
-                // paraissait sombre d'un bloc - bleu vif plus doux, meme
-                // couleur que le badge/texte "info" utilise ailleurs.
+                // bg-accent (near-black in this neutral theme) made the
+                // bars and tooltip nearly indistinguishable, everything
+                // read as one dark block - softer vivid blue, same color
+                // as the "info" badge/text used elsewhere.
                 className="flex-1 rounded-t bg-blue-vivid transition-[height] hover:opacity-80"
                 style={{ height: `${Math.max(value > 0 ? 3 : 0, (value / max) * 100)}%` }}
               />
@@ -269,18 +267,17 @@ export function LogsSettings() {
   const [savingBudget, setSavingBudget] = useState(false);
   const [spentThisMonth, setSpentThisMonth] = useState(0);
   const [budgetExceeded, setBudgetExceeded] = useState(false);
-  // les deux tableaux peuvent vite compter des centaines de lignes - repliés
-  // aux VISIBLE_ROWS plus recents par defaut (deja l'ordre du plus recent
-  // au plus ancien, voir /logs cote serveur), avec un bouton pour tout
-  // afficher plutot que de tronquer sans echappatoire.
+  // both tables can quickly reach hundreds of rows - collapsed to the most
+  // recent VISIBLE_ROWS by default (already newest-first, see /logs
+  // server-side), with a button to show all rather than truncating with no
+  // way out.
   const [showAllModelCalls, setShowAllModelCalls] = useState(false);
   const [showAllToolCalls, setShowAllToolCalls] = useState(false);
 
-  // n'appelle jamais setLoading() de facon synchrone (seulement dans les
-  // callbacks .then()/.catch()/.finally()), pour pouvoir etre utilisee
-  // telle quelle dans l'effet de montage ci-dessous : react-hooks
-  // (set-state-in-effect) interdit d'appeler setState de facon synchrone
-  // dans le corps d'un effet.
+  // never calls setLoading() synchronously (only inside .then()/.catch()/
+  // .finally() callbacks), so it can be used as-is in the mount effect
+  // below: react-hooks (set-state-in-effect) forbids a synchronous setState
+  // in an effect's body.
   function fetchLogs(): Promise<void> {
     return fetch(`${API_BASE}/logs`)
       .then((r) => (r.ok ? r.json() : []))
@@ -295,11 +292,11 @@ export function LogsSettings() {
       .catch(() => { setCostSummary(null); });
   }
 
-  // seule source de verite pour "le budget est-il depasse" : le meme calcul
-  // (current_month_cost() cote serveur) que celui sur lequel run_chat_stream/
-  // dispatch_orchestrator bloquent reellement les nouveaux appels - un calcul
-  // refait ici a partir des /logs bruts pourrait diverger (ex. en oubliant un
-  // type d'evenement) de ce qui est vraiment applique.
+  // sole source of truth for "is the budget exceeded": the same computation
+  // (current_month_cost() server-side) that run_chat_stream/
+  // dispatch_orchestrator actually gate new calls on - recomputing it here
+  // from raw /logs could diverge (e.g. by missing an event type) from
+  // what's really enforced.
   function fetchBudget(): Promise<void> {
     return fetch(`${API_BASE}/settings/budget/status`)
       .then((r) =>
@@ -312,13 +309,13 @@ export function LogsSettings() {
         setBudgetExceeded(data.exceeded);
       })
       .catch(() => {
-        // API hors ligne : le budget reste tel quel
+        // offline: budget stays as-is
       });
   }
 
-  // pour le bouton "rafraichir" : la remise a `true` de loading doit rester
-  // synchrone (affichage immediat du spinner), ce qui est permis dans un
-  // gestionnaire d'evenement (juste pas dans un effet).
+  // for the "refresh" button: setting loading back to `true` must stay
+  // synchronous (spinner shows immediately), which is allowed in an event
+  // handler (just not in an effect).
   function refresh() {
     setLoading(true);
     loadAll();
