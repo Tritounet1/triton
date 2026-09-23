@@ -153,12 +153,12 @@ export function createChatCommands(deps: ChatCommandsDeps): ChatCommands {
     setInFlightModels((previous) => setInFlightModel(previous, key, model));
   }
 
-  // Deplace une entree de sendingSessionIds d'une cle vers une autre, en
-  // une seule mise a jour d'etat (pas un delete + un add separes) - une
-  // toute nouvelle conversation passe de la cle "" a son vrai id des que
-  // le serveur l'annonce (evenement "session"), et faire ca en deux temps
-  // risquerait un rendu intermediaire ou aucune des deux cles n'est
-  // presente (le composer clignoterait "pas en cours d'envoi").
+  // Moves a sendingSessionIds entry from one key to another in a single
+  // state update (not a separate delete + add) - a brand-new conversation
+  // moves from the "" key to its real id as soon as the server announces it
+  // ("session" event), and doing it in two steps would risk an intermediate
+  // render where neither key is present (composer would flicker "not
+  // sending").
   function moveSendingKey(oldKey: string, newKey: string) {
     setSendingSessionIds((prev) => {
       if (!prev.has(oldKey)) return prev;
@@ -170,16 +170,15 @@ export function createChatCommands(deps: ChatCommandsDeps): ChatCommands {
     setInFlightModels((previous) => moveInFlightModel(previous, oldKey, newKey));
   }
 
-  // sonde un run multi-agent jusqu'a ce qu'il termine, en mettant a jour
-  // (pas en empilant) une entree "tool" par sous-tache au fil de l'eau :
-  // meme rendu que de vrais appels d'outils (ChatToolCalls), juste avec un
-  // statut connu directement plutot qu'inferre du texte (voir ChatMsg).
-  // `targetSessionId` : la conversation ce run appartient a, pour filtrer
-  // les mises a jour de `messages` par rapport a celle affichee - meme
-  // principe que isDisplayed() dans sendMessage, necessaire ici aussi
-  // depuis que changer de conversation pendant un envoi est permis (un
-  // run multi-agent lance dans une conversation qu'on a quittee ne doit
-  // pas ecrire dans celle qu'on regarde desormais).
+  // Polls a multi-agent run until it finishes, updating (not stacking) one
+  // "tool" entry per subtask as it goes: same rendering as real tool calls
+  // (ChatToolCalls), just with a directly known status rather than one
+  // inferred from text (see ChatMsg). `targetSessionId`: the conversation
+  // this run belongs to, to filter `messages` updates against the
+  // displayed one - same principle as isDisplayed() in sendMessage, needed
+  // here too since switching conversations mid-send is allowed (a
+  // multi-agent run started in a conversation you've left must not write
+  // into the one you're now viewing).
   function pollMultiAgentRun(runId: string, targetSessionId: string | null): Promise<void> {
     function isDisplayed(): boolean {
       return getDisplayedSessionId() === targetSessionId;
@@ -230,7 +229,7 @@ export function createChatCommands(deps: ChatCommandsDeps): ChatCommands {
             }
           })
           .catch(() => {
-            // API hors ligne : nouvelle tentative au prochain intervalle
+            // offline: retried on the next interval
           });
       }, MULTI_AGENT_POLL_INTERVAL_MS);
     });
@@ -295,10 +294,9 @@ export function createChatCommands(deps: ChatCommandsDeps): ChatCommands {
     }
   }
 
-  /** /cost : resume rapide du cout/tokens de la conversation en cours,
-   * purement local - pas de round-trip par le modele, juste un GET sur
-   * l'endpoint que timed_stream_chat alimente a chaque tour (voir
-   * chat_loop.py). */
+  /** /cost: quick cost/token summary of the current conversation, purely
+   * local - no round-trip through the model, just a GET on the endpoint
+   * that timed_stream_chat feeds on every turn (see chat_loop.py). */
   async function handleCostCommand() {
     setInput("");
     setMessages((prev) => [...prev, { kind: "user", text: COST_COMMAND, time: Date.now() }]);
@@ -349,11 +347,10 @@ export function createChatCommands(deps: ChatCommandsDeps): ChatCommands {
     }
   }
 
-  /** /model <requete> : cherche dans le catalogue OpenRouter deja charge
-   * (modelsCatalog) un modele dont l'id ou le nom contient la requete, et
-   * en fait la surcharge de CETTE conversation (PUT /sessions/{id}/model) -
-   * pas besoin de taper l'id exact ("gpt-5" suffit a trouver
-   * "openai/gpt-5"). */
+  /** /model <query>: looks in the already-loaded OpenRouter catalog
+   * (modelsCatalog) for a model whose id or name contains the query, and
+   * makes it THIS conversation's override (PUT /sessions/{id}/model) - no
+   * need to type the exact id ("gpt-5" is enough to find "openai/gpt-5"). */
   async function handleModelCommand(rawCommand: string) {
     const query = rawCommand.slice(MODEL_COMMAND_PREFIX.length).trim();
     setInput("");
@@ -412,11 +409,10 @@ export function createChatCommands(deps: ChatCommandsDeps): ChatCommands {
     ]);
   }
 
-  /** /undo : declenche la restauration du filet de securite (voir
-   * SnapshotSection.tsx pour le meme mecanisme via le panneau fichiers) -
-   * verifie d'abord qu'un instantane existe pour ne pas ouvrir une
-   * confirmation pour rien, puis demande confirmation avant de restaurer
-   * (action irreversible, meme depuis une commande). */
+  /** /undo: triggers the safety-net restore (see SnapshotSection.tsx for the
+   * same mechanism via the files panel) - first checks a snapshot exists so
+   * it doesn't open a confirmation for nothing, then asks for confirmation
+   * before restoring (irreversible, even from a command). */
   async function handleUndoCommand() {
     setInput("");
     setMessages((prev) => [...prev, { kind: "user", text: UNDO_COMMAND, time: Date.now() }]);
@@ -494,13 +490,12 @@ export function createChatCommands(deps: ChatCommandsDeps): ChatCommands {
     }
   }
 
-  /** /remember session <note> ou /remember global <note> : appelle
-   * directement le tool remember (ou l'equivalent memoire globale) sans
-   * detour par le modele - un raccourci pour noter quelque chose vite. La
-   * portee "session" suit exactement la meme logique que le tool
-   * (POST /sessions/{id}/remember la reutilise cote serveur) : memoire du
-   * projet si la conversation en a un, sinon celle de la conversation
-   * seule - jamais les deux. */
+  /** /remember session <note> or /remember global <note>: calls the
+   * remember tool (or the global-memory equivalent) directly, bypassing the
+   * model - a shortcut to jot something down fast. The "session" scope
+   * follows the exact same logic as the tool (POST /sessions/{id}/remember
+   * reuses it server-side): the project's memory if the conversation has
+   * one, otherwise the conversation's own - never both. */
   async function handleRememberCommand(rawCommand: string) {
     setInput("");
     setMessages((prev) => [...prev, { kind: "user", text: rawCommand, time: Date.now() }]);
@@ -588,11 +583,10 @@ export function createChatCommands(deps: ChatCommandsDeps): ChatCommands {
     }
   }
 
-  /** /compact : force le resume des echanges les plus anciens des
-   * maintenant (POST /sessions/{id}/compact, reutilise
-   * compress_history_if_needed avec force=True cote serveur), plutot que
-   * d'attendre le declenchement automatique quand le contexte depasse
-   * MAX_CONTEXT_CHARS (voir chat_loop.py). */
+  /** /compact: forces summarizing the oldest exchanges right now (POST
+   * /sessions/{id}/compact, reuses compress_history_if_needed with
+   * force=True server-side), rather than waiting for the automatic trigger
+   * when context exceeds MAX_CONTEXT_CHARS (see chat_loop.py). */
   async function handleCompactCommand() {
     setInput("");
     setMessages((prev) => [...prev, { kind: "user", text: COMPACT_COMMAND, time: Date.now() }]);
@@ -620,12 +614,11 @@ export function createChatCommands(deps: ChatCommandsDeps): ChatCommands {
     }
   }
 
-  /** /yolo : bascule le mode YOLO pour cette conversation (POST
-   * /sessions/{id}/yolo, un simple toggle cote serveur - re-executer la
-   * commande desactive) - tant qu'actif, run_chat_stream saute la demande
-   * de confirmation pour tout outil non read-only (voir le bandeau
-   * persistant affiche pres du composer plus bas, pas juste ce message
-   * ponctuel). */
+  /** /yolo: toggles YOLO mode for this conversation (POST /sessions/{id}/yolo,
+   * a plain server-side toggle - running the command again turns it off) -
+   * while active, run_chat_stream skips the confirmation prompt for any
+   * non-read-only tool (see the persistent banner shown near the composer
+   * below, not just this one-off message). */
   async function handleYoloCommand() {
     setInput("");
     setMessages((prev) => [...prev, { kind: "user", text: YOLO_COMMAND, time: Date.now() }]);
