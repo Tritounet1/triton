@@ -70,4 +70,44 @@ describe("McpSettings", () => {
     await user.click(screen.getByRole("button", { name: "Annuler" }));
     expect(screen.queryByText("Nouveau serveur MCP")).not.toBeInTheDocument();
   });
+
+  it("edits an existing server through PATCH instead of deleting and re-adding it", async () => {
+    const user = userEvent.setup();
+    const calls: { url: string; method: string; body: unknown }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) => {
+        calls.push({
+          url,
+          method: init?.method ?? "GET",
+          body: init?.body ? JSON.parse(init.body as string) : null,
+        });
+        return jsonResponse(servers);
+      }),
+    );
+    render(<McpSettings />);
+
+    await screen.findByText("2 serveurs");
+    const editButtons = screen.getAllByRole("button", { name: "Modifier" });
+    const secondEditButton = editButtons[1];
+    if (!secondEditButton) throw new Error("expected a second Modifier button");
+    await user.click(secondEditButton);
+
+    expect(screen.getByText("Modifier « local-search »")).toBeInTheDocument();
+    expect(screen.getByLabelText("Nom")).toHaveValue("local-search");
+    expect(screen.getByLabelText("Commande")).toHaveValue("uvx");
+    expect(screen.getByLabelText("Arguments (un par ligne)")).toHaveValue("search-mcp");
+    expect(screen.getByLabelText("Variables d'environnement (CLE=valeur, une par ligne)")).toHaveValue("");
+
+    await user.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+    const patchCall = calls.find((c) => c.method === "PATCH");
+    expect(patchCall?.url).toBe("http://127.0.0.1:8000/mcp/servers/local-search");
+    expect(patchCall?.body).toMatchObject({
+      name: "local-search",
+      command: "uvx",
+      args: ["search-mcp"],
+      enabled: false,
+    });
+  });
 });

@@ -86,6 +86,7 @@ from triton.remote_workspaces import (
     start_remote_task,
     stop_remote_task,
     toggle_remote_mcp_server,
+    update_remote_mcp_server,
 )
 from triton.storage import scheduled_tasks
 from triton.storage.logs import LOGS_FILE, current_month_cost, events_for_month, log_event
@@ -2491,6 +2492,28 @@ def toggle_mcp_server(name: str, body: MCPServerToggle) -> list[mcp_client.Serve
         mcp_client.manager.set_enabled(name, body.enabled)
     except KeyError as e:
         raise HTTPException(404, "MCP server not found") from e
+    return mcp_client.manager.status()
+
+
+@app.patch("/mcp/servers/{name}", tags=["MCP"])
+def update_mcp_server(name: str, body: MCPServerCreate) -> list[mcp_client.ServerStatus]:
+    if DEPLOYMENT_PROFILE is DeploymentProfile.WEB and REMOTE_WORKSPACE_CONFIG is not None:
+        try:
+            return cast(
+                list[mcp_client.ServerStatus],
+                update_remote_mcp_server(REMOTE_WORKSPACE_CONFIG, name, body.model_dump()),
+            )
+        except RemoteWorkspaceError as exc:
+            raise HTTPException(503, str(exc)) from exc
+    config = mcp_client.MCPServerConfig(
+        name=body.name, command=body.command, args=body.args, env=body.env, enabled=body.enabled
+    )
+    try:
+        mcp_client.manager.update_server(name, config)
+    except KeyError as e:
+        raise HTTPException(404, "MCP server not found") from e
+    except ValueError as e:
+        raise HTTPException(409, str(e)) from e
     return mcp_client.manager.status()
 
 

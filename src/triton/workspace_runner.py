@@ -601,6 +601,29 @@ def toggle_mcp_server(
     return mcp_client.manager.status()
 
 
+@app.patch("/mcp/servers/{name}")
+def update_mcp_server(
+    name: str,
+    body: MCPServerCreateRequest,
+    x_triton_workspace_token: str | None = Header(default=None),
+) -> list[mcp_client.ServerStatus]:
+    _require_token(x_triton_workspace_token)
+    config = mcp_client.MCPServerConfig(
+        name=body.name,
+        command=body.command,
+        args=body.args,
+        env=body.env,
+        enabled=body.enabled,
+    )
+    try:
+        mcp_client.manager.update_server(name, config)
+    except KeyError as exc:
+        raise HTTPException(404, "MCP server not found") from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return mcp_client.manager.status()
+
+
 @app.delete("/mcp/servers/{name}")
 def remove_mcp_server(
     name: str,

@@ -373,5 +373,24 @@ class MCPManager:
         self.disconnect(name)
         return None
 
+    def update_server(self, name: str, config: MCPServerConfig) -> ServerConnection | None:
+        configs = load_configs()
+        existing = next((c for c in configs if c.name == name), None)
+        if existing is None:
+            raise KeyError(name)
+        if config.name != name and any(c.name == config.name for c in configs):
+            raise ValueError(f"a server named '{config.name}' already exists")
+        updated = MCPServerConfig(
+            name=config.name,
+            command=config.command,
+            args=config.args,
+            env={**existing.env, **config.env},
+            enabled=config.enabled,
+        )
+        configs = [updated if c.name == name else c for c in configs]
+        save_configs(configs)
+        self.disconnect(name)
+        return self.connect(updated.name) if updated.enabled else None
+
 
 manager = MCPManager()

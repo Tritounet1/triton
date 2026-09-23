@@ -73,6 +73,34 @@ def test_workspace_runner_persists_mcp_servers_in_its_own_data_directory(monkeyp
     assert "secret" not in mcp_client.CONFIG_PATH.read_text()
 
 
+def test_workspace_runner_updates_an_mcp_server_without_deleting_it(monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_runner, "WORKSPACES_DIR", tmp_path)
+    monkeypatch.setattr(workspace_runner, "WORKSPACE_TOKEN", "workspace-token")
+
+    with TestClient(workspace_runner.app) as client:
+        client.post(
+            "/mcp/servers",
+            json={"name": "notes", "command": "python", "args": [], "enabled": False},
+            headers=TOKEN_HEADER,
+        )
+        updated = client.patch(
+            "/mcp/servers/notes",
+            json={"name": "notes", "command": "uvx", "args": ["notes-mcp"], "enabled": False},
+            headers=TOKEN_HEADER,
+        )
+        missing = client.patch(
+            "/mcp/servers/ghost",
+            json={"name": "ghost", "command": "python", "enabled": False},
+            headers=TOKEN_HEADER,
+        )
+
+    assert updated.status_code == 200
+    [server] = updated.json()
+    assert server["command"] == "uvx"
+    assert server["args"] == ["notes-mcp"]
+    assert missing.status_code == 404
+
+
 def test_workspace_runner_rejects_path_like_workspace_ids(monkeypatch, tmp_path):
     monkeypatch.setattr(workspace_runner, "WORKSPACES_DIR", tmp_path)
     monkeypatch.setattr(workspace_runner, "WORKSPACE_TOKEN", "workspace-token")
