@@ -1,54 +1,41 @@
 """Automatic safety net for the write tools (write_file/edit_file/
-delete_file/move_file/git_commit): the first time one is about to run in
-a given turn of a project-scoped session, that turn's starting state is
-captured into a small homemade content-addressable store (see "Content
-snapshots" below) - regardless of whether the project folder is itself a
-git repo. One snapshot per (session, turn) - ensure_snapshot is a no-op
-once a record exists for that specific turn_index, taken lazily on the
-first write of the turn rather than eagerly, since most turns never write
-anything - so a session accumulates one restore point per turn that
-actually wrote something, letting a restore target either "undo the last
-turn" or "undo everything back to the first write" (see
-storage/snapshots.py's list_snapshots), not only the latter like before
-turns were tracked individually.
+delete_file/move_file/git_commit): the first time one is about to run in a
+turn of a project-scoped session, that turn's starting state is captured
+into a small homemade content-addressable store (see "Content snapshots"
+below), regardless of whether the project is itself a git repo. One
+snapshot per (session, turn), taken lazily on the first write rather than
+eagerly - so a restore can target either "undo the last turn" or "undo
+everything back to the first write" (see storage/snapshots.py's
+list_snapshots).
 
 Used from both server.py (normal conversation, behind the existing
-per-call confirmation) and agents/orchestrator.py (the unsupervised
-"code" subtask role, called out in that module's own docstring as having
-no safety net beyond the project sandbox until this existed) - the two
-places a write tool can actually run.
+per-call confirmation) and agents/orchestrator.py (the unsupervised "code"
+subtask role) - the two places a write tool can actually run.
 
-Content snapshots (current format, used for every new snapshot): a plain
-content-addressable blob store under snapshot_objects/<hash[:2]>/<hash>
-(sha256 of a file's bytes, written once per unique content and shared by
-every manifest that happens to reference it - identical files across
-turns/sessions/projects cost storage exactly once) plus a small JSON
-manifest per (session, turn) under snapshot_manifests/ mapping each
-relative path to its blob's hash. Deliberately not backed by the
-project's own git history even when it has one: a project meant to be
-pushed to GitHub shouldn't have its safety net's internal bookkeeping
-(dangling commits/refs) living in the same object database, and this
-also means a non-git project gets the exact same space-efficient
-treatment instead of the wasteful full `shutil.copytree` this used to do
-for it. Restoring a blob prefers `cp -c` (APFS clonefile on macOS: a
-copy-on-write clone, effectively free in time and disk space until
-either side is later modified) and falls back to a plain copy elsewhere
-- see _restore_blob.
+Content snapshots (current format): a plain content-addressable blob store
+under snapshot_objects/<hash[:2]>/<hash> (sha256 of a file's bytes,
+written once per unique content and shared across every manifest that
+references it) plus a small JSON manifest per (session, turn) under
+snapshot_manifests/ mapping each relative path to its blob's hash.
+Deliberately not backed by the project's own git history: a project meant
+to be pushed to GitHub shouldn't have this safety net's bookkeeping living
+in the same object database, and a non-git project gets the same
+space-efficient treatment instead of a wasteful full `shutil.copytree`.
+Restoring a blob prefers `cp -c` (APFS clonefile on macOS: a
+copy-on-write clone, free until either side is modified) and falls back
+to a plain copy elsewhere - see _restore_blob.
 
 Legacy snapshots ("git"/"copy" kind): the two formats used before content
 snapshots existed - a dangling git commit for a git-repo project, or a
 full recursive copy otherwise. No longer produced by ensure_snapshot, but
-restore_snapshot/diff_snapshot/_discard_one still handle both so any
-snapshot already on disk from before this change stays restorable until
-it naturally expires (see purge_expired_snapshots). `git stash create`
-looks like the obvious primitive for the git half, but it silently
-ignores --include-untracked (verified against git 2.50), so a new file
-the model was about to edit wouldn't have been covered - instead it built
-the tree by hand in a scratch index (GIT_INDEX_FILE pointed at a
-throwaway path): `git add -A` there stages tracked and untracked content
-into *that* index only, never touching the repo's real index or working
-tree, then `write-tree`/`commit-tree` turned it into a real (if
-unreachable) commit object, anchored by a ref under
+restore/diff/_discard_one still handle both so anything already on disk
+stays restorable until it expires (see purge_expired_snapshots). `git
+stash create` looks like the obvious primitive for the git half, but it
+silently ignores --include-untracked (verified against git 2.50) - so the
+tree is built by hand in a scratch index instead (GIT_INDEX_FILE pointed
+at a throwaway path): `git add -A` there stages everything into *that*
+index only, then `write-tree`/`commit-tree` turns it into a real (if
+unreachable) commit, anchored by a ref under
 refs/triton/snapshots/<session_id>/<turn_index>."""
 
 import hashlib
@@ -77,24 +64,19 @@ from triton.storage.snapshots import (
 )
 
 # git_commit is included even though it doesn't touch the working tree
-# itself: it still changes the repo's state (a new commit on the current
-# branch), and until now had only the one-off confirmation prompt as a
-# safeguard. Note the resulting restore is still working-tree-only (see
-# restore_snapshot): checking the snapshot ref back out brings files back
-# to their pre-session content, but doesn't move the branch pointer, so a
-# commit the model made stays in history - undoing that fully still needs
-# a manual `git reset`/`git revert`, this only guarantees the file
-# contents are recoverable in one action.
+# itself: it still changes repo state (a new commit), previously guarded
+# only by the one-off confirmation prompt. The resulting restore is still
+# working-tree-only (see restore_snapshot): it brings files back but
+# doesn't move the branch pointer, so undoing a commit fully still needs a
+# manual `git reset`/`git revert`.
 WRITE_TOOL_NAMES = {
     "write_file",
     "edit_file",
     "delete_file",
     "move_file",
     "git_commit",
-    # switching branches (or creating one) changes the working tree's
-    # actual file contents on disk, same as any other entry here -
-    # git_push deliberately isn't: it only touches a remote, never the
-    # local project state a snapshot exists to protect.
+    # changes the working tree's file contents on disk, same as any other
+    # entry here - git_push deliberately isn't: it only touches a remote.
     "git_checkout",
 }
 
@@ -107,9 +89,9 @@ BACKUP_ROOT = ROOT_DIR / "snapshot_backups"  # legacy "copy" kind only
 OBJECTS_ROOT = ROOT_DIR / "snapshot_objects"
 MANIFESTS_ROOT = ROOT_DIR / "snapshot_manifests"
 
-# Les dependances et artefacts sont regenerables, pas des fichiers source a
-# versionner dans cet historique interne. Les exclure evite des diffs et des
-# restaurations disproportionnes sur les projets JavaScript/Python.
+# dependencies and build artifacts are regenerable, not source files worth
+# versioning in this internal history - excluding them avoids disproportionate
+# diffs/restores on JS/Python projects.
 IGNORED_DIRECTORY_NAMES = {
     ".git",
     ".next",
@@ -189,13 +171,12 @@ def _snapshot_ref(session_id: str, turn_index: int) -> str:
 
 def _take_git_snapshot(root: Path, session_id: str, turn_index: int) -> str | None:
     """Builds a commit representing the working tree's current state
-    (tracked changes + untracked files, respecting .gitignore, exactly
-    what `git add -A` would stage) without touching the repo's real index
-    or working tree - see the module docstring for why not `git stash
-    create`. Returns None (snapshot skipped) if the repo has no commits
-    yet to anchor a scratch index against, or if any git call fails; the
-    write this was guarding shouldn't be blocked by a best-effort safety
-    net misfiring."""
+    (tracked + untracked, respecting .gitignore - what `git add -A` would
+    stage) without touching the repo's real index or working tree - see
+    the module docstring for why not `git stash create`. Returns None if
+    the repo has no commits to anchor a scratch index against, or any git
+    call fails - the write being guarded shouldn't be blocked by a
+    best-effort safety net misfiring."""
     head = _git(["rev-parse", "HEAD"], root)
     if head.returncode != 0:
         return None
@@ -238,11 +219,11 @@ def _take_copy_snapshot(root: Path, session_id: str, turn_index: int) -> str:
 
 
 def _project_files(root: Path) -> list[Path]:
-    """Fichiers utiles du projet, sans dependances ni sorties de build.
+    """The project's useful files, excluding dependencies/build output.
 
-    `Path.rglob` visite quand meme tous les fichiers exclus. Ici, les
-    repertoires sont elagues pendant `os.walk`, ce qui evite de parcourir
-    tout un node_modules a chaque clic dans l'historique.
+    `Path.rglob` would still visit every excluded file. Here directories
+    are pruned during `os.walk` itself, avoiding a full node_modules walk
+    on every history click.
     """
     files: list[Path] = []
     for directory, child_directories, child_files in os.walk(root):
@@ -373,7 +354,7 @@ def _diff_content_snapshot(root: Path, manifest_path: str) -> "SnapshotDiff":
 
 
 def _diff_content_manifests(before_path: str, after_path: str) -> "SnapshotDiff":
-    """Diff immuable entre les deux etats captures d'un meme tour."""
+    """Immutable diff between a turn's two captured states."""
     before = _load_manifest(before_path)
     after = _load_manifest(after_path)
     return SnapshotDiff(
@@ -386,18 +367,12 @@ def _diff_content_manifests(before_path: str, after_path: str) -> "SnapshotDiff"
 def ensure_snapshot(project: Project | None, session_id: str, turn_index: int) -> bool:
     """Takes a snapshot of the project folder if this turn hasn't had one
     yet (turn_index: the nth user message in this session, 1-based - see
-    server.py's run_chat_stream), always into the content store (see the
-    module docstring) regardless of whether the project is itself a git
-    repo. Silently does nothing without a project, for a turn that
-    already has a snapshot, or if the snapshot attempt itself fails (a
-    permission error reading a file shouldn't block the write the model
-    was actually trying to make - this is a best-effort safety net, not a
-    precondition for writing). Returns whether a snapshot was actually
-    just taken by this call - server.py's run_chat_stream uses this to
-    surface a one-time "safety net is now active [for this turn]" notice
-    in the conversation itself instead of only in the project file panel
-    (see SnapshotSection.tsx), which required knowing the feature existed
-    at all to go find it."""
+    server.py's run_chat_stream), always into the content store. Silently
+    does nothing without a project, for a turn that already has a
+    snapshot, or if the attempt fails (a best-effort safety net, not a
+    precondition for writing). Returns whether a snapshot was just taken -
+    server.py uses this to surface a one-time "safety net active" notice
+    in the conversation itself, not only the project file panel."""
     if project is None:
         return False
 
@@ -427,11 +402,11 @@ def ensure_snapshot(project: Project | None, session_id: str, turn_index: int) -
 
 
 def finalize_snapshot(project: Project | None, session_id: str, turn_index: int) -> bool:
-    """Scelle l'etat final d'un tour qui possede deja son point de depart.
+    """Seals the final state of a turn that already has its starting point.
 
-    Un snapshot devient ainsi un vrai commit interne avant/apres, sans
-    modifier le depot Git du projet. Le dernier etat ecrit remplace celui
-    deja capture si un stream est termine une seconde fois apres reprise.
+    Turns a snapshot into a real internal before/after commit, without
+    touching the project's own git repo. The last written state replaces
+    an already-captured one if a stream ends a second time after resuming.
     """
     if project is None:
         return False
@@ -522,13 +497,11 @@ class SnapshotDiff:
 
 
 def _diff_git_snapshot(root: Path, snapshot_sha: str) -> SnapshotDiff:
-    """Same scratch-index trick as _take_git_snapshot (see the module
-    docstring): builds a tree object for the working tree's current state
-    without touching the real index, then `git diff --name-status` against
-    the snapshot to classify every path that changed since. No rename
-    detection (`-M`) - a rename shows up as a delete + a create, which is
-    still an accurate (if less elegant) description of what restore would
-    do to those two paths."""
+    """Same scratch-index trick as _take_git_snapshot: builds a tree for
+    the current state without touching the real index, then `git diff
+    --name-status` against the snapshot. No rename detection (`-M`) - a
+    rename shows as a delete + a create, still an accurate description of
+    what restore would do."""
     scratch_index = Path(tempfile.gettempdir()) / f"triton-snapshot-diff-{uuid.uuid4().hex}"
     try:
         env = {"GIT_INDEX_FILE": str(scratch_index)}
@@ -607,7 +580,7 @@ def diff_snapshot(project: Project, snapshot: Snapshot) -> SnapshotDiff:
 
 
 def commit_diff_snapshot(snapshot: Snapshot) -> SnapshotDiff:
-    """Les changements produits par un tour, entre ses deux etats figes."""
+    """Changes a turn produced, between its two sealed states."""
     if snapshot.kind != "content" or snapshot.after_location is None:
         raise RestoreError("this restore point has no immutable final state")
     return _diff_content_manifests(snapshot.location, snapshot.after_location)
@@ -626,7 +599,7 @@ def _content_from_manifest(manifest_path: str, rel_path: str) -> str | None:
 def commit_snapshot_file_content(
     snapshot: Snapshot, rel_path: str
 ) -> tuple[str | None, str | None]:
-    """Contenu avant/apres fige d'un fichier modifie par un tour."""
+    """Sealed before/after content of a file a turn modified."""
     if snapshot.kind != "content" or snapshot.after_location is None:
         raise RestoreError("this restore point has no immutable final state")
     return (
@@ -639,13 +612,11 @@ def snapshot_file_content(
     project: Project, snapshot: Snapshot, rel_path: str
 ) -> tuple[str | None, str | None]:
     """(old, new) text content of `rel_path` for the restore-history
-    browser's per-file diff (see server.py's GET .../snapshot/file):
-    `old` as this snapshot captured it (None if the path didn't exist yet
-    at snapshot time - it was created afterward), `new` as it currently
-    is on disk (None if it no longer exists - deleted afterward, or
-    never existed outside the snapshot). Both decoded permissively
-    (invalid bytes replaced) since this is only ever rendered as text,
-    never written back anywhere."""
+    browser's per-file diff: `old` as this snapshot captured it (None if
+    created afterward), `new` as it currently is on disk (None if deleted
+    afterward, or never existed outside the snapshot). Both decoded
+    permissively since this is only ever rendered as text, never written
+    back."""
     root = Path(project.folder_path).resolve()
     rel_path = validate_snapshot_relative_path(project, rel_path)
     new_path = root / rel_path
@@ -679,14 +650,13 @@ def snapshot_file_content(
 
 
 def _discard_one(snapshot: Snapshot) -> None:
-    """Cleans up whatever a single snapshot record points to (the
-    manifest file, the legacy git ref, or the legacy backup copy) - the
-    record itself is assumed already removed by the caller. Best-effort:
-    if the project was since deleted or the git ref is already gone,
-    there's nothing left to clean up beyond the record. A content
+    """Cleans up whatever a single snapshot record points to (manifest
+    file, legacy git ref, or legacy backup copy) - the record itself is
+    assumed already removed by the caller. Best-effort: nothing left to
+    clean up if the project or git ref is already gone. A content
     snapshot's blobs are deliberately NOT touched here - they may be
-    shared by other manifests still alive, see _gc_unreferenced_blobs for
-    the actual reclaim step."""
+    shared by other manifests, see _gc_unreferenced_blobs for the actual
+    reclaim step."""
     if snapshot.kind == "content":
         Path(snapshot.location).unlink(missing_ok=True)
         if snapshot.after_location is not None:
@@ -719,15 +689,12 @@ def _referenced_blob_hashes() -> set[str]:
 
 def _gc_unreferenced_blobs() -> int:
     """Removes every blob no remaining manifest points to - content
-    snapshots' counterpart to git's own gc (see the module docstring): a
-    blob may be shared by several manifests (that's the whole point of
-    content-addressing it), so a manifest being deleted doesn't mean its
-    blobs can go too, only whichever ones nothing references anymore
-    once it's gone. Meant to be called once after a batch of manifests
-    was just removed (discard_snapshot/discard_snapshots_for_project/
-    purge_expired_snapshots), not per snapshot, since it walks every
-    remaining manifest to build the referenced set. Returns how many
-    blobs were removed, for the caller's own log."""
+    snapshots' counterpart to git's own gc. A blob may be shared by
+    several manifests, so deleting one manifest doesn't mean its blobs can
+    go too, only whichever nothing references once it's gone. Meant to be
+    called once after a batch of manifests was removed, not per snapshot,
+    since it walks every remaining manifest. Returns how many blobs were
+    removed."""
     if not OBJECTS_ROOT.is_dir():
         return 0
     referenced = _referenced_blob_hashes()
@@ -751,16 +718,12 @@ def discard_snapshot(session_id: str) -> None:
 
 def discard_snapshots_for_project(project_id: str) -> int:
     """Same as discard_snapshot, scoped to every session's restore points
-    for one project instead of one session's - called from server.py's
-    DELETE /projects/{id}, before the Project record itself is removed
-    (its folder_path is what a legacy git-backed snapshot's ref cleanup
-    needs - once the record's gone, get_project() can no longer resolve
-    it). Without this, a project's snapshots become dead weight forever:
-    they already can't be restored to (restore/diff both 404 once
-    get_project() returns None for a deleted project), but nothing was
-    removing the manifest/git ref/backup copy - see PLAN.md's "Purge des
-    vieux snapshots" entry. Returns how many were removed, for the
-    endpoint's own log."""
+    for one project - called from server.py's DELETE /projects/{id}
+    before the Project record is removed (its folder_path is what a
+    legacy git-backed snapshot's ref cleanup needs). Without this a
+    deleted project's snapshots become dead weight forever: already
+    unrestorable, but nothing was removing the manifest/git ref/backup
+    copy. Returns how many were removed."""
     with _LOCK:
         removed = delete_snapshots_for_project(project_id)
         for snapshot in removed:
@@ -780,13 +743,10 @@ SNAPSHOT_MAX_AGE_DAYS = 30
 def purge_expired_snapshots(max_age_days: int = SNAPSHOT_MAX_AGE_DAYS) -> int:
     """Called once at harness startup (see server.py's lifespan): removes
     every snapshot older than max_age_days, regardless of whether its
-    session or project still exist - the project-delete cascade
-    (discard_snapshots_for_project) and session-delete cascade
-    (discard_snapshot) only fire on those specific actions, so a
-    conversation that's simply never revisited (project and session both
-    still exist, nobody deleted anything) would otherwise accumulate
-    restore points forever. Returns how many were removed, for the
-    startup log."""
+    session or project still exist - the delete cascades only fire on
+    those specific actions, so a conversation simply never revisited would
+    otherwise accumulate restore points forever. Returns how many were
+    removed."""
     cutoff = (datetime.now(UTC) - timedelta(days=max_age_days)).isoformat()
     with _LOCK:
         removed = delete_expired_snapshots(cutoff)
