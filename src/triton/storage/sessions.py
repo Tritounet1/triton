@@ -38,12 +38,24 @@ def _atomic_write_text(path: Path, content: str) -> None:
         raise
 
 
+def list_session_ids() -> list[str]:
+    """Every session id that actually has a session.json - not a sidecar
+    like <id>.permissions.json, which also glob-matches "*.json" but
+    whose stem (<id>.permissions) fails validate_session_id (it has a
+    dot in it). The one place every caller that wants to enumerate
+    sessions should go through, so a sidecar file can never be mistaken
+    for a session id again."""
+    if not SESSIONS_DIR.exists():
+        return []
+    return sorted(
+        p.stem for p in SESSIONS_DIR.glob("*.json") if SESSION_ID_PATTERN.fullmatch(p.stem)
+    )
+
+
 def latest_session_path() -> Path | None:
     """Returns the most recent session file, if one exists."""
-    if not SESSIONS_DIR.exists():
-        return None
-    files = sorted(SESSIONS_DIR.glob("*.json"))
-    return files[-1] if files else None
+    ids = list_session_ids()
+    return session_path(ids[-1]) if ids else None
 
 
 def new_session_path() -> Path:
