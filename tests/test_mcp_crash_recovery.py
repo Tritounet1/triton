@@ -70,6 +70,21 @@ def _fake_tool(name="do_a_thing"):
     )
 
 
+def test_mcp_server_environment_keeps_runtime_caches_without_runner_secrets(monkeypatch):
+    monkeypatch.setenv("NPM_CONFIG_CACHE", "/workspaces/.npm")
+    monkeypatch.setenv("UV_CACHE_DIR", "/workspaces/.uv-cache")
+    monkeypatch.setenv("TRITON_WORKSPACE_TOKEN", "runner-token")
+
+    environment = mcp_client.server_environment(
+        MCPServerConfig(name="test-mcp", command="command", env={"MCP_TOKEN": "mcp-token"})
+    )
+
+    assert environment["NPM_CONFIG_CACHE"] == "/workspaces/.npm"
+    assert environment["UV_CACHE_DIR"] == "/workspaces/.uv-cache"
+    assert environment["MCP_TOKEN"] == "mcp-token"
+    assert "TRITON_WORKSPACE_TOKEN" not in environment
+
+
 def test_a_crash_during_the_initial_handshake_resolves_ready_with_an_error(manager, monkeypatch):
     monkeypatch.setattr(mcp_client, "stdio_client", lambda params: _FakeReadWriteCM())
 

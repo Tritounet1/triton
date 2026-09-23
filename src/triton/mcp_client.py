@@ -14,13 +14,14 @@ asyncio.run_coroutine_threadsafe() and waits for the result.
 import asyncio
 import contextlib
 import json
+import os
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TypedDict
 
 from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
+from mcp.client.stdio import get_default_environment, stdio_client
 from mcp.types import TextContent
 from mcp.types import Tool as MCPTool
 
@@ -57,6 +58,11 @@ def _env_secret_name(server_name: str, variable: str) -> str:
     return f"mcp:{server_name}:{variable}"
 
 
+def _normalize_arg(argument: str) -> str:
+    value = argument[1:-1] if argument.startswith("<") and argument.endswith(">") else argument
+    return value if value.startswith(("https://", "http://")) else argument
+
+
 def load_configs() -> list[MCPServerConfig]:
     if not CONFIG_PATH.exists():
         return []
@@ -85,11 +91,15 @@ def load_configs() -> list[MCPServerConfig]:
             value = get_secret(_env_secret_name(name, key))
             if value:
                 resolved[key] = value
+        stored_args = [arg for arg in item.get("args", []) if isinstance(arg, str)]
+        args = [_normalize_arg(arg) for arg in stored_args]
+        if args != stored_args:
+            migrated = True
         configs.append(
             MCPServerConfig(
                 name=name,
                 command=str(item.get("command", "")),
-                args=[arg for arg in item.get("args", []) if isinstance(arg, str)],
+                args=args,
                 env=resolved,
                 enabled=bool(item.get("enabled", True)),
             )
@@ -135,6 +145,15 @@ class ServerConnection:
 
 def tool_key(server_name: str, tool_name: str) -> str:
     return f"{MCP_PREFIX}{server_name}__{tool_name}"
+
+
+def server_environment(config: MCPServerConfig) -> dict[str, str]:
+    environment = get_default_environment()
+    for key in ("NPM_CONFIG_CACHE", "UV_CACHE_DIR"):
+        if value := os.getenv(key):
+            environment[key] = value
+    environment.update(config.env)
+    return environment
 
 
 class MCPManager:
@@ -207,7 +226,7 @@ class MCPManager:
         (anyio constraint, see ServerConnection.task)."""
         try:
             params = StdioServerParameters(
-                command=config.command, args=config.args, env=config.env or None
+                command=config.command, args=config.args, env=server_environment(config)
             )
             async with (
                 stdio_client(params) as (read, write),

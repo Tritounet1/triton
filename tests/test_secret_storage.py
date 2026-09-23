@@ -37,3 +37,29 @@ def test_mcp_config_persists_env_names_but_not_values(tmp_path, monkeypatch):
     assert persisted[0]["env_keys"] == ["TOKEN"]
     assert stored["mcp:notes:TOKEN"] == "super-secret"
     assert mcp_client.load_configs()[0].env == {"TOKEN": "super-secret"}
+
+
+def test_mcp_config_migrates_angle_bracketed_http_arguments(tmp_path, monkeypatch):
+    config_path = tmp_path / "mcp_servers.json"
+    config_path.write_text(
+        json.dumps(
+            [
+                {
+                    "name": "notes",
+                    "command": "npx",
+                    "args": ["-y", "mcp-remote", "<https://example.com/mcp>"],
+                    "env": {},
+                    "env_keys": [],
+                    "enabled": True,
+                }
+            ]
+        )
+    )
+    monkeypatch.setattr(mcp_client, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(mcp_client, "get_secret", lambda _: None)
+    monkeypatch.setattr(mcp_client, "set_secret", lambda *_: None)
+
+    configs = mcp_client.load_configs()
+
+    assert configs[0].args[-1] == "https://example.com/mcp"
+    assert json.loads(config_path.read_text())[0]["args"][-1] == "https://example.com/mcp"
