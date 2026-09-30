@@ -65,3 +65,4 @@ snapshot_manifests/
 # harness - voir orchestrator.resume_incomplete_runs()) - supprime des
 # qu'un run se termine, donnees locales et ephemeres, pas versionnees
 orchestrator_runs/
+docs/assets/.DS_Store
