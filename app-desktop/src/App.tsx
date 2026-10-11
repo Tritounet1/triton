@@ -1697,6 +1697,12 @@ function App() {
                   setView("chat");
                 }}
                 onSelectSession={switchSession}
+                onSelectTask={openTask}
+                onSelectProject={(projectId) => {
+                  setView("chat");
+                  setActiveProjectId(projectId);
+                  setOpenFile(null);
+                }}
               />
             )}
             {view === "snapshot_history" && sessionId && (

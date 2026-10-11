@@ -9,7 +9,7 @@ import uuid
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal, TypedDict, cast
 
@@ -90,7 +90,12 @@ from triton.remote_workspaces import (
 )
 from triton.storage import scheduled_tasks
 from triton.storage.logs import LOGS_FILE, current_month_cost, events_for_month, log_event
-from triton.storage.memory import append_global_memory, load_global_memory, set_global_memory
+from triton.storage.memory import (
+    GLOBAL_MEMORY_FILE,
+    append_global_memory,
+    load_global_memory,
+    set_global_memory,
+)
 from triton.storage.projects import (
     Project,
     create_project,
@@ -98,6 +103,7 @@ from triton.storage.projects import (
     get_project,
     load_project_memory,
     load_projects,
+    project_memory_path,
     rename_project,
     set_project_memory,
 )
@@ -124,6 +130,7 @@ from triton.storage.sessions import (
     set_session_memory,
     set_yolo_enabled,
 )
+from triton.storage.sessions import memory_path as session_memory_path
 from triton.storage.sessions import session_path as storage_session_path
 from triton.storage.settings import (
     DEFAULT_MAX_SUBTASKS,
@@ -374,6 +381,7 @@ OPENAPI_TAGS = [
         "description": "Conversations: history, title, pin, per-session model override, "
         "cost, export, and the write-tool safety net's snapshot/restore.",
     },
+    {"name": "Search", "description": "Search conversations, files, tasks, and memory."},
     {"name": "Projects", "description": "Project folders: CRUD, file tree, raw file contents."},
     {"name": "Deployment", "description": "Enabled runtime capabilities."},
     {
@@ -609,6 +617,7 @@ app.add_middleware(
     allow_origins=TRITON_ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
 
 
@@ -2031,6 +2040,310 @@ def search_sessions(q: str) -> list[str]:
                 matches.append(session_id)
                 break
     return matches
+
+
+SEARCH_FILE_LIMIT = 1000
+SEARCH_FILE_TEXT_LIMIT = 262144
+
+
+def _search_modified_at(path: Path) -> datetime:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, UTC)
+    except OSError:
+        return datetime.fromtimestamp(0, UTC)
+
+
+def _search_excerpt(value: str, query: str) -> str:
+    normalized = " ".join(value.split())
+    if not normalized:
+        return ""
+    index = normalized.lower().find(query.lower()) if query else 0
+    if index < 0:
+        return normalized[:240]
+    start = max(0, index - 80)
+    end = min(len(normalized), index + len(query) + 160)
+    return f"{'…' if start else ''}{normalized[start:end]}{'…' if end < len(normalized) else ''}"
+
+
+def _search_matches(query: str, *values: str) -> bool:
+    return not query or any(query in value.lower() for value in values)
+
+
+def _search_result(
+    *,
+    kind: Literal["conversation", "file", "task", "memory"],
+    title: str,
+    modified_at: datetime,
+    excerpt: str = "",
+    project: Project | None = None,
+    session_id: str | None = None,
+    task_id: str | None = None,
+    path: str | None = None,
+) -> dict[str, object]:
+    return {
+        "id": f"{kind}:{session_id or task_id or path or title}",
+        "kind": kind,
+        "title": title,
+        "excerpt": excerpt,
+        "project_id": project.id if project else None,
+        "project_name": project.name if project else None,
+        "session_id": session_id,
+        "task_id": task_id,
+        "path": path,
+        "modified_at": modified_at.isoformat(),
+    }
+
+
+def _session_search_text(session_id: str) -> str:
+    try:
+        messages = load_session(storage_session_path(session_id))
+    except (OSError, ValueError):
+        return ""
+    parts: list[str] = []
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, str):
+            parts.append(content)
+        elif isinstance(content, list):
+            for part in content:
+                raw_part = cast(dict[str, object], part)
+                text = raw_part.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+    return "\n".join(parts)
+
+
+def _search_local_project_files(project: Project, query: str) -> list[dict[str, object]]:
+    root = Path(project.folder_path)
+    if not root.is_dir():
+        return []
+    results: list[dict[str, object]] = []
+    scanned = 0
+    try:
+        files = root.rglob("*")
+        for path in files:
+            if scanned >= SEARCH_FILE_LIMIT:
+                break
+            if not path.is_file() or path.is_symlink() or is_skipped(path):
+                continue
+            scanned += 1
+            relative_path = str(path.relative_to(root))
+            text = ""
+            if query:
+                try:
+                    if path.stat().st_size <= SEARCH_FILE_TEXT_LIMIT:
+                        text = path.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    pass
+            if _search_matches(query, relative_path, text):
+                results.append(
+                    _search_result(
+                        kind="file",
+                        title=path.name,
+                        excerpt=_search_excerpt(text or relative_path, query),
+                        project=project,
+                        path=str(path),
+                        modified_at=_search_modified_at(path),
+                    )
+                )
+    except OSError:
+        return results
+    return results
+
+
+def _search_remote_project_files(project: Project, query: str) -> list[dict[str, object]]:
+    config = REMOTE_WORKSPACE_CONFIG
+    if config is None or not project.folder_path.startswith("workspace://") or not query:
+        return []
+    try:
+        tree = remote_workspace_tree(config, project.folder_path.removeprefix("workspace://"))
+    except RemoteWorkspaceError:
+        return []
+    results: list[dict[str, object]] = []
+
+    def visit(entries: object) -> None:
+        if not isinstance(entries, list):
+            return
+        for entry in entries:
+            if len(results) >= SEARCH_FILE_LIMIT or not isinstance(entry, dict):
+                return
+            children = entry.get("children")
+            if entry.get("is_dir"):
+                visit(children)
+                continue
+            path = entry.get("path")
+            name = entry.get("name")
+            if (
+                isinstance(path, str)
+                and isinstance(name, str)
+                and _search_matches(query, path, name)
+            ):
+                results.append(
+                    _search_result(
+                        kind="file",
+                        title=name,
+                        excerpt=path,
+                        project=project,
+                        path=path,
+                        modified_at=datetime.fromtimestamp(0, UTC),
+                    )
+                )
+
+    visit(tree.get("tree"))
+    return results
+
+
+@app.get("/search", tags=["Search"])
+def global_search(
+    q: str = "",
+    types: str = "",
+    project_id: str | None = None,
+    period: Literal["all", "day", "week", "month", "year"] = "all",
+) -> list[dict[str, object]]:
+    query = q.strip().lower()
+    selected_types = {value for value in types.split(",") if value}
+    if not query and not selected_types:
+        selected_types = {"memory"}
+    projects = load_projects()
+    projects_by_id = {project.id: project for project in projects}
+    results: list[dict[str, object]] = []
+
+    def include(kind: str, result_project_id: str | None) -> bool:
+        return (not selected_types or kind in selected_types) and (
+            project_id is None or result_project_id == project_id
+        )
+
+    if not selected_types or "conversation" in selected_types:
+        for session_id in list_session_ids():
+            session_project_id = load_session_project(session_id)
+            project = projects_by_id.get(session_project_id) if session_project_id else None
+            title = load_title(session_id) or session_id
+            content = _session_search_text(session_id) if query else ""
+            if _search_matches(query, title, content) and include(
+                "conversation", session_project_id
+            ):
+                results.append(
+                    _search_result(
+                        kind="conversation",
+                        title=title,
+                        excerpt=_search_excerpt(content, query),
+                        project=project,
+                        session_id=session_id,
+                        modified_at=_search_modified_at(storage_session_path(session_id)),
+                    )
+                )
+
+    memory_sources: list[tuple[str, Path, Project | None, str | None]] = [
+        ("Mémoire globale", GLOBAL_MEMORY_FILE, None, None)
+    ]
+    memory_sources.extend(
+        (f"Mémoire : {project.name}", project_memory_path(project.id), project, None)
+        for project in projects
+    )
+    for session_id in list_session_ids():
+        session_project_id = load_session_project(session_id)
+        memory_sources.append(
+            (
+                f"Mémoire : {load_title(session_id) or session_id}",
+                session_memory_path(session_id),
+                projects_by_id.get(session_project_id) if session_project_id else None,
+                session_id,
+            )
+        )
+    if not selected_types or "memory" in selected_types:
+        for title, path, project, session_id in memory_sources:
+            try:
+                content = path.read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+            if (
+                content
+                and _search_matches(query, title, content)
+                and include("memory", project.id if project else None)
+            ):
+                results.append(
+                    _search_result(
+                        kind="memory",
+                        title=title,
+                        excerpt=_search_excerpt(content, query),
+                        project=project,
+                        session_id=session_id,
+                        path=str(path),
+                        modified_at=_search_modified_at(path),
+                    )
+                )
+
+    if not selected_types or "task" in selected_types:
+        tasks: list[dict[str, object]] = []
+        if DEPLOYMENT_PROFILE is DeploymentProfile.WEB and REMOTE_WORKSPACE_CONFIG is not None:
+            for project in projects:
+                if not project.folder_path.startswith("workspace://"):
+                    continue
+                try:
+                    tasks.extend(
+                        {
+                            **_remote_task_summary(
+                                project.folder_path.removeprefix("workspace://"), task
+                            ),
+                            "project": project,
+                        }
+                        for task in list_remote_tasks(
+                            REMOTE_WORKSPACE_CONFIG,
+                            project.folder_path.removeprefix("workspace://"),
+                        )
+                    )
+                except RemoteWorkspaceError:
+                    continue
+        else:
+            tasks = [
+                {**background_tasks.summary(task), "project": None}
+                for task in background_tasks.list_tasks()
+            ]
+        for task in tasks:
+            name = str(task["name"])
+            command = str(task["command"])
+            task_project = cast(Project | None, task["project"])
+            if _search_matches(query, name, command) and include(
+                "task", task_project.id if task_project else None
+            ):
+                try:
+                    created_at = datetime.fromisoformat(
+                        str(task["created_at"]).replace("Z", "+00:00")
+                    )
+                    if created_at.tzinfo is None:
+                        created_at = created_at.replace(tzinfo=UTC)
+                except ValueError:
+                    created_at = datetime.fromtimestamp(0, UTC)
+                results.append(
+                    _search_result(
+                        kind="task",
+                        title=name,
+                        excerpt=f"{task['status']} · {command}",
+                        project=task_project,
+                        task_id=str(task["id"]),
+                        modified_at=created_at,
+                    )
+                )
+
+    if not selected_types or "file" in selected_types:
+        for project in projects:
+            if project_id is not None and project.id != project_id:
+                continue
+            if DEPLOYMENT_PROFILE is DeploymentProfile.WEB:
+                results.extend(_search_remote_project_files(project, query))
+            else:
+                results.extend(_search_local_project_files(project, query))
+
+    now = datetime.now(UTC)
+    durations = {"day": 1, "week": 7, "month": 31, "year": 365}
+    if period in durations:
+        results = [
+            result
+            for result in results
+            if now - datetime.fromisoformat(str(result["modified_at"]))
+            <= timedelta(days=durations[period])
+        ]
+    return sorted(results, key=lambda result: str(result["modified_at"]), reverse=True)[:100]
 
 
 @app.get("/sessions/{session_id}", tags=["Sessions"])

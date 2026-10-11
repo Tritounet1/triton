@@ -25,6 +25,7 @@ def test_cors_allows_the_vite_development_ui():
 
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == "http://localhost:1420"
+    assert response.headers["access-control-allow-credentials"] == "true"
 
 
 def test_cors_allows_the_tauri_production_webview():

@@ -5,7 +5,8 @@
   "main": "main.py",
   "scripts": {
     "start": "concurrently \"uv run server.py\" \"cd app-desktop/ && pnpm tauri dev\"",
-    "dev": "concurrently \"uv run uvicorn server:app --reload --reload-exclude .venv --reload-exclude app-desktop --reload-exclude node_modules\" \"cd app-desktop/ && pnpm tauri dev\""
+    "dev:desktop": "concurrently \"uv run uvicorn server:app --reload --reload-exclude .venv --reload-exclude app-desktop --reload-exclude node_modules\" \"cd app-desktop/ && pnpm tauri dev\"",
+    "dev:web": "concurrently \"TRITON_DEPLOYMENT_PROFILE=web uv run uvicorn server:app --reload --reload-exclude .venv --reload-exclude app-desktop --reload-exclude node_modules\" \"cd app-desktop/ && VITE_TRITON_DEPLOYMENT_PROFILE=web pnpm dev\""
   },
   "keywords": [],
   "author": "",
