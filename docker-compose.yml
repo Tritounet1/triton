@@ -11,8 +11,6 @@ services:
       TRITON_WORKSPACE_TOKEN: ${TRITON_WORKSPACE_TOKEN:-}
     expose:
       - "8000"
-    ports:
-      - "127.0.0.1:8000:8000"
     volumes:
       - triton-data:/data
     networks:
