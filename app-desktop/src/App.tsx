@@ -18,7 +18,6 @@ import {
   type ChatComposerToken,
   type ChatComposerTrigger,
 } from "@astryxdesign/core/Chat";
-import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { IconButton } from "@astryxdesign/core/IconButton";
 import { Markdown } from "@astryxdesign/core/Markdown";
 import { SideNav } from "@astryxdesign/core/SideNav";
@@ -53,6 +52,7 @@ import {
   UNDO_COMMAND,
   YOLO_COMMAND,
 } from "./chatCommands";
+import { ChatHeader } from "./ChatHeader";
 import { ConversationSidebarSection } from "./ConversationSidebarSection";
 import {
   runChatConversationStream,
@@ -90,15 +90,14 @@ import {
   ChevronRightIcon,
   CopyIcon,
   FileIcon,
-  GearIcon,
   ImageIcon,
-  MoonIcon,
   PencilIcon,
   PlusIcon,
   RefreshIcon,
-  SunIcon,
+  TerminalIcon,
   XIcon,
 } from "./icons";
+import { HomeHero } from "./HomeHero";
 import { modelAvatar } from "./modelFamilies";
 import { NewProjectModal } from "./NewProjectModal";
 import { notifyIfBackground } from "./notifications";
@@ -108,6 +107,7 @@ import { RichCard } from "./RichCard";
 import { richCardFromToolCall } from "./richCardData";
 import { SearchPage } from "./SearchPage";
 import { SettingsModal } from "./SettingsModal";
+import { SidebarFooter } from "./SidebarFooter";
 import { SidebarHeader } from "./SidebarHeader";
 import {
   describeSnapshotDiff,
@@ -564,6 +564,14 @@ function App() {
     () => localStorage.getItem("triton_sidebar_collapsed") === "1",
   );
   const [sidebarPeeking, setSidebarPeeking] = useState(false);
+  const [isSidePanelOpen, setIsSidePanelOpen] = useState(
+    () => localStorage.getItem("triton_side_panel_open") !== "0",
+  );
+  const toggleSidePanel = () => {
+    const next = !isSidePanelOpen;
+    setIsSidePanelOpen(next);
+    localStorage.setItem("triton_side_panel_open", next ? "1" : "0");
+  };
   const toggleSidebar = () => {
     const next = !sidebarCollapsed;
     setSidebarCollapsed(next);
@@ -1568,6 +1576,7 @@ function App() {
   const sidebarHeader = SidebarHeader({
     usesMacTitlebarOverlay,
     sidebarCollapsed,
+    isWebDeployment,
     onToggleSidebar: toggleSidebar,
     onSearch: () => {
       setView("search");
@@ -1579,6 +1588,16 @@ function App() {
     <SideNav
       header={sidebarHeader.header}
       topContent={sidebarHeader.topContent}
+      footer={
+        <SidebarFooter
+          isWebDeployment={isWebDeployment}
+          themeMode={themeMode}
+          onOpenSettings={() => {
+            setSettingsOpen(true);
+          }}
+          onToggleTheme={toggleTheme}
+        />
+      }
     >
       {capabilities.projects && <ProjectSidebarSection
         projects={projects}
@@ -1747,15 +1766,28 @@ function App() {
                     </Text>
                   </div>
                 )}
+                <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                <ChatHeader
+                  projectName={activeProject?.name ?? null}
+                  title={
+                    sessions.find((s) => s.id === sessionId)?.title ??
+                    (sessionId ? formatSessionLabel(sessionId) : "Nouvelle conversation")
+                  }
+                  status={pendingConfirmation ? "awaiting" : sending ? "running" : "idle"}
+                  model={effectiveModel}
+                  yoloEnabled={yoloEnabled}
+                  isPanelOpen={isSidePanelOpen}
+                  onTogglePanel={toggleSidePanel}
+                />
                 <ChatLayout
                   ref={chatScrollRef}
                   density="spacious"
                   style={{ marginBottom: 52 }}
                   className="min-h-0 min-w-0 flex-1"
                   emptyState={
-                    <EmptyState
-                      title="Nouvelle conversation"
-                      description="Écris un message pour démarrer la conversation."
+                    <HomeHero
+                      projectName={activeProject?.name ?? null}
+                      onPick={setInput}
                     />
                   }
                   scrollButton={
@@ -1784,7 +1816,7 @@ function App() {
                       }}
                       onStop={cancelMessage}
                       isStopShown={sending}
-                      placeholder={imageMode ? "Décrire l’image à générer…" : "Écrire un message..."}
+                      placeholder={imageMode ? "Décrire l’image à générer…" : "Écris à Triton… (/ pour les commandes)"}
                       // sending is deliberately NOT here: isDisabled greys the
                       // whole composer out (opacity 0.6) and makes its input
                       // non-editable (contentEditable=false) - there's no
@@ -1794,7 +1826,7 @@ function App() {
                       // confirmation prompt is different: genuinely blocking,
                       // has to be resolved first.
                       isDisabled={!!pendingConfirmation}
-                      elevation="none"
+                      elevation="low"
                       input={<ChatComposerInput triggers={composerTriggers} />}
                       style={
                         { "--_chat-composer-padding": "24px" } as CSSProperties
@@ -1922,14 +1954,11 @@ function App() {
                       }
                       sendActions={
                         <>
-                          {yoloEnabled && (
-                            <Badge variant="warning" label="YOLO actif" />
-                          )}
                           <select
                             key={imageMode ? `image-${imageModel}` : `chat-${effectiveModel}`}
                             aria-label={imageMode ? "Modèle image pour cette génération" : "Modèle chat pour ce message"}
                             value={imageMode ? (oneShotImageModel ?? "") : (oneShotChatModel ?? "")}
-                            className="max-w-48 rounded-md border border-border bg-surface px-2 py-1 text-xs text-primary outline-none focus:border-accent"
+                            className="max-w-56 rounded-lg border border-border bg-surface px-2 py-1.5 font-mono text-xs text-primary outline-none focus:border-brand"
                             onClick={(event) => {
                               event.stopPropagation();
                             }}
@@ -1954,23 +1983,24 @@ function App() {
                               </>
                             )}
                           </select>
-                          <Badge
-                            variant={imageMode ? "warning" : "neutral"}
-                            label={
-                              imageMode
-                                ? oneShotImageModel
-                                  ? "Modèle temporaire"
-                                  : "Image"
-                                : oneShotChatModel
-                                  ? "Modèle temporaire"
-                                  : effectiveModel ?? "Modèle"
-                            }
-                          />
+                          {(imageMode || oneShotChatModel) && (
+                            <Badge
+                              variant={imageMode ? "warning" : "neutral"}
+                              label={
+                                imageMode
+                                  ? oneShotImageModel
+                                    ? "Modèle temporaire"
+                                    : "Image"
+                                  : "Modèle temporaire"
+                              }
+                            />
+                          )}
                         </>
                       }
                     />
                   }
                 >
+                  {(messages.length > 0 || showTypingPlaceholder || pendingConfirmation) && (
                   <ChatMessageList isStreaming={sending}>
                     {(() => {
                       const groups = groupMessages(messages);
@@ -2142,7 +2172,7 @@ function App() {
                               <Avatar
                                 name={messageAvatar.name}
                                 src={messageAvatar.logo}
-                                size={72}
+                                size={36}
                                 // belt-and-suspenders on top of `size`: last time,
                                 // the image (1024x1024 at the source) ended up
                                 // rendering at its native size instead of being
@@ -2151,7 +2181,7 @@ function App() {
                                 // back). Fixed w-/h- + overflow-hidden on this same
                                 // element force a hard cap regardless of the
                                 // Avatar component's internal sizing.
-                                className="h-[72px] w-[72px] shrink-0 overflow-hidden"
+                                className="h-9 w-9 shrink-0 overflow-hidden"
                               />
                             }
                             name="Triton"
@@ -2315,8 +2345,8 @@ function App() {
                           <Avatar
                             name={modelAvatar(displayedInFlightModel).name}
                             src={modelAvatar(displayedInFlightModel).logo}
-                            size={72}
-                            className="h-[72px] w-[72px] shrink-0 overflow-hidden"
+                            size={36}
+                            className="h-9 w-9 shrink-0 overflow-hidden"
                           />
                         }
                         name="Triton"
@@ -2348,84 +2378,91 @@ function App() {
                           Object.keys(pendingConfirmation.args).length > 0;
 
                         return (
-                          <div className="mx-auto flex w-full max-w-sm flex-col items-center gap-4 rounded-2xl border border-border bg-surface px-6 py-6">
-                            <Avatar name={server ?? label} size="lg" />
-
-                            <button
-                              type="button"
-                              disabled={!hasDetails}
-                              className="flex items-center gap-1 text-center text-sm disabled:cursor-default"
-                              onClick={() => {
-                                setConfirmationDetailsExpanded((v) => !v);
-                              }}
-                            >
-                              <span>
-                                Triton souhaite utiliser{" "}
-                                <strong>{label}</strong>
-                                {server && (
-                                  <>
-                                    {" "}
-                                    de <strong>{server}</strong>
-                                  </>
-                                )}
-                                .
+                          <section
+                            aria-label="Autorisation requise"
+                            className="animate-fade-in mx-auto flex w-full max-w-[760px] flex-col gap-3 rounded-xl border border-warn-border bg-warn-bg p-3.5"
+                          >
+                            <div className="flex items-start gap-2.5">
+                              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-warn-icon text-warn-text">
+                                <TerminalIcon className="h-4 w-4" />
                               </span>
-                              {hasDetails && (
-                                <ChevronRightIcon
-                                  className={`h-4 w-4 shrink-0 text-secondary transition-transform ${
+                              <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                                <button
+                                  type="button"
+                                  disabled={!hasDetails}
+                                  className="flex items-center gap-1 text-left text-sm font-semibold text-warn-text disabled:cursor-default"
+                                  onClick={() => {
+                                    setConfirmationDetailsExpanded((v) => !v);
+                                  }}
+                                >
+                                  <span>
+                                    Triton souhaite utiliser{" "}
+                                    <span className="font-mono">{label}</span>
+                                    {server && (
+                                      <>
+                                        {" "}
+                                        de <strong>{server}</strong>
+                                      </>
+                                    )}
+                                  </span>
+                                  {hasDetails && (
+                                    <ChevronRightIcon
+                                      className={`h-4 w-4 shrink-0 transition-transform ${
+                                        confirmationDetailsExpanded
+                                          ? "rotate-90"
+                                          : ""
+                                      }`}
+                                    />
+                                  )}
+                                </button>
+                                <code
+                                  className={`block rounded-lg border border-warn-border bg-surface px-2.5 py-2 font-mono text-[13px] text-primary ${
                                     confirmationDetailsExpanded
-                                      ? "rotate-90"
-                                      : ""
+                                      ? "whitespace-pre-wrap break-all"
+                                      : "truncate"
                                   }`}
-                                />
-                              )}
-                            </button>
-
-                            {confirmationDetailsExpanded && (
-                              <div className="w-full">
-                                <Text
-                                  size="sm"
-                                  color="secondary"
-                                  className="mb-2 block break-words text-center"
                                 >
                                   {pendingConfirmation.tool === "edit_file"
                                     ? editFileTarget(pendingConfirmation.args)
                                     : formatArgs(pendingConfirmation.args)}
-                                </Text>
-                                {pendingConfirmation.tool === "edit_file" &&
-                                  parseEditFileEdits(pendingConfirmation.args)
-                                    .length > 0 && (
-                                    <EditFileEdits
-                                      edits={parseEditFileEdits(
-                                        pendingConfirmation.args,
+                                </code>
+                                {confirmationDetailsExpanded && (
+                                  <div className="w-full">
+                                    {pendingConfirmation.tool === "edit_file" &&
+                                      parseEditFileEdits(pendingConfirmation.args)
+                                        .length > 0 && (
+                                        <EditFileEdits
+                                          edits={parseEditFileEdits(
+                                            pendingConfirmation.args,
+                                          )}
+                                        />
                                       )}
-                                    />
-                                  )}
-                                {pendingConfirmation.tool === "write_file" &&
-                                  activeProject &&
-                                  typeof pendingConfirmation.args.path ===
-                                    "string" &&
-                                  typeof pendingConfirmation.args.content ===
-                                    "string" && (
-                                    <WriteFileDiff
-                                      projectId={activeProject.id}
-                                      path={pendingConfirmation.args.path}
-                                      newContent={
-                                        pendingConfirmation.args.content
-                                      }
-                                    />
-                                  )}
+                                    {pendingConfirmation.tool === "write_file" &&
+                                      activeProject &&
+                                      typeof pendingConfirmation.args.path ===
+                                        "string" &&
+                                      typeof pendingConfirmation.args.content ===
+                                        "string" && (
+                                        <WriteFileDiff
+                                          projectId={activeProject.id}
+                                          path={pendingConfirmation.args.path}
+                                          newContent={
+                                            pendingConfirmation.args.content
+                                          }
+                                        />
+                                      )}
+                                  </div>
+                                )}
                               </div>
-                            )}
+                            </div>
 
-                            <div className="flex w-full flex-col gap-2">
+                            <div className="flex flex-wrap justify-end gap-2">
                               <Button
                                 label="Refuser"
                                 variant="ghost"
-                                size="md"
-                                className="w-full"
+                                size="sm"
                                 endContent={
-                                  <kbd className="rounded border border-border px-1.5 py-0.5 text-xs text-secondary">
+                                  <kbd className="triton-kbd">
                                     Échap
                                   </kbd>
                                 }
@@ -2438,10 +2475,9 @@ function App() {
                               <Button
                                 label="Toujours autoriser pour cette conversation"
                                 variant="secondary"
-                                size="md"
-                                className="w-full"
+                                size="sm"
                                 endContent={
-                                  <kbd className="rounded border border-border px-1.5 py-0.5 text-xs text-secondary">
+                                  <kbd className="triton-kbd">
                                     ⇧⌘⏎
                                   </kbd>
                                 }
@@ -2454,10 +2490,9 @@ function App() {
                               <Button
                                 label="Autoriser une fois"
                                 variant="primary"
-                                size="md"
-                                className="w-full"
+                                size="sm"
                                 endContent={
-                                  <kbd className="rounded border border-white/30 px-1.5 py-0.5 text-xs">
+                                  <kbd className="triton-kbd">
                                     ⌘⏎
                                   </kbd>
                                 }
@@ -2468,12 +2503,14 @@ function App() {
                                 Autoriser une fois
                               </Button>
                             </div>
-                          </div>
+                          </section>
                         );
                       })()}
                   </ChatMessageList>
+                  )}
                 </ChatLayout>
-                {capabilities.projects && activeProject && openFile ? (
+                </div>
+                {!isSidePanelOpen ? null : capabilities.projects && activeProject && openFile ? (
                   <FileViewerPanel
                     key={`${openFile.projectId}:${openFile.path}`}
                     file={openFile}
@@ -2509,30 +2546,6 @@ function App() {
               </div>
             )}
           </AppShell>
-          {!sidebarCollapsed && (
-            <div className="fixed bottom-3 left-0 z-30 flex w-[260px] justify-end gap-0.5 px-2">
-              <IconButton
-                label="Paramètres"
-                icon={<GearIcon />}
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setSettingsOpen(true);
-                }}
-              />
-              <IconButton
-                label={
-                  themeMode === "dark"
-                    ? "Passer en thème clair"
-                    : "Passer en thème sombre"
-                }
-                icon={themeMode === "dark" ? <MoonIcon /> : <SunIcon />}
-                variant="ghost"
-                size="sm"
-                onClick={toggleTheme}
-              />
-            </div>
-          )}
         </div>
       </div>
 

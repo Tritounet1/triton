@@ -16,6 +16,7 @@ import {
 } from "./icons";
 
 import { API_BASE } from "./api";
+import { ProjectTile } from "./ProjectTile";
 
 interface TreeNode {
   name: string;
@@ -128,13 +129,17 @@ export function ProjectFilePanel({
   useEffect(loadTree, [projectId, refreshSignal]);
 
   return (
-    <div className="flex h-full w-72 shrink-0 flex-col border-l border-border">
-      <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
-        <div className="min-w-0">
+    <aside
+      aria-label="Panneau du projet"
+      className="flex h-full w-80 shrink-0 flex-col border-l border-border bg-body"
+    >
+      <div className="flex min-h-14 items-center justify-between gap-2.5 border-b border-border px-4 py-2.5">
+        <ProjectTile name={projectName} size="md" />
+        <div className="min-w-0 flex-1">
           <Text weight="semibold" className="block truncate">
             {projectName}
           </Text>
-          <Text size="2xs" color="secondary" className="block truncate">
+          <Text size="2xs" color="secondary" className="block truncate font-mono">
             {folderPath}
           </Text>
         </div>
@@ -160,6 +165,9 @@ export function ProjectFilePanel({
       {showSnapshots && <SnapshotSection sessionId={sessionId} onOpenHistory={onOpenHistory} />}
 
       <div className="flex-1 overflow-y-auto px-2 py-2">
+        <Text size="2xs" weight="semibold" color="secondary" className="block px-2 pb-1 pt-1 uppercase">
+          Fichiers
+        </Text>
         {error && (
           <Text size="sm" className="block px-2 py-2 text-error">
             {error}
@@ -177,6 +185,6 @@ export function ProjectFilePanel({
           </Text>
         )}
       </div>
-    </div>
+    </aside>
   );
 }

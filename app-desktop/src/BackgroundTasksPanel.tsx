@@ -14,8 +14,8 @@ export function BackgroundTasksPanel({ tasks, onOpen, onStop, onDelete }: Backgr
   if (tasks.length === 0) return null;
 
   return (
-    <div className="flex h-full w-72 shrink-0 flex-col border-l border-border">
+    <aside aria-label="Tâches en arrière-plan" className="flex h-full w-80 shrink-0 flex-col border-l border-border bg-body">
       <BackgroundTasksSection tasks={tasks} onOpen={onOpen} onStop={onStop} onDelete={onDelete} />
-    </div>
+    </aside>
   );
 }

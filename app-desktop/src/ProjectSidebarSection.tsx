@@ -4,7 +4,8 @@ import { Spinner } from "@astryxdesign/core/Spinner";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { formatSessionLabel } from "./chatMessages";
-import { ChevronRightIcon, FolderIcon, PlusIcon } from "./icons";
+import { ChevronRightIcon, PlusIcon } from "./icons";
+import { ProjectTile } from "./ProjectTile";
 import { ProjectActionsMenu, SessionActionsMenu } from "./SidebarMenus";
 
 interface Session {
@@ -121,7 +122,7 @@ export function ProjectSidebarSection({
               <div className="group">
                 <SideNavItem
                   label={p.name}
-                  icon={<FolderIcon className="h-4 w-4" />}
+                  icon={<ProjectTile name={p.name} />}
                   isSelected={p.id === activeProjectId && activeSessionId === null}
                   onClick={() => {
                     onToggleCollapse(p.id);
@@ -148,13 +149,14 @@ export function ProjectSidebarSection({
                 />
               </div>
             )}
-            {!isCollapsed &&
-              sessions
+            {!isCollapsed && (
+              <div className="ml-[18px] flex flex-col border-l border-line pl-1.5">
+              {sessions
                 .filter((s) => s.project_id === p.id)
                 .sort((a, b) => Number(b.pinned) - Number(a.pinned))
                 .map((s) =>
                   editingSessionId === s.id ? (
-                    <div key={s.id} className="py-1 pl-4">
+                    <div key={s.id} className="py-1">
                       <TextInput
                         value={editingValue}
                         onChange={onEditingValueChange}
@@ -181,7 +183,6 @@ export function ProjectSidebarSection({
                         onClick={() => {
                           onSwitchSession(s.id);
                         }}
-                        className="pl-4"
                         endContent={
                           <div className="flex items-center gap-1">
                             {/* reponse en cours en arriere-plan (voir
@@ -210,6 +211,8 @@ export function ProjectSidebarSection({
                     </div>
                   ),
                 )}
+              </div>
+            )}
           </div>
         );
       })}

@@ -60,4 +60,24 @@ describe("WebAuthGate", () => {
 
     expect(await screen.findByText("Identifiants incorrects.")).toBeInTheDocument();
   });
+
+  it("reveals the password on demand", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ authenticated: false }) }),
+    );
+
+    render(
+      <WebAuthGate>
+        <p>Conversations</p>
+      </WebAuthGate>,
+    );
+
+    const passwordInput = await screen.findByLabelText("Mot de passe");
+    expect(passwordInput).toHaveAttribute("type", "password");
+    await user.click(screen.getByRole("button", { name: "Afficher le mot de passe" }));
+    expect(passwordInput).toHaveAttribute("type", "text");
+    expect(screen.getByRole("button", { name: "Masquer le mot de passe" })).toBeInTheDocument();
+  });
 });

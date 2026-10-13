@@ -1,0 +1,100 @@
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+:root {
+  color-scheme: light dark;
+  --triton-font-sans: "Geist Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --triton-font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
+  --triton-ink: light-dark(#0e1726, #e6ebf2);
+  --triton-ink-secondary: light-dark(#5b6577, #8a96a8);
+  --triton-ground: light-dark(#f5f6f8, #0b1018);
+  --triton-surface: light-dark(#ffffff, #111824);
+  --triton-raised: light-dark(#f1f3f6, #172131);
+  --triton-line: light-dark(#e3e6ec, #222d3f);
+  --triton-line-strong: light-dark(#d5dae2, #34445c);
+  --triton-brand: light-dark(#0f6fa8, #5cc0ee);
+  --triton-brand-muted: light-dark(#e3f0f8, #12283a);
+  --triton-brand-text: light-dark(#0b5582, #8fd4f4);
+  --triton-warn-bg: light-dark(#fff8f1, #23180c);
+  --triton-warn-border: light-dark(#f3c99b, #5a3a1a);
+  --triton-warn-text: light-dark(#7c2d12, #f5b98a);
+  --triton-warn-icon: light-dark(#fde7d1, #3a2610);
+  --triton-ok: light-dark(#15803d, #3dd68c);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+@layer components {
+  [data-astryx-theme] {
+    --font-family-body: var(--triton-font-sans);
+    --font-family-heading: var(--triton-font-sans);
+    --font-family-code: var(--triton-font-mono);
+
+    --color-background-surface: var(--triton-surface);
+    --color-background-body: var(--triton-ground);
+    --color-background-card: var(--triton-surface);
+    --color-background-popover: light-dark(#ffffff, #151e2c);
+    --color-background-muted: var(--triton-raised);
+
+    --color-accent: var(--triton-ink);
+    --color-accent-muted: light-dark(#e8eef5, #1b2738);
+    --color-neutral: light-dark(#0e17260f, #ffffff14);
+    --color-overlay-hover: light-dark(#0e17260d, #ffffff0d);
+    --color-overlay-pressed: light-dark(#0e17261a, #ffffff1a);
+
+    --color-text-primary: var(--triton-ink);
+    --color-text-secondary: var(--triton-ink-secondary);
+    --color-text-disabled: light-dark(#98a1b0, #4a5568);
+    --color-text-accent: var(--triton-ink);
+    --color-on-accent: light-dark(#ffffff, #0b1018);
+
+    --color-icon-accent: var(--triton-ink);
+    --color-icon-primary: var(--triton-ink);
+    --color-icon-secondary: var(--triton-ink-secondary);
+
+    --color-border: var(--triton-line);
+    --color-border-emphasized: var(--triton-line-strong);
+
+    --shadow-inset-hover: inset 0 0 0 2px light-dark(#0f6fa84d, #5cc0ee4d);
+    --shadow-inset-selected: inset 0 0 0 2px light-dark(#0f6fa880, #5cc0ee80);
+  }
+}
+
+@theme inline {
+  --color-brand: var(--triton-brand);
+  --color-brand-muted: var(--triton-brand-muted);
+  --color-brand-text: var(--triton-brand-text);
+  --color-warn-bg: var(--triton-warn-bg);
+  --color-warn-border: var(--triton-warn-border);
+  --color-warn-text: var(--triton-warn-text);
+  --color-warn-icon: var(--triton-warn-icon);
+  --color-ok: var(--triton-ok);
+  --color-ground: var(--triton-ground);
+  --color-raised: var(--triton-raised);
+  --color-line: var(--triton-line);
+  --font-sans: var(--triton-font-sans);
+  --font-mono: var(--triton-font-mono);
+}
+
+body {
+  font-family: var(--triton-font-sans);
+  background: var(--triton-ground);
+  color: var(--triton-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+.triton-kbd {
+  font-family: var(--triton-font-mono);
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 5px;
+  border: 1px solid currentColor;
+  opacity: 0.6;
+}

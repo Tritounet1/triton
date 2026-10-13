@@ -42,40 +42,59 @@ type SettingsCategory =
   | "logs"
   | "backup";
 
+type CategoryGroup = "Général" | "Agents" | "Outils" | "Données";
+
+const GROUPS: CategoryGroup[] = ["Général", "Agents", "Outils", "Données"];
+
 interface CategoryDef {
   id: SettingsCategory;
   label: string;
   icon: ReactNode;
+  group: CategoryGroup;
 }
 
 const CATEGORIES: CategoryDef[] = [
-  { id: "api_key", label: "Clé API", icon: <KeyIcon className="h-4 w-4" /> },
-  { id: "tavily", label: "Tavily", icon: <SearchIcon className="h-4 w-4" /> },
-  { id: "model", label: "Modèle", icon: <CpuIcon className="h-4 w-4" /> },
-  {
-    id: "image_generation",
-    label: "Génération d’images",
-    icon: <ImageIcon className="h-4 w-4" />,
-  },
+  { id: "api_key", label: "Clé API", icon: <KeyIcon className="h-4 w-4" />, group: "Général" },
+  { id: "model", label: "Modèle", icon: <CpuIcon className="h-4 w-4" />, group: "Général" },
+  { id: "memory", label: "Mémoire", icon: <BrainIcon className="h-4 w-4" />, group: "Général" },
   {
     id: "multi_agent_roles",
     label: "Rôles multi-agent",
     icon: <NetworkIcon className="h-4 w-4" />,
+    group: "Agents",
   },
   {
     id: "role_models",
     label: "Modèles des rôles",
     icon: <NetworkIcon className="h-4 w-4" />,
+    group: "Agents",
   },
-  { id: "mcp", label: "Serveurs MCP", icon: <PlugIcon className="h-4 w-4" /> },
+  { id: "mcp", label: "Serveurs MCP", icon: <PlugIcon className="h-4 w-4" />, group: "Outils" },
+  { id: "tavily", label: "Tavily", icon: <SearchIcon className="h-4 w-4" />, group: "Outils" },
+  {
+    id: "image_generation",
+    label: "Génération d’images",
+    icon: <ImageIcon className="h-4 w-4" />,
+    group: "Outils",
+  },
   {
     id: "scheduled_tasks",
     label: "Tâches récurrentes",
     icon: <ClockIcon className="h-4 w-4" />,
+    group: "Données",
   },
-  { id: "memory", label: "Mémoire", icon: <BrainIcon className="h-4 w-4" /> },
-  { id: "logs", label: "Logs & coûts", icon: <ChartBarIcon className="h-4 w-4" /> },
-  { id: "backup", label: "Sauvegarde", icon: <DownloadIcon className="h-4 w-4" /> },
+  {
+    id: "logs",
+    label: "Logs & coûts",
+    icon: <ChartBarIcon className="h-4 w-4" />,
+    group: "Données",
+  },
+  {
+    id: "backup",
+    label: "Sauvegarde",
+    icon: <DownloadIcon className="h-4 w-4" />,
+    group: "Données",
+  },
 ];
 
 const WEB_CATEGORY_IDS: SettingsCategory[] = [
@@ -141,13 +160,14 @@ export function SettingsModal({
         if (!open) onClose();
       }}
       purpose="info"
-      width={880}
+      width={1040}
       maxHeight="80dvh"
       padding={0}
       aria-label="Paramètres"
     >
-      <div className="flex h-[640px] max-h-[80dvh]">
-        <div className="flex w-56 shrink-0 flex-col border-r border-border p-3">
+      <div className="flex h-[720px] max-h-[85dvh]">
+        <div className="flex w-60 shrink-0 flex-col overflow-y-auto border-r border-border bg-body p-4">
+          <h2 className="m-0 mb-3 px-2 text-lg font-semibold text-primary">Réglages</h2>
           <TextInput
             value={search}
             onChange={setSearch}
@@ -158,26 +178,39 @@ export function SettingsModal({
             startIcon={<SearchIcon className="h-4 w-4 text-secondary" />}
             className="mb-4"
           />
-          <Text size="2xs" color="secondary" className="mb-1 block px-2 uppercase tracking-wide">
-            Paramètres
-          </Text>
-          <div className="flex flex-col gap-0.5">
-            {filtered.map((c) => (
-              <Item
-                key={c.id}
-                label={c.label}
-                startContent={c.icon}
-                isSelected={category === c.id}
-                density="compact"
-                onClick={() => {
-                  setCategory(c.id);
-                }}
-              />
-            ))}
+          <div className="flex flex-col gap-4">
+            {GROUPS.map((group) => {
+              const items = filtered.filter((c) => c.group === group);
+              if (items.length === 0) return null;
+              return (
+                <div key={group} className="flex flex-col gap-0.5">
+                  <Text
+                    size="2xs"
+                    color="secondary"
+                    weight="semibold"
+                    className="mb-1 block px-2 uppercase tracking-wider"
+                  >
+                    {group}
+                  </Text>
+                  {items.map((c) => (
+                    <Item
+                      key={c.id}
+                      label={c.label}
+                      startContent={c.icon}
+                      isSelected={category === c.id}
+                      density="compact"
+                      onClick={() => {
+                        setCategory(c.id);
+                      }}
+                    />
+                  ))}
+                </div>
+              );
+            })}
           </div>
         </div>
 
-        <div className="relative min-w-0 flex-1 overflow-y-auto p-6">
+        <div className="relative min-w-0 flex-1 overflow-y-auto px-8 py-7">
           <IconButton
             label="Fermer"
             icon={<XIcon />}
