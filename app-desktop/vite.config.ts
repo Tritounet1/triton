@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 const host = process.env.TAURI_DEV_HOST;
+const useWebApiProxy = process.env.VITE_TRITON_API_BASE === "/api";
 
 // https://vite.dev/config/
 export default defineConfig(() => ({
@@ -28,5 +29,14 @@ export default defineConfig(() => ({
       // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],
     },
+    proxy: useWebApiProxy
+      ? {
+          "/api": {
+            target: "http://127.0.0.1:8001",
+            changeOrigin: true,
+            rewrite: (path) => path.replace(/^\/api/, ""),
+          },
+        }
+      : undefined,
   },
 }));

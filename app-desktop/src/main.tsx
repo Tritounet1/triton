@@ -40,6 +40,15 @@ function installLocalApiToken(token: string) {
   };
 }
 
+function installWebApiCredentials() {
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input;
+    if (!url.startsWith(`${API_BASE}/`)) return nativeFetch(input, init);
+    return nativeFetch(input, { ...init, credentials: "include" });
+  };
+}
+
 async function waitForLocalApiToken(): Promise<string> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const token = await invoke<string | null>("local_api_token");
@@ -51,6 +60,7 @@ async function waitForLocalApiToken(): Promise<string> {
 
 async function bootstrap() {
   if (isTauri && !import.meta.env.DEV) installLocalApiToken(await waitForLocalApiToken());
+  if (isWebDeployment) installWebApiCredentials();
   renderApp();
 }
 
