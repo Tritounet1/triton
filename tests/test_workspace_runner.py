@@ -38,6 +38,23 @@ def test_workspace_runner_requires_a_private_token(monkeypatch, tmp_path):
     assert duplicate.status_code == 409
 
 
+def test_workspace_runner_initializes_a_template_and_reports_dependencies(monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_runner, "WORKSPACES_DIR", tmp_path)
+    monkeypatch.setattr(workspace_runner, "WORKSPACE_TOKEN", "workspace-token")
+
+    with TestClient(workspace_runner.app) as client:
+        client.post("/workspaces", json={"workspace_id": "project-a"}, headers=TOKEN_HEADER)
+        response = client.post(
+            "/workspaces/project-a/initialize",
+            json={"template": "api"},
+            headers=TOKEN_HEADER,
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"source": "template", "dependencies": ["requirements.txt"]}
+    assert (tmp_path / "project-a" / "main.py").is_file()
+
+
 def test_workspace_runner_exposes_its_own_mcp_registry(monkeypatch, tmp_path):
     monkeypatch.setattr(workspace_runner, "WORKSPACES_DIR", tmp_path)
     monkeypatch.setattr(workspace_runner, "WORKSPACE_TOKEN", "workspace-token")

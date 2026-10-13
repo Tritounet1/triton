@@ -32,12 +32,18 @@ export function NewProjectModal({
 }: NewProjectModalProps) {
   const [name, setName] = useState("");
   const [folder, setFolder] = useState("");
+  const [source, setSource] = useState<"empty" | "git" | "template">("empty");
+  const [gitUrl, setGitUrl] = useState("");
+  const [template, setTemplate] = useState("python");
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
 
   function reset() {
     setName("");
     setFolder("");
+    setSource("empty");
+    setGitUrl("");
+    setTemplate("python");
     setError(null);
     setCreating(false);
   }
@@ -54,7 +60,7 @@ export function NewProjectModal({
   }
 
   async function submit() {
-    if (!name.trim() || (!isWebDeployment && !folder.trim())) {
+    if (!name.trim() || (!isWebDeployment && !folder.trim()) || (source === "git" && !gitUrl.trim())) {
       setError("le nom et le dossier sont obligatoires.");
       return;
     }
@@ -66,7 +72,13 @@ export function NewProjectModal({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
-          isWebDeployment ? { name: name.trim() } : { name: name.trim(), folder_path: folder.trim() },
+          isWebDeployment
+            ? {
+                name: name.trim(),
+                ...(source === "git" ? { git_url: gitUrl.trim() } : {}),
+                ...(source === "template" ? { template } : {}),
+              }
+            : { name: name.trim(), folder_path: folder.trim() },
         ),
       });
 
@@ -124,9 +136,54 @@ export function NewProjectModal({
         </div>
 
         {isWebDeployment ? (
-          <Text size="sm" color="secondary">
-            Un workspace isolé sera créé pour ce projet.
-          </Text>
+          <div className="flex flex-col gap-3">
+            <Text size="sm" color="secondary">
+              Un workspace isolé sera créé pour ce projet.
+            </Text>
+            <div className="flex gap-2" role="group" aria-label="Source du projet">
+              {([
+                ["empty", "Vide"],
+                ["git", "Dépôt Git"],
+                ["template", "Modèle"],
+              ] as const).map(([value, label]) => (
+                <Button
+                  key={value}
+                  label={label}
+                  size="sm"
+                  variant={source === value ? "primary" : "secondary"}
+                  onClick={() => {
+                    setSource(value);
+                  }}
+                />
+              ))}
+            </div>
+            {source === "git" && (
+              <TextInput
+                value={gitUrl}
+                onChange={setGitUrl}
+                placeholder="https://github.com/organisation/projet.git"
+                isLabelHidden
+                label="URL du dépôt Git"
+              />
+            )}
+            {source === "template" && (
+              <label className="flex flex-col gap-1.5 text-sm font-medium">
+                Modèle de projet
+                <select
+                  value={template}
+                  onChange={(event) => {
+                    setTemplate(event.target.value);
+                  }}
+                  className="rounded-md border border-border bg-surface px-3 py-2 text-sm"
+                >
+                  <option value="python">Python</option>
+                  <option value="react">React</option>
+                  <option value="api">API FastAPI</option>
+                  <option value="discord-bot">Bot Discord</option>
+                </select>
+              </label>
+            )}
+          </div>
         ) : (
           <div className="flex flex-col gap-1.5">
             <Text size="sm" weight="medium">

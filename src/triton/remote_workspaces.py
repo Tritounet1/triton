@@ -98,6 +98,27 @@ def create_remote_workspace(config: RemoteWorkspaceConfig, workspace_id: str) ->
         raise RemoteWorkspaceError("workspace runner rejected the request")
 
 
+def initialize_remote_workspace(
+    config: RemoteWorkspaceConfig, workspace_id: str, *, git_url: str | None, template: str | None
+) -> dict[str, object]:
+    try:
+        response = requests.post(
+            f"{config.base_url}/workspaces/{workspace_id}/initialize",
+            headers={"X-Triton-Workspace-Token": config.token},
+            json={"git_url": git_url, "template": template},
+            timeout=130,
+        )
+    except requests.RequestException as exc:
+        raise RemoteWorkspaceError("workspace runner is unavailable") from exc
+    if not response.ok:
+        try:
+            detail = response.json().get("detail")
+        except ValueError:
+            detail = None
+        raise RemoteWorkspaceError(str(detail or "workspace initialization failed"))
+    return cast(dict[str, object], response.json())
+
+
 def ensure_remote_mcp_session_workspace(config: RemoteWorkspaceConfig, session_id: str) -> str:
     workspace_id = mcp_session_workspace_id(session_id)
     try:

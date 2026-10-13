@@ -40,6 +40,11 @@ class WorkspaceCreateRequest(BaseModel):
     workspace_id: str = Field(min_length=1, max_length=64)
 
 
+class WorkspaceInitializeRequest(BaseModel):
+    git_url: str | None = None
+    template: str | None = None
+
+
 class WorkspaceToolRequest(BaseModel):
     name: str
     args: dict[str, object]
@@ -502,6 +507,94 @@ def create_workspace(
         raise HTTPException(409, "workspace already exists")
     workspace.mkdir(parents=True)
     return {"id": body.workspace_id}
+
+
+_TEMPLATES: dict[str, dict[str, str]] = {
+    "python": {"main.py": 'print("Hello from Triton")\n', "requirements.txt": ""},
+    "react": {
+        "package.json": (
+            '{"scripts":{"dev":"vite","build":"vite build"},'
+            '"dependencies":{"@vitejs/plugin-react":"latest","vite":"latest",'
+            '"react":"latest","react-dom":"latest"},"devDependencies":{}}\n'
+        ),
+        "index.html": '<div id="root"></div><script type="module" src="/src/main.jsx"></script>\n',
+        "src/main.jsx": (
+            'import { createRoot } from "react-dom/client";\n'
+            'createRoot(document.getElementById("root")).render(<h1>Hello Triton</h1>);\n'
+        ),
+    },
+    "api": {
+        "main.py": (
+            "from fastapi import FastAPI\n\napp = FastAPI()\n\n"
+            '@app.get("/")\ndef root():\n    return {"status": "ok"}\n'
+        ),
+        "requirements.txt": "fastapi\nuvicorn[standard]\n",
+    },
+    "discord-bot": {
+        "bot.py": (
+            "import discord\n\nintents = discord.Intents.default()\n"
+            "bot = discord.Client(intents=intents)\n\n@bot.event\n"
+            'async def on_ready():\n    print(f"Connected as {bot.user}")\n'
+        ),
+        "requirements.txt": "discord.py\n",
+    },
+}
+
+
+@app.post("/workspaces/{workspace_id}/initialize")
+def initialize_workspace(
+    workspace_id: str,
+    body: WorkspaceInitializeRequest,
+    x_triton_workspace_token: str | None = Header(default=None),
+) -> dict[str, object]:
+    _require_token(x_triton_workspace_token)
+    workspace = _workspace_path(workspace_id)
+    if not workspace.is_dir():
+        raise HTTPException(404, "workspace not found")
+    if any(workspace.iterdir()):
+        raise HTTPException(409, "workspace is not empty")
+    if bool(body.git_url) == bool(body.template):
+        raise HTTPException(400, "provide exactly one source")
+    if body.git_url:
+        if not body.git_url.startswith(("https://", "git@")):
+            raise HTTPException(400, "only HTTPS and SSH Git URLs are supported")
+        try:
+            completed = subprocess.run(
+                ["git", "clone", "--depth", "1", body.git_url, "."],
+                cwd=workspace,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+                preexec_fn=_subprocess_quota_preexec(workspace_id),
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise HTTPException(502, f"Git import failed: {exc}") from exc
+        if completed.returncode:
+            shutil.rmtree(workspace)
+            workspace.mkdir()
+            raise HTTPException(400, completed.stderr.strip() or "Git import failed")
+        source = "git"
+    else:
+        files = _TEMPLATES.get(body.template or "")
+        if files is None:
+            raise HTTPException(400, "unknown template")
+        for relative_path, content in files.items():
+            target = workspace / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content)
+        source = "template"
+    _ensure_project_capacity(workspace_id)
+    dependencies = [
+        path.name
+        for path in (
+            workspace / "package.json",
+            workspace / "requirements.txt",
+            workspace / "pyproject.toml",
+        )
+        if path.exists()
+    ]
+    return {"source": source, "dependencies": dependencies}
 
 
 @app.delete("/workspaces/{workspace_id}")

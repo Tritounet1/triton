@@ -1,4 +1,5 @@
 import argparse
+import contextlib
 import json
 import logging
 import secrets
@@ -70,6 +71,7 @@ from triton.remote_workspaces import (
     ensure_remote_mcp_session_workspace,
     ensure_remote_snapshot,
     get_remote_task,
+    initialize_remote_workspace,
     invoke_remote_mcp_tool,
     invoke_remote_workspace_tool,
     list_remote_mcp_servers,
@@ -693,6 +695,8 @@ class MCPServerToggle(BaseModel):
 class ProjectCreate(BaseModel):
     name: str
     folder_path: str = ""
+    git_url: str | None = None
+    template: str | None = None
 
 
 class ProjectRename(BaseModel):
@@ -2888,7 +2892,13 @@ def add_project(body: ProjectCreate) -> list[Project]:
         project_id = uuid.uuid4().hex
         try:
             create_remote_workspace(config, project_id)
+            if body.git_url or body.template:
+                initialize_remote_workspace(
+                    config, project_id, git_url=body.git_url, template=body.template
+                )
         except RemoteWorkspaceError as exc:
+            with contextlib.suppress(RemoteWorkspaceError):
+                delete_remote_workspace(config, project_id)
             raise HTTPException(503, str(exc)) from exc
         create_project(body.name, f"workspace://{project_id}", project_id, origin="web")
         log_event(type="project_created", project_id=project_id, remote=True)
