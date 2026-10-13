@@ -59,6 +59,7 @@ from triton.llm.chat_loop import (
     turn_start_indices,
 )
 from triton.llm.model_roles import ROLE_MODELS
+from triton.llm.pricing import estimate_cost
 from triton.paths import ROOT_DIR
 from triton.remote_workspaces import (
     RemoteWorkspaceConfig,
@@ -702,6 +703,47 @@ class ProjectCreate(BaseModel):
 
 class ProjectRename(BaseModel):
     name: str
+
+
+class ModelComparisonRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=20_000)
+    models: list[str] = Field(min_length=2, max_length=4)
+
+
+@app.post("/models/compare", tags=["Models"])
+def compare_models(body: ModelComparisonRequest) -> list[dict[str, object]]:
+    results: list[dict[str, object]] = []
+    for model in dict.fromkeys(body.models):
+        started = time.perf_counter()
+        try:
+            result = call_chat(
+                cast(list[ChatCompletionMessageParam], [{"role": "user", "content": body.prompt}]),
+                model=model,
+            )
+            results.append(
+                {
+                    "model": result.model,
+                    "content": result.content or "",
+                    "duration_ms": round((time.perf_counter() - started) * 1000),
+                    "cost_usd": estimate_cost(
+                        result.model, result.prompt_tokens, result.completion_tokens
+                    ),
+                    "tool_calls": len(result.tool_calls),
+                    "total_tokens": result.total_tokens,
+                }
+            )
+        except Exception as exc:
+            results.append(
+                {
+                    "model": model,
+                    "error": str(exc),
+                    "duration_ms": round((time.perf_counter() - started) * 1000),
+                    "cost_usd": None,
+                    "tool_calls": 0,
+                    "total_tokens": 0,
+                }
+            )
+    return results
 
 
 @dataclass

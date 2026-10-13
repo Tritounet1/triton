@@ -24,6 +24,7 @@ const REMEMBER_SESSION_PREFIX = "session ";
 const REMEMBER_GLOBAL_PREFIX = "global ";
 export const COMPACT_COMMAND = "/compact";
 export const YOLO_COMMAND = "/yolo";
+export const COMPARE_COMMAND = "/compare ";
 
 interface MultiAgentSubtask {
   id: string;

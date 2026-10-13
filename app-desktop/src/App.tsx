@@ -44,6 +44,7 @@ import { BackgroundTasksPanel } from "./BackgroundTasksPanel";
 import { type BackgroundTask } from "./BackgroundTasksSection";
 import {
   COMPACT_COMMAND,
+  COMPARE_COMMAND,
   COST_COMMAND,
   createChatCommands,
   MODEL_COMMAND_PREFIX,
@@ -99,6 +100,7 @@ import {
 } from "./icons";
 import { HomeHero } from "./HomeHero";
 import { modelAvatar } from "./modelFamilies";
+import { ModelComparisonModal } from "./ModelComparisonModal";
 import { NewProjectModal } from "./NewProjectModal";
 import { notifyIfBackground } from "./notifications";
 import { ProjectFilePanel } from "./ProjectFilePanel";
@@ -157,6 +159,13 @@ const SLASH_COMMANDS: SearchableItem<{ description: string }>[] = [
     label: "model",
     auxiliaryData: {
       description: "Change le modèle de cette conversation (ex. /model gpt-5)",
+    },
+  },
+  {
+    id: "compare",
+    label: "compare",
+    auxiliaryData: {
+      description: "Compare le même prompt entre plusieurs modèles avant de choisir",
     },
   },
   {
@@ -522,6 +531,7 @@ function App() {
   // the two settings stay fully independent.
   const [imageModel, setImageModel] = useState<string | null>(null);
   const [oneShotChatModel, setOneShotChatModel] = useState<string | null>(null);
+  const [comparisonPrompt, setComparisonPrompt] = useState<string | null>(null);
   const [oneShotImageModel, setOneShotImageModel] = useState<string | null>(null);
   const [imageMode, setImageMode] = useState(false);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
@@ -1094,7 +1104,7 @@ function App() {
     setYoloEnabled(false);
     setAwaitingSseEvent(false);
     setPendingConfirmation(null);
-  }, [setView, setOpenFile]);
+  }, [setView, setOpenFile, setSessionModelOverride]);
 
   function startProjectSession(projectId: string) {
     setView("chat");
@@ -1334,6 +1344,11 @@ function App() {
     }
 
     if (!isEdit && capabilities.orchestrator) {
+      if (text.toLowerCase().startsWith(COMPARE_COMMAND)) {
+        const prompt = text.slice(COMPARE_COMMAND.length).trim();
+        if (prompt) setComparisonPrompt(prompt);
+        return;
+      }
       if (text.toLowerCase().startsWith(MULTI_AGENT_PREFIX)) {
         await dispatchMultiAgent(text);
         return;
@@ -2622,6 +2637,28 @@ function App() {
           if (!isOpen) setPreviewImage(null);
         }}
         onRequestChange={requestImageChange}
+      />
+
+      <ModelComparisonModal
+        prompt={comparisonPrompt}
+        models={modelsCatalog}
+        onClose={() => {
+          setComparisonPrompt(null);
+        }}
+        onChoose={(model) => {
+          if (sessionId) {
+            void fetch(`${API_BASE}/sessions/${sessionId}/model`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ model }),
+            });
+            setSessionModelOverride(model);
+          } else {
+            setOneShotChatModel(model);
+          }
+          setInput(comparisonPrompt ?? "");
+          setComparisonPrompt(null);
+        }}
       />
 
       <AlertDialog
