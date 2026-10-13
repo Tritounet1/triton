@@ -583,6 +583,15 @@ def _ensure_write_snapshot(
 def _require_profile_project_access(project_id: str | None) -> None:
     if not project_is_allowed(DEPLOYMENT_PROFILE, project_id, REMOTE_WORKSPACE_CONFIG is not None):
         raise HTTPException(403, "projects are unavailable in the web deployment profile")
+    if project_id is not None and _active_project(project_id) is None:
+        raise HTTPException(404, "project not found")
+
+
+def _active_project(project_id: str) -> Project | None:
+    project = get_project(project_id)
+    if project is None or project.origin != DEPLOYMENT_PROFILE.value:
+        return None
+    return project
 
 
 app.add_middleware(
@@ -1807,6 +1816,7 @@ def list_sessions() -> list[dict[str, str | bool | None]]:
     if not SESSIONS_DIR.exists():
         return []
     ids = list_session_ids()
+    project_ids = {project.id for project in list_projects()}
     return [
         {
             "id": session_id,
@@ -1815,6 +1825,8 @@ def list_sessions() -> list[dict[str, str | bool | None]]:
             "pinned": is_pinned(session_id),
         }
         for session_id in ids
+        if (session_project_id := load_session_project(session_id)) is None
+        or session_project_id in project_ids
     ]
 
 
@@ -1988,14 +2000,14 @@ def put_global_memory(body: MemoryContent) -> MemoryContent:
 
 @app.get("/projects/{project_id}/memory", tags=["Memory"])
 def get_project_memory(project_id: str) -> MemoryContent:
-    if get_project(project_id) is None:
+    if _active_project(project_id) is None:
         raise HTTPException(404, "project not found")
     return MemoryContent(content=load_project_memory(project_id))
 
 
 @app.put("/projects/{project_id}/memory", tags=["Memory"])
 def put_project_memory(project_id: str, body: MemoryContent) -> MemoryContent:
-    if get_project(project_id) is None:
+    if _active_project(project_id) is None:
         raise HTTPException(404, "project not found")
     set_project_memory(project_id, body.content)
     return body
@@ -2204,7 +2216,7 @@ def global_search(
     selected_types = {value for value in types.split(",") if value}
     if not query and not selected_types:
         selected_types = {"memory"}
-    projects = load_projects()
+    projects = list_projects()
     projects_by_id = {project.id: project for project in projects}
     results: list[dict[str, object]] = []
 
@@ -2803,7 +2815,7 @@ def list_scheduled_tasks() -> list[scheduled_tasks.ScheduledTask]:
 
 @app.post("/scheduled_tasks", tags=["Scheduled Tasks"])
 def create_scheduled_task(body: ScheduledTaskCreate) -> scheduled_tasks.ScheduledTask:
-    project = get_project(body.project_id)
+    project = _active_project(body.project_id)
     if project is None:
         raise HTTPException(404, "project not found")
     if body.frequency == "weekly" and body.day_of_week is None:
@@ -2851,7 +2863,7 @@ def remove_scheduled_task(task_id: str) -> dict[str, bool]:
 
 @app.get("/projects", tags=["Projects"])
 def list_projects() -> list[Project]:
-    return load_projects()
+    return [project for project in load_projects() if project.origin == DEPLOYMENT_PROFILE.value]
 
 
 @app.get("/deployment/capabilities", tags=["Deployment"])
@@ -2878,27 +2890,27 @@ def add_project(body: ProjectCreate) -> list[Project]:
             create_remote_workspace(config, project_id)
         except RemoteWorkspaceError as exc:
             raise HTTPException(503, str(exc)) from exc
-        create_project(body.name, f"workspace://{project_id}", project_id)
+        create_project(body.name, f"workspace://{project_id}", project_id, origin="web")
         log_event(type="project_created", project_id=project_id, remote=True)
-        return load_projects()
+        return list_projects()
     folder = Path(body.folder_path)
     if not folder.is_dir():
         raise HTTPException(400, "folder not found")
-    project = create_project(body.name, str(folder))
+    project = create_project(body.name, str(folder), origin="desktop")
     log_event(type="project_created", project_id=project.id, remote=False)
-    return load_projects()
+    return list_projects()
 
 
 @app.put("/projects/{project_id}", tags=["Projects"])
 def rename_project_endpoint(project_id: str, body: ProjectRename) -> list[Project]:
-    if not rename_project(project_id, body.name):
+    if _active_project(project_id) is None or not rename_project(project_id, body.name):
         raise HTTPException(404, "project not found")
-    return load_projects()
+    return list_projects()
 
 
 @app.delete("/projects/{project_id}", tags=["Projects"])
 def remove_project(project_id: str) -> list[Project]:
-    project = get_project(project_id)
+    project = _active_project(project_id)
     if project is None:
         raise HTTPException(404, "project not found")
     if DEPLOYMENT_PROFILE is DeploymentProfile.WEB:
@@ -2920,7 +2932,7 @@ def remove_project(project_id: str) -> list[Project]:
     for session_id in list_session_ids():
         if load_session_project(session_id) == project_id:
             clear_session_project(session_id)
-    return load_projects()
+    return list_projects()
 
 
 MAX_TREE_ENTRIES = 2000
@@ -2967,7 +2979,7 @@ def _build_tree(directory: Path, budget: list[int]) -> list[dict[str, object]]:
 
 @app.get("/projects/{project_id}/tree", tags=["Projects"])
 def get_project_tree(project_id: str) -> dict[str, object]:
-    project = get_project(project_id)
+    project = _active_project(project_id)
     if project is None:
         raise HTTPException(404, "project not found")
 
@@ -2997,7 +3009,7 @@ def get_project_file(project_id: str, path: str) -> Response:
     resolve inside the project's folder - the same containment check
     enforce_project_sandbox uses for tool calls, applied here by hand since
     this endpoint takes a single free-form path, not a tool call's args."""
-    project = get_project(project_id)
+    project = _active_project(project_id)
     if project is None:
         raise HTTPException(404, "project not found")
 

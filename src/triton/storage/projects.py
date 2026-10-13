@@ -21,13 +21,22 @@ class Project:
     id: str
     name: str
     folder_path: str
+    origin: str = "desktop"
 
 
 def load_projects() -> list[Project]:
     if not PROJECTS_FILE.exists():
         return []
     raw = json.loads(PROJECTS_FILE.read_text())
-    return [Project(**p) for p in raw]
+    return [
+        Project(
+            origin=p.get("origin", "desktop"),
+            id=p["id"],
+            name=p["name"],
+            folder_path=p["folder_path"],
+        )
+        for p in raw
+    ]
 
 
 def save_projects(projects: list[Project]) -> None:
@@ -40,9 +49,16 @@ def get_project(project_id: str) -> Project | None:
     return next((p for p in load_projects() if p.id == project_id), None)
 
 
-def create_project(name: str, folder_path: str, project_id: str | None = None) -> Project:
+def create_project(
+    name: str, folder_path: str, project_id: str | None = None, origin: str = "desktop"
+) -> Project:
     projects = load_projects()
-    project = Project(id=project_id or uuid.uuid4().hex, name=name, folder_path=folder_path)
+    project = Project(
+        id=project_id or uuid.uuid4().hex,
+        name=name,
+        folder_path=folder_path,
+        origin=origin,
+    )
     projects.append(project)
     save_projects(projects)
     return project

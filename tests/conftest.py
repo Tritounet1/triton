@@ -22,7 +22,7 @@ import pytest
 
 import server
 from triton import mcp_client
-from triton.storage import logs, settings
+from triton.storage import logs, sessions, settings
 
 
 @pytest.fixture(autouse=True)
@@ -34,6 +34,13 @@ def _isolate_logs(tmp_path, monkeypatch):
     # copy, not storage/logs.py's) - both need patching, same footgun
     # documented in test_budget_enforcement.py/test_session_model_and_cost.py.
     monkeypatch.setattr(server, "LOGS_FILE", logs_file)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_sessions(tmp_path, monkeypatch):
+    sessions_dir = tmp_path / "sessions"
+    monkeypatch.setattr(sessions, "SESSIONS_DIR", sessions_dir)
+    monkeypatch.setattr(server, "SESSIONS_DIR", sessions_dir)
 
 
 @pytest.fixture(autouse=True)

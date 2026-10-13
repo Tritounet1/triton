@@ -576,7 +576,7 @@ def test_web_profile_reads_remote_project_files(monkeypatch, tmp_path):
         RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
     )
     monkeypatch.setattr(projects, "PROJECTS_FILE", tmp_path / "projects.json")
-    projects.create_project("Mon projet", "workspace://project-a", "project-a")
+    projects.create_project("Mon projet", "workspace://project-a", "project-a", origin="web")
     monkeypatch.setattr(
         server,
         "remote_workspace_tree",
@@ -617,7 +617,7 @@ def test_web_profile_deletes_the_remote_workspace_with_its_project(monkeypatch, 
         RemoteWorkspaceConfig(base_url="http://workspace:8001", token="workspace-token"),
     )
     monkeypatch.setattr(projects, "PROJECTS_FILE", tmp_path / "projects.json")
-    projects.create_project("Mon projet", "workspace://project-a", "project-a")
+    projects.create_project("Mon projet", "workspace://project-a", "project-a", origin="web")
     deleted_workspaces: list[str] = []
     monkeypatch.setattr(
         server,
