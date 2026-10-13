@@ -10,6 +10,7 @@ import {
   FileIcon,
   FolderIcon,
   HtmlFileIcon,
+  ImageIcon,
   MarkdownFileIcon,
   PdfFileIcon,
   RefreshIcon,
@@ -57,6 +58,9 @@ function fileTypeIcon(name: string): React.ReactNode {
   }
   if (lower.endsWith(".md") || lower.endsWith(".markdown")) {
     return <MarkdownFileIcon className="h-4 w-4" />;
+  }
+  if (/\.(avif|gif|jpe?g|png|svg|webp)$/.test(lower)) {
+    return <ImageIcon className="h-4 w-4" />;
   }
   return <FileIcon className="h-4 w-4 text-secondary" />;
 }
