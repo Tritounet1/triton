@@ -660,6 +660,7 @@ class ConfirmRequest(BaseModel):
     confirmation_id: str
     approved: bool
     remember: bool = False
+    approved_paths: list[str] | None = None
 
 
 class ImageGenerateRequest(BaseModel):
@@ -708,6 +709,7 @@ class PendingConfirmation:
     event: threading.Event = field(default_factory=threading.Event)
     approved: bool = False
     remember: bool = False
+    approved_paths: set[str] | None = None
 
 
 PENDING_CONFIRMATIONS: dict[str, PendingConfirmation] = {}
@@ -1057,6 +1059,17 @@ def run_chat_stream(
                                     if name.startswith(mcp_client.MCP_PREFIX)
                                     else workspace_id
                                 )
+                                if name == "edit_file" and pending.approved_paths is not None:
+                                    edits = args.get("edits")
+                                    args = {
+                                        **args,
+                                        "edits": [
+                                            edit
+                                            for edit in (edits if isinstance(edits, list) else [])
+                                            if isinstance(edit, dict)
+                                            and edit.get("path") in pending.approved_paths
+                                        ],
+                                    }
                                 result = _invoke_chat_tool(
                                     tool, name, args, session_id, execution_workspace_id
                                 )
@@ -1801,6 +1814,7 @@ def confirm(body: ConfirmRequest) -> dict[str, bool]:
 
     pending.approved = body.approved
     pending.remember = body.remember
+    pending.approved_paths = set(body.approved_paths) if body.approved_paths is not None else None
     pending.event.set()
     return {"ok": True}
 

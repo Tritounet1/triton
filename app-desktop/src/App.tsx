@@ -389,6 +389,44 @@ function EditFileEdits({ edits }: { edits: EditFileEdit[] }) {
   );
 }
 
+function SelectableEditFileEdits({
+  edits,
+  selectedPaths,
+  onToggle,
+}: {
+  edits: EditFileEdit[];
+  selectedPaths: Set<string>;
+  onToggle: (path: string) => void;
+}) {
+  const byPath = new Map<string, EditFileEdit[]>();
+  for (const edit of edits) {
+    const list = byPath.get(edit.path) ?? [];
+    list.push(edit);
+    byPath.set(edit.path, list);
+  }
+  return (
+    <div className="flex flex-col gap-3">
+      {[...byPath.entries()].map(([path, hunks]) => (
+        <label key={path} className="flex cursor-pointer flex-col gap-1 rounded-lg border border-border p-2">
+          <span className="flex items-center gap-2 text-xs font-medium">
+            <input
+              type="checkbox"
+              checked={selectedPaths.has(path)}
+              onChange={() => {
+                onToggle(path);
+              }}
+            />
+            <span className="font-mono">{path}</span>
+          </span>
+          {hunks.map((hunk, index) => (
+            <EditFileDiff key={index} oldString={hunk.old_string} newString={hunk.new_string} />
+          ))}
+        </label>
+      ))}
+    </div>
+  );
+}
+
 function toolResultDetail(t: ToolCallLike): ReactNode {
   if (t.tool === "edit_file") {
     const edits = parseEditFileEdits(t.args);
@@ -590,6 +628,7 @@ function App() {
   // clicked.
   const [confirmationDetailsExpanded, setConfirmationDetailsExpanded] =
     useState(false);
+  const [approvedChangePaths, setApprovedChangePaths] = useState<Set<string>>(new Set());
   // reset to false on each new confirmation (different id, including
   // returning to a conversation with one pending, see switchSession): a
   // synchronous adjustment during render (the official React "adjust
@@ -601,6 +640,13 @@ function App() {
   if ((pendingConfirmation?.id ?? null) !== lastConfirmationId) {
     setLastConfirmationId(pendingConfirmation?.id ?? null);
     setConfirmationDetailsExpanded(false);
+    setApprovedChangePaths(
+      new Set(
+        pendingConfirmation?.tool === "edit_file"
+          ? parseEditFileEdits(pendingConfirmation.args).map((edit) => edit.path)
+          : [],
+      ),
+    );
   }
   // one AbortController/pending confirmation per conversation (key:
   // sessionId, or "" for a brand-new one, same convention as
@@ -1439,10 +1485,16 @@ function App() {
       await fetch(`${API_BASE}/chat/confirm`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ confirmation_id: id, approved, remember }),
+        body: JSON.stringify({
+          confirmation_id: id,
+          approved,
+          remember,
+          approved_paths:
+            pendingConfirmation.tool === "edit_file" ? [...approvedChangePaths] : undefined,
+        }),
       });
     },
-    [pendingConfirmation],
+    [approvedChangePaths, pendingConfirmation],
   );
 
   /** Cancels the current (displayed) conversation: closes the client-side SSE
@@ -2431,10 +2483,17 @@ function App() {
                                     {pendingConfirmation.tool === "edit_file" &&
                                       parseEditFileEdits(pendingConfirmation.args)
                                         .length > 0 && (
-                                        <EditFileEdits
-                                          edits={parseEditFileEdits(
-                                            pendingConfirmation.args,
-                                          )}
+                                        <SelectableEditFileEdits
+                                          edits={parseEditFileEdits(pendingConfirmation.args)}
+                                          selectedPaths={approvedChangePaths}
+                                          onToggle={(path) => {
+                                            setApprovedChangePaths((paths) => {
+                                              const next = new Set(paths);
+                                              if (next.has(path)) next.delete(path);
+                                              else next.add(path);
+                                              return next;
+                                            });
+                                          }}
                                         />
                                       )}
                                     {pendingConfirmation.tool === "write_file" &&
@@ -2476,6 +2535,10 @@ function App() {
                                 label="Toujours autoriser pour cette conversation"
                                 variant="secondary"
                                 size="sm"
+                                isDisabled={
+                                  pendingConfirmation.tool === "edit_file" &&
+                                  approvedChangePaths.size === 0
+                                }
                                 endContent={
                                   <kbd className="triton-kbd">
                                     ⇧⌘⏎
@@ -2491,6 +2554,10 @@ function App() {
                                 label="Autoriser une fois"
                                 variant="primary"
                                 size="sm"
+                                isDisabled={
+                                  pendingConfirmation.tool === "edit_file" &&
+                                  approvedChangePaths.size === 0
+                                }
                                 endContent={
                                   <kbd className="triton-kbd">
                                     ⌘⏎
